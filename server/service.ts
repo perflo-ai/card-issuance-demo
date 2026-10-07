@@ -1,0 +1,285 @@
+/**
+ * The partner-side flow: everything Tiny's backend does against Perflo.
+ */
+
+import type { DemoConfig } from './config.js';
+import type { EventLog } from './eventLog.js';
+import { centsToApiAmount } from './money.js';
+import { nextStep, TERMINAL_STATUSES, withoutRevealLink } from './orderState.js';
+import { PerfloApiError, type AccountResponse, type OrderResponse, type PerfloApi } from './perfloApi.js';
+import { revealCard, RevealError, simulateCheckout } from './checkout.js';
+import type { DemoOrder, DemoUser, Store } from './store.js';
+
+import type { LinkStatus, Notice } from './views.js';
+
+export type { LinkStatus, Notice } from './views.js';
+
+export class DemoError extends Error {
+  constructor(
+    readonly code: 'not_linked' | 'not_found' | 'conflict' | 'bad_request',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'DemoError';
+  }
+}
+
+export class DemoService {
+  private readonly locks = new Map<string, Promise<unknown>>();
+
+  constructor(
+    private readonly store: Store,
+    private readonly api: PerfloApi,
+    private readonly log: EventLog,
+    private readonly config: DemoConfig,
+    private readonly fetchImpl: typeof fetch = fetch,
+  ) {}
+
+  /** One flow per key at a time, so a double click cannot reveal or place twice. */
+  private async exclusive<T>(key: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.locks.get(key) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(work);
+    this.locks.set(key, run);
+    try {
+      return await run;
+    } finally {
+      if (this.locks.get(key) === run) this.locks.delete(key);
+    }
+  }
+
+  private storeToken(user: DemoUser, userId: string, token: string): DemoUser {
+    // Written to disk before anything else: Perflo hands a token out once.
+    return this.store.updateUser(user.id, (u) => {
+      u.perflo = { userId, token };
+      u.pendingLogin = null;
+    });
+  }
+
+  private async reissue(user: DemoUser): Promise<DemoUser> {
+    const again = await this.api.createUser(user.id, { ...this.userBody(user), reissue: true });
+    if (again.status !== 'approved' || !again.user_access_token) {
+      throw new PerfloApiError(502, 'reissue_without_token', 'Payments did not return access for this person');
+    }
+    return this.storeToken(user, again.user_id, again.user_access_token);
+  }
+
+  private userBody(user: DemoUser) {
+    return {
+      external_user_id: user.id,
+      email: user.email,
+      first_name: user.firstName,
+      last_name: user.lastName,
+    };
+  }
+
+  /** Makes sure we hold an access token for this person, or starts the one-time setup. */
+  async ensureLinked(user: DemoUser): Promise<{ user: DemoUser; status: LinkStatus }> {
+    return this.exclusive(`link:${user.id}`, async () => {
+      const fresh = this.store.user(user.id);
+      if (fresh.perflo) return { user: fresh, status: 'linked' };
+      if (fresh.pendingLogin) return { user: fresh, status: 'login_required' };
+
+      const result = await this.api.createUser(fresh.id, this.userBody(fresh));
+      if (result.status === 'approved') {
+        if (result.user_access_token) {
+          return { user: this.storeToken(fresh, result.user_id, result.user_access_token), status: 'linked' };
+        }
+        // Perflo already has access for this person but we hold no token (our
+        // store was reset, or the link happened elsewhere). Ask for a new one.
+        this.log.add(fresh.id, 'demo', 'Already approved without a stored token: asking for a new one');
+        return { user: await this.reissue(fresh), status: 'linked' };
+      }
+      const updated = this.store.updateUser(fresh.id, (u) => {
+        u.pendingLogin = { loginId: result.login_id, loginUrl: result.login_url, orderId: null };
+      });
+      return { user: updated, status: 'login_required' };
+    });
+  }
+
+  /** Called when the frame says the person signed in or finished setup. */
+  async refreshLogin(user: DemoUser): Promise<{ user: DemoUser; status: LinkStatus }> {
+    return this.exclusive(`link:${user.id}`, async () => {
+      const fresh = this.store.user(user.id);
+      if (!fresh.pendingLogin) {
+        return { user: fresh, status: fresh.perflo ? 'linked' : 'expired' };
+      }
+      const login = await this.api.getLogin(fresh.id, fresh.pendingLogin.loginId);
+      if (login.status === 'pending') return { user: fresh, status: 'pending' };
+      if (login.status === 'expired') {
+        const cleared = this.store.updateUser(fresh.id, (u) => {
+          u.pendingLogin = null;
+        });
+        return { user: cleared, status: 'expired' };
+      }
+      if (login.user_access_token) {
+        return { user: this.storeToken(fresh, login.user_id, login.user_access_token), status: 'linked' };
+      }
+      // Approved, but the token was already handed out once and we do not have it.
+      if (fresh.perflo && fresh.perflo.userId === login.user_id) {
+        return { user: this.store.updateUser(fresh.id, (u) => (u.pendingLogin = null)), status: 'linked' };
+      }
+      return { user: await this.reissue(fresh), status: 'linked' };
+    });
+  }
+
+  private orderBody(order: DemoOrder, userId: string) {
+    return {
+      user_id: userId,
+      merchant: { name: order.intent.merchantName, domain: order.intent.domain },
+      amount: centsToApiAmount(order.intent.amountCents),
+      currency: 'USD' as const,
+      ...(order.intent.description ? { description: order.intent.description } : {}),
+      external_order_id: order.id,
+    };
+  }
+
+  /**
+   * Moves a chat order forward by one step: place it if it was never placed,
+   * otherwise look at its current state (the only retry SPEC 4 allows).
+   */
+  async advanceOrder(user: DemoUser, orderId: string): Promise<{ order: DemoOrder; user: DemoUser; notice: Notice }> {
+    return this.exclusive(`order:${orderId}`, async () => {
+      let current = this.store.user(user.id);
+      const order = this.store.order(current.id, orderId);
+      if (!order) throw new DemoError('not_found', 'That order was not found');
+      if (order.state === 'discarded') throw new DemoError('conflict', 'That order was cancelled before it was sent');
+      if (order.last && TERMINAL_STATUSES.has(order.last.status)) return { order, user: current, notice: null };
+
+      let response: OrderResponse;
+      if (order.perfloOrderId === null) {
+        this.store.updateOrder(order, (o) => (o.state = 'placing'));
+        if (!current.perflo) {
+          const link = await this.ensureLinked(current);
+          current = link.user;
+          if (link.status !== 'linked' || !current.perflo) return { order, user: current, notice: null };
+        }
+        try {
+          response = await this.api.createOrder(current.id, current.perflo.token, order.idempotencyKey, this.orderBody(order, current.perflo.userId));
+        } catch (error) {
+          if (!(error instanceof PerfloApiError) || error.httpStatus !== 401) throw error;
+          // Our token is not accepted any more: drop it and link again.
+          this.log.add(current.id, 'demo', 'Access token refused: setting up access again');
+          current = this.store.updateUser(current.id, (u) => (u.perflo = null));
+          const link = await this.ensureLinked(current);
+          current = link.user;
+          if (link.status !== 'linked' || !current.perflo) return { order, user: current, notice: null };
+          response = await this.api.createOrder(current.id, current.perflo.token, order.idempotencyKey, this.orderBody(order, current.perflo.userId));
+        }
+      } else {
+        response = await this.api.getOrder(current.id, order.perfloOrderId);
+      }
+      return this.handle(current, order, response);
+    });
+  }
+
+  private async handle(
+    user: DemoUser,
+    order: DemoOrder,
+    response: OrderResponse,
+  ): Promise<{ order: DemoOrder; user: DemoUser; notice: Notice }> {
+    this.store.updateOrder(order, (o) => {
+      o.perfloOrderId = response.order_id;
+      o.state = 'placed';
+      o.last = withoutRevealLink(response);
+    });
+    const step = nextStep(response, order);
+
+    if (step === 'login' && response.status === 'login_required') {
+      // The person removed access; the old token is dead. Login completion resumes this order.
+      const updated = this.store.updateUser(user.id, (u) => {
+        u.perflo = null;
+        u.pendingLogin = { loginId: response.login_id, loginUrl: response.login_url, orderId: order.id };
+      });
+      return { order, user: updated, notice: null };
+    }
+
+    if (step === 'reveal' && response.status === 'ready') {
+      const notice = await this.checkoutWithCard(user, order, response);
+      return { order, user, notice };
+    }
+    return { order, user, notice: null };
+  }
+
+  private async checkoutWithCard(
+    user: DemoUser,
+    order: DemoOrder,
+    response: Extract<OrderResponse, { status: 'ready' }>,
+  ): Promise<Notice> {
+    if (!user.perflo || order.perfloOrderId === null) return 'reveal_failed';
+    let revealUrl: string;
+    if (response.reveal_url && !order.revealUsed) {
+      revealUrl = response.reveal_url;
+    } else {
+      revealUrl = (await this.api.cardReveal(user.id, order.perfloOrderId, user.perflo.token)).reveal_url;
+    }
+    // Single use: mark before reading, so a failure asks for a fresh link next time.
+    this.store.updateOrder(order, (o) => (o.revealUsed = true));
+
+    try {
+      const card = await revealCard(revealUrl, this.fetchImpl);
+      this.log.add(user.id, 'demo', `Card details read for checkout (card ending ${card.last4})`);
+      const summary = await simulateCheckout(
+        card,
+        order.intent,
+        response.card_limit,
+        this.config.mode === 'mock' && !user.testStopAtCheckout ? `${this.config.perfloOrigin}/mock-merchant/checkout` : null,
+        this.fetchImpl,
+      );
+      this.store.updateOrder(order, (o) => (o.checkout = summary));
+      this.log.add(user.id, 'demo', `Checkout on ${order.intent.domain}: ${summary.outcome.replace(/_/g, ' ')}`);
+    } catch (error) {
+      const code = error instanceof RevealError ? error.code : 'unavailable';
+      this.log.add(user.id, 'demo', `Card details could not be read (${code})`);
+      return code === 'still_locked' ? 'card_locked' : 'reveal_failed';
+    }
+
+    if (order.checkout?.outcome === 'charged' && order.perfloOrderId) {
+      // The mock merchant spent the card; pick up the order's final state.
+      const latest = await this.api.getOrder(user.id, order.perfloOrderId);
+      this.store.updateOrder(order, (o) => (o.last = withoutRevealLink(latest)));
+    }
+    return null;
+  }
+
+  async cancelCard(user: DemoUser, perfloOrderId: string): Promise<{ amountReturned: string; order: DemoOrder | null }> {
+    if (!user.perflo) throw new DemoError('not_linked', 'Payments are not set up yet');
+    const token = user.perflo.token;
+    return this.exclusive(`cancel:${perfloOrderId}`, async () => {
+      const result = await this.api.cancelOrder(user.id, perfloOrderId, token);
+      const order = this.store.orderByPerfloId(user.id, perfloOrderId);
+      if (order) {
+        const latest = await this.api.getOrder(user.id, perfloOrderId);
+        this.store.updateOrder(order, (o) => {
+          o.amountReturned = result.amount_returned;
+          o.last = withoutRevealLink(latest);
+        });
+      }
+      return { amountReturned: result.amount_returned, order };
+    });
+  }
+
+  /** null when this person has not set up payments, or their access was removed. */
+  async account(user: DemoUser): Promise<AccountResponse | null> {
+    if (!user.perflo) return null;
+    try {
+      return await this.api.getAccount(user.id, user.perflo.userId, user.perflo.token);
+    } catch (error) {
+      if (error instanceof PerfloApiError && error.httpStatus === 401) {
+        this.store.updateUser(user.id, (u) => (u.perflo = null));
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async limitsLink(user: DemoUser): Promise<string> {
+    if (!user.perflo) throw new DemoError('not_linked', 'Payments are not set up yet');
+    return (await this.api.limitsLink(user.id, user.perflo.userId, user.perflo.token)).frame_url;
+  }
+
+  async topUpLink(user: DemoUser, amountCents?: number): Promise<string> {
+    if (!user.perflo) throw new DemoError('not_linked', 'Payments are not set up yet');
+    const amount = amountCents === undefined ? undefined : centsToApiAmount(amountCents);
+    return (await this.api.createTopUp(user.id, user.perflo.userId, user.perflo.token, amount)).frame_url;
+  }
+}
