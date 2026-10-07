@@ -69,6 +69,7 @@ button.link{border:0;background:none;color:#141414;text-decoration:underline;fon
 .box{border:1px solid #e8e4df;border-radius:14px;padding:14px;margin-top:12px}
 .error{color:#a3261b;font-size:14px;margin-top:10px}
 footer{text-align:center;font-size:12px;color:#6b655f;padding:12px 0 18px}
+.mt{margin-top:8px}
 .badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:6px;background:#f4f2ef;font-size:11px}
 `;
 
@@ -211,7 +212,7 @@ const js = String.raw`(function () {
       chosen.value = toAmount(other.value);
       chosen.onchange && chosen.onchange();
     });
-    chosen.nodes = [el('label', { text: label }), el('div', { class: 'chips' }, chips), el('div', { style: 'margin-top:8px' }, [other])];
+    chosen.nodes = [el('label', { text: label }), el('div', { class: 'chips' }, chips), el('div', { class: 'mt' }, [other])];
     return chosen;
   }
 
@@ -253,7 +254,7 @@ const js = String.raw`(function () {
     });
     screen('Add money', [forOrder, needs].filter(Boolean), [
       el('label', { for: 'amount', text: 'Amount in US dollars' }), input,
-      presets.length ? el('div', { class: 'chips', style: 'margin-top:8px' }, presets) : null, next
+      presets.length ? el('div', { class: 'chips mt' }, presets) : null, next
     ]);
   }
 
