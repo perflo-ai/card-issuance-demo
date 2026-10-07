@@ -14,18 +14,10 @@ import { toView } from './orderState.js';
 import { PerfloApiError, PerfloUnavailableError } from './perfloApi.js';
 import { DemoError, type DemoService } from './service.js';
 import type { DemoUser, Store } from './store.js';
+import { FRAME_EVENT_TYPES } from './views.js';
 
 const SESSION_COOKIE = 'tiny_session';
 
-export const FRAME_EVENT_TYPES = [
-  'perflo:ready',
-  'perflo:login_completed',
-  'perflo:limits_saved',
-  'perflo:top_up_completed',
-  'perflo:setup_completed',
-  'perflo:closed',
-  'perflo:error',
-] as const;
 
 const frameEvent = z.object({
   type: z.enum(FRAME_EVENT_TYPES),

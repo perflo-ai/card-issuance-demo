@@ -1,31 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { api, type FrameEventPayload } from './api';
+import { readFrameEvent } from './frameEvents';
 import type { LinkStatus } from '../../server/views';
-
-const EVENT_TYPES = new Set([
-  'perflo:ready',
-  'perflo:login_completed',
-  'perflo:limits_saved',
-  'perflo:top_up_completed',
-  'perflo:setup_completed',
-  'perflo:closed',
-  'perflo:error',
-]);
-
-const OPTIONAL_IDS = ['login_id', 'top_up_id', 'order_id', 'code'] as const;
-
-/** SPEC 8: the payload is always an object; bare strings and unknown shapes are ignored. */
-export function readFrameEvent(data: unknown): FrameEventPayload | null {
-  if (typeof data !== 'object' || data === null) return null;
-  const record = data as Record<string, unknown>;
-  if (typeof record.type !== 'string' || !EVENT_TYPES.has(record.type)) return null;
-  if (typeof record.frame_session_id !== 'string') return null;
-  const event: FrameEventPayload = { type: record.type, frame_session_id: record.frame_session_id };
-  for (const key of OPTIONAL_IDS) {
-    if (typeof record[key] === 'string') event[key] = record[key] as string;
-  }
-  return event;
-}
 
 interface Props {
   src: string;

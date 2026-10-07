@@ -79,9 +79,14 @@ export class Store {
     renameSync(temp, this.file);
   }
 
+  /**
+   * Every sign-up is a new person with no payments link. An account is never
+   * re-attached by email: typing someone's email must not hand over their
+   * account or their access token. A returning user continues through their
+   * session cookie; a new one proves the email to Perflo with the emailed code.
+   */
   createUser(firstName: string, lastName: string, email: string): { user: DemoUser; sessionId: string } {
-    const existing = Object.values(this.data.users).find((u) => u.email === email);
-    const user: DemoUser = existing ?? {
+    const user: DemoUser = {
       id: randomUUID(),
       firstName,
       lastName,
@@ -90,10 +95,6 @@ export class Store {
       perflo: null,
       pendingLogin: null,
     };
-    if (existing) {
-      existing.firstName = firstName;
-      existing.lastName = lastName;
-    }
     this.data.users[user.id] = user;
     const sessionId = randomBytes(32).toString('base64url');
     this.data.sessions[sessionId] = user.id;

@@ -75,6 +75,17 @@ export interface LogEntry {
   detail?: unknown;
 }
 
+/** The postMessage events a Perflo frame sends (SPEC 8). */
+export const FRAME_EVENT_TYPES = [
+  'perflo:ready',
+  'perflo:login_completed',
+  'perflo:limits_saved',
+  'perflo:top_up_completed',
+  'perflo:setup_completed',
+  'perflo:closed',
+  'perflo:error',
+] as const;
+
 export type LinkStatus = 'linked' | 'login_required' | 'pending' | 'expired';
 
 export type Notice = 'reveal_failed' | 'card_locked' | null;

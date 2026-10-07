@@ -442,8 +442,9 @@ export function createMockPerflo(options: MockOptions) {
     const body = usersBody.safeParse(req.body);
     if (!body.success) throw new HttpError(400, 'invalid_request', 'Some details are missing or not valid.');
     const { external_user_id, email, first_name, last_name, reissue } = body.data;
+    // A grant is matched by external_user_id only. A new external id with a known email must
+    // sign in with the emailed code, so an email alone never grants access.
     let user = [...users.values()].find((u) => u.externalUserId === external_user_id);
-    if (!user && email) user = [...users.values()].find((u) => u.email?.toLowerCase() === email.toLowerCase());
     if (user && user.grant && user.token) {
       if (reissue) {
         const token = mintToken(user);

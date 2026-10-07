@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.server.json",
-  "compilerOptions": { "noEmit": true, "rootDir": "." },
-  "include": ["server/**/*.ts", "test/**/*.ts"]
+  "compilerOptions": { "noEmit": true, "rootDir": ".", "module": "ESNext", "moduleResolution": "Bundler" },
+  "include": ["server/**/*.ts", "test/**/*.ts", "web/src/frameEvents.ts", "web/src/api.ts"]
 }
