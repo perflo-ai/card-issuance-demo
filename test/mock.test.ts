@@ -266,3 +266,55 @@ describe('frames', () => {
     expect((await frameCall(mock.base, created.json.login_url, 'limits', { per_order: '2500.00', per_month: '1000.00' })).status).toBe(400);
   });
 });
+
+describe('replays and frame sessions (bapi final behaviour)', () => {
+  it('an order replay drops the ID check link and adds a message; GET has the link', async () => {
+    const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '400.00');
+    const first = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '250.00') });
+    expect(first.json.kyc_url).toContain('/mock/kyc?ref=');
+    const replay = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '250.00') });
+    expect(replay.status).toBe(202);
+    expect(replay.json).toEqual({ order_id: first.json.order_id, status: 'identity_check_required', message: expect.any(String) });
+    expect((await signedFetch(mock.base, 'GET', `/partner/v2/orders/${first.json.order_id}`)).json.kyc_url).toBe(first.json.kyc_url);
+  });
+
+  it('a ready replay carries no reveal link', async () => {
+    const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '100.00');
+    const first = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '20.00') });
+    expect(first.json.reveal_url).toBeDefined();
+    const replay = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '20.00') });
+    expect(replay.status).toBe(201);
+    expect(replay.json).not.toHaveProperty('reveal_url');
+    expect(replay.json).toMatchObject({ status: 'ready', last4: first.json.last4 });
+  });
+
+  it('a card-reveal replay answers 201 with only a message; a new key gets a fresh link', async () => {
+    const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '100.00');
+    const placed = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '20.00') });
+    const path = `/partner/v2/orders/${placed.json.order_id}/card-reveal`;
+    expect((await signedFetch(mock.base, 'POST', path, { token, idem: 'r1' })).json.reveal_url).toBeDefined();
+    const replay = await signedFetch(mock.base, 'POST', path, { token, idem: 'r1' });
+    expect(replay.status).toBe(201);
+    expect(replay.json).toEqual({ message: expect.any(String) });
+    expect((await signedFetch(mock.base, 'POST', path, { token, idem: 'r2' })).json.reveal_url).toBeDefined();
+  });
+
+  it('a POST /users replay never carries a token', async () => {
+    const { userId } = await linkedUser();
+    const first = await signedFetch(mock.base, 'POST', '/partner/v2/users', { idem: 'u1', body: { external_user_id: 'ext-1', reissue: true } });
+    expect(first.json.user_access_token).toMatch(/^ptk_test_/);
+    const replay = await signedFetch(mock.base, 'POST', '/partner/v2/users', { idem: 'u1', body: { external_user_id: 'ext-1', reissue: true } });
+    expect(replay).toEqual({ status: 200, json: { status: 'approved', user_id: userId } });
+  });
+
+  it('frame actions take the session in X-Perflo-Frame-Session, not in the path', async () => {
+    const created = await signedFetch(mock.base, 'POST', '/partner/v2/users', { body: { external_user_id: 'ext-1', email: 'ada@example.com' } });
+    const session = new URL(created.json.login_url).searchParams.get('session') as string;
+    expect(session).toMatch(/^fs_[A-Za-z0-9_-]{43}$/);
+    expect((await fetch(`${mock.base}/partner/v2/frames/${session}/state`)).status).not.toBe(200);
+    expect((await fetch(`${mock.base}/partner/v2/frames/session/state`)).status).toBe(404);
+    const ok = await fetch(`${mock.base}/partner/v2/frames/session/state`, { headers: { 'X-Perflo-Frame-Session': session } });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ purpose: 'setup', step: 'login' });
+  });
+});

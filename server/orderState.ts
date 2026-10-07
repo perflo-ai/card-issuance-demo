@@ -80,7 +80,8 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
     case 'login_required':
       return { ...base, phase: 'login_required', frameUrl: last.login_url };
     case 'identity_check_required':
-      return { ...base, phase: 'identity_check_required', kycUrl: last.kyc_url };
+      // No link means Perflo could not make one right now; the browser says so and offers a retry.
+      return { ...base, phase: 'identity_check_required', ...(last.kyc_url ? { kycUrl: last.kyc_url } : {}) };
     case 'issuing':
       return { ...base, phase: 'issuing' };
     case 'declined':

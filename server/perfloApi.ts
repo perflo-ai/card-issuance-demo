@@ -6,6 +6,7 @@
  * guessed at. The user access token and the secret never leave this server.
  */
 
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { signatureHeaders, type PartnerCredentials } from './signing.js';
 import type { EventLog } from './eventLog.js';
@@ -72,7 +73,13 @@ export const orderResponse = z.discriminatedUnion('status', [
   }),
   z.object({ order_id: z.string(), status: z.literal('payment_required'), frame_url: z.string().url(), amount_due: amount }),
   z.object({ order_id: z.string(), status: z.literal('login_required'), login_id: z.string(), login_url: z.string().url() }),
-  z.object({ order_id: z.string(), status: z.literal('identity_check_required'), kyc_url: z.string().url() }),
+  z.object({
+    order_id: z.string(),
+    status: z.literal('identity_check_required'),
+    // null when the link cannot be made right now; absent on an idempotent replay of POST /orders.
+    kyc_url: z.string().url().nullable().optional(),
+    message: z.string().optional(),
+  }),
   z.object({ order_id: z.string(), status: z.literal('issuing') }),
   z.object({ order_id: z.string(), status: z.literal('declined'), reason: declineReason, message: z.string() }),
   z.object({ order_id: z.string(), status: z.literal('completed'), amount_spent: amount, amount_returned: amount }),
@@ -83,6 +90,8 @@ export const orderResponse = z.discriminatedUnion('status', [
 export type OrderResponse = z.infer<typeof orderResponse>;
 
 export const revealLinkResponse = z.object({ reveal_url: z.string().url(), reveal_expires_at: z.string() });
+/** bapi never stores reveal links, so an idempotent replay of card-reveal answers 201 with only a message. */
+const revealOrReplay = z.union([revealLinkResponse, z.object({ message: z.string() })]);
 export const cancelResponse = z.object({ status: z.literal('cancelled'), amount_returned: amount });
 
 const errorEnvelope = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
@@ -200,8 +209,9 @@ export class PerfloApi {
   async createUser(
     demoUserId: string,
     body: { external_user_id: string; email?: string; first_name?: string; last_name?: string; reissue?: boolean },
+    idempotencyKey?: string,
   ): Promise<UsersResponse> {
-    const r = await this.request(demoUserId, 'POST', '/partner/v2/users', { body });
+    const r = await this.request(demoUserId, 'POST', '/partner/v2/users', { body, ...(idempotencyKey ? { idempotencyKey } : {}) });
     const parsed = this.parse(usersResponse, r.status, r.json, [200, 202]);
     const expected = parsed.status === 'approved' ? 200 : 202;
     if (r.status !== expected) throw new PerfloUnavailableError('Payments service answered with a mismatched status');
@@ -245,11 +255,20 @@ export class PerfloApi {
     return this.parse(orderResponse, r.status, r.json, [200]);
   }
 
+  /**
+   * A fresh single-use reveal link. Every call uses a new Idempotency-Key; if the answer is still a
+   * replay (a message, no link), it asks once more with another new key.
+   */
   async cardReveal(demoUserId: string, orderId: string, token: string): Promise<z.infer<typeof revealLinkResponse>> {
-    const r = await this.request(demoUserId, 'POST', `/partner/v2/orders/${encodeURIComponent(orderId)}/card-reveal`, {
-      token,
-    });
-    return this.parse(revealLinkResponse, r.status, r.json, [201]);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = await this.request(demoUserId, 'POST', `/partner/v2/orders/${encodeURIComponent(orderId)}/card-reveal`, {
+        token,
+        idempotencyKey: randomUUID(),
+      });
+      const parsed = this.parse(revealOrReplay, r.status, r.json, [201]);
+      if ('reveal_url' in parsed) return parsed;
+    }
+    throw new PerfloUnavailableError('Payments did not hand out a card link');
   }
 
   async cancelOrder(demoUserId: string, orderId: string, token: string): Promise<z.infer<typeof cancelResponse>> {

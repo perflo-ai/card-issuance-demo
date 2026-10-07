@@ -115,6 +115,11 @@ Firefox treat `localhost` as trustworthy; Safari may block them. This was not ve
   (add money frame, then look again after `perflo:top_up_completed`), `login_required` (setup frame, the
   order resumes on its own), `identity_check_required` (opens in a new tab, then try again), `issuing`
   (looks again every 2 seconds), `declined`, `completed`, `cancelled`, `expired`, `failed`.
+- **Replays**: Perflo never replays a token or a link. A `POST /users` replay has no token, so a reissue is
+  asked with a new Idempotency-Key. A `card-reveal` replay (201 with only a message) is asked again with a new
+  key, and a ready replay without `reveal_url` goes through `/card-reveal`. An identity check answer without
+  `kyc_url` is followed by one `GET /orders/{id}`; if there is still no link, the chat says to try again in a
+  minute.
 - **Frames**: embedded with `allow="payment"`. Messages are accepted only from the `PERFLO_API_BASE` origin,
   from that frame's window, and only in the SPEC object shape.
 - **Sign-up**: Tiny never re-attaches an account by email. Each sign-up is a new person; Perflo's emailed

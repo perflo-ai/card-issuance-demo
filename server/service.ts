@@ -2,6 +2,7 @@
  * The partner-side flow: everything Tiny's backend does against Perflo.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { DemoConfig } from './config.js';
 import type { EventLog } from './eventLog.js';
 import { centsToApiAmount } from './money.js';
@@ -55,12 +56,21 @@ export class DemoService {
     });
   }
 
+  /**
+   * A new token for a person Perflo already approved. Replays of POST /users never carry a token,
+   * so each attempt uses a new Idempotency-Key, and a tokenless answer is retried once.
+   */
   private async reissue(user: DemoUser): Promise<DemoUser> {
-    const again = await this.api.createUser(user.id, { ...this.userBody(user), reissue: true });
-    if (again.status !== 'approved' || !again.user_access_token) {
-      throw new PerfloApiError(502, 'reissue_without_token', 'Payments did not return access for this person');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const again = await this.api.createUser(user.id, { ...this.userBody(user), reissue: true }, randomUUID());
+      if (again.status === 'approved' && again.user_access_token) {
+        return this.storeToken(user, again.user_id, again.user_access_token);
+      }
+      if (again.status === 'login_required') {
+        throw new PerfloApiError(409, 'login_required', 'This person needs to set up payments again.');
+      }
     }
-    return this.storeToken(user, again.user_id, again.user_access_token);
+    throw new PerfloApiError(502, 'reissue_without_token', 'Payments did not return access for this person');
   }
 
   private userBody(user: DemoUser) {
@@ -164,6 +174,10 @@ export class DemoService {
           current = link.user;
           if (link.status !== 'linked' || !current.perflo) return { order, user: current, notice: null };
           response = await this.api.createOrder(current.id, current.perflo.token, order.idempotencyKey, this.orderBody(order, current.perflo.userId));
+        }
+        if (response.status === 'identity_check_required' && !response.kyc_url) {
+          // A replay (or a link that could not be made yet) carries no ID check link: ask for the order's state.
+          response = await this.api.getOrder(current.id, response.order_id);
         }
       } else {
         response = await this.api.getOrder(current.id, order.perfloOrderId);

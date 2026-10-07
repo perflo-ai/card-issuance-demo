@@ -172,6 +172,8 @@ export function createMockPerflo(options: MockOptions) {
   const topUps = new Map<string, MTopUp>();
   const reveals = new Map<string, { orderId: string; expiresAt: number; consumed: boolean }>();
   const idempotency = new Map<string, { bodyHash: string; status: number; body: unknown }>();
+  const userReplays = new Map<string, { status: number; body: Record<string, unknown> }>();
+  const revealKeys = new Set<string>();
   const spends: Array<{ userId: string; at: number; cents: number }> = [];
 
   const frameUrl = (purpose: Purpose, frameId: string) =>
@@ -363,7 +365,8 @@ export function createMockPerflo(options: MockOptions) {
         const user = users.get(order.userId) as MUser;
         return {
           status: 202,
-          body: { ...base, status: 'identity_check_required', kyc_url: `${options.selfOrigin}/mock/kyc?ref=${user.kycRef}` },
+          // null when the link cannot be made (no verified email yet).
+          body: { ...base, status: 'identity_check_required', kyc_url: user.email ? `${options.selfOrigin}/mock/kyc?ref=${user.kycRef}` : null },
         };
       }
       case 'issuing':
@@ -383,6 +386,14 @@ export function createMockPerflo(options: MockOptions) {
       default:
         return { status: 200, body: { ...base, status: order.status } };
     }
+  }
+
+  /** What bapi stores for an order replay: never a reveal link or an ID check link (both are single use or short lived). */
+  function replayBody(body: Record<string, unknown>): Record<string, unknown> {
+    const { reveal_url: _reveal, reveal_expires_at: _revealExpires, kyc_url: _kyc, ...kept } = body;
+    return body.status === 'identity_check_required'
+      ? { ...kept, message: 'This order was already placed. Look up the order for the identity check link.' }
+      : kept;
   }
 
   const app = express();
@@ -442,15 +453,27 @@ export function createMockPerflo(options: MockOptions) {
     const body = usersBody.safeParse(req.body);
     if (!body.success) throw new HttpError(400, 'invalid_request', 'Some details are missing or not valid.');
     const { external_user_id, email, first_name, last_name, reissue } = body.data;
+    // bapi's idempotency layer: a repeated key answers the stored response, which never carries a token.
+    const key = req.get('idempotency-key');
+    const scope = key ? `ptn:${options.partnerId}:users:${key}` : null;
+    const stored = scope ? userReplays.get(scope) : undefined;
+    if (stored) return res.status(stored.status).json(stored.body);
+    const send = (status: number, payload: Record<string, unknown>) => {
+      if (scope) {
+        const { user_access_token: _token, ...kept } = payload;
+        userReplays.set(scope, { status, body: kept });
+      }
+      res.status(status).json(payload);
+    };
     // A grant is matched by external_user_id only. A new external id with a known email must
     // sign in with the emailed code, so an email alone never grants access.
     let user = [...users.values()].find((u) => u.externalUserId === external_user_id);
     if (user && user.grant && user.token) {
       if (reissue) {
         const token = mintToken(user);
-        return res.status(200).json({ status: 'approved', user_id: user.userId, user_access_token: token });
+        return send(200, { status: 'approved', user_id: user.userId, user_access_token: token });
       }
-      return res.status(200).json({ status: 'approved', user_id: user.userId });
+      return send(200, { status: 'approved', user_id: user.userId });
     }
     if (!user) {
       user = {
@@ -468,7 +491,7 @@ export function createMockPerflo(options: MockOptions) {
       users.set(user.userId, user);
     }
     const login = newLogin(user, null);
-    res.status(202).json({
+    send(202, {
       status: 'login_required',
       login_id: login.loginId,
       login_url: frameUrl('setup', login.frameId),
@@ -605,7 +628,7 @@ export function createMockPerflo(options: MockOptions) {
       evaluate(order);
     }
     const out = present(order, true);
-    idempotency.set(scope, { bodyHash, status: out.status, body: out.body });
+    idempotency.set(scope, { bodyHash, status: out.status, body: replayBody(out.body) });
     res.status(out.status).json(out.body);
   });
 
@@ -620,8 +643,15 @@ export function createMockPerflo(options: MockOptions) {
     const order = orders.get(req.params.orderId);
     if (!order) throw new HttpError(404, 'not_found', 'That order was not found.');
     userFromToken(req, order.userId);
+    // Reveal links are never stored, so a repeated key answers 201 with only a message.
+    const key = req.get('idempotency-key');
+    const scope = key ? `ptn:${options.partnerId}:card-reveal:${order.orderId}:${key}` : null;
+    if (scope && revealKeys.has(scope)) {
+      return res.status(201).json({ message: 'A card link was already handed out for this request. Ask again with a new key.' });
+    }
     refresh(order);
     if (order.status !== 'ready') throw new HttpError(409, 'card_not_open', 'This card is no longer open.');
+    if (scope) revealKeys.add(scope);
     res.status(201).json(revealLink(order));
   });
 
@@ -642,9 +672,11 @@ export function createMockPerflo(options: MockOptions) {
     res.status(200).json({ status: 'cancelled', amount_returned: centsToApiAmount(returned) });
   });
 
-  // Frames: pages and their same-origin JSON actions (SPEC 8 and 8a). Not signed: the session id is the capability.
-  const liveFrame = (sessionId: string): MFrame => {
-    const frame = frames.get(sessionId);
+  // Frames: pages and their same-origin JSON actions (SPEC 8 and 8a). Not signed: the session id is the capability,
+  // sent by the frame page in the X-Perflo-Frame-Session header to /partner/v2/frames/session/<action> (as bapi does).
+  const liveFrame = (req: Request): MFrame => {
+    const sessionId = req.get('x-perflo-frame-session') ?? '';
+    const frame = /^fs_[A-Za-z0-9_-]{43}$/.test(sessionId) ? frames.get(sessionId) : undefined;
     if (!frame) throw new HttpError(404, 'frame_not_found', 'This link is not valid.');
     if (frame.expiresAt < Date.now()) throw new HttpError(410, 'frame_expired', 'This link has expired. Go back and ask for a new one.');
     return frame;
@@ -672,8 +704,8 @@ export function createMockPerflo(options: MockOptions) {
       .send(framePage(options.partnerOrigin, frameIds(typeof req.query.session === 'string' ? req.query.session : '')));
   });
 
-  framesRouter.get('/:session/state', (req, res) => {
-    const frame = liveFrame(req.params.session);
+  framesRouter.get('/session/state', (req, res) => {
+    const frame = liveFrame(req);
     const user = users.get(frame.userId) as MUser;
     const order = frame.orderId ? orders.get(frame.orderId) : undefined;
     res.json({
@@ -694,8 +726,8 @@ export function createMockPerflo(options: MockOptions) {
     return Math.max(0, quote(order.amountCents).totalCents - user.balanceCents);
   };
 
-  framesRouter.post('/:session/login', (req, res) => {
-    const frame = liveFrame(req.params.session);
+  framesRouter.post('/session/login', (req, res) => {
+    const frame = liveFrame(req);
     if (frame.purpose !== 'setup' || frame.step !== 'login') throw new HttpError(409, 'wrong_step', 'This step is already done.');
     const body = z.object({ privy_access_token: z.string().max(400) }).safeParse(req.body);
     // Mock sign-in token: "mock-otp:<email>:<code>". The real frame sends a Privy access token.
@@ -714,8 +746,8 @@ export function createMockPerflo(options: MockOptions) {
 
   const limitsBody = z.object({ per_order: amountString, per_month: amountString });
 
-  framesRouter.post('/:session/limits', (req, res) => {
-    const frame = liveFrame(req.params.session);
+  framesRouter.post('/session/limits', (req, res) => {
+    const frame = liveFrame(req);
     if (frame.step !== 'limits') throw new HttpError(409, 'wrong_step', 'This step is already done.');
     const body = limitsBody.safeParse(req.body);
     if (!body.success) throw new HttpError(400, 'limits_invalid', 'Choose an amount per order and per month.');
@@ -742,8 +774,8 @@ export function createMockPerflo(options: MockOptions) {
     res.json({ next: frame.step, limits: body.data });
   });
 
-  framesRouter.post('/:session/top-up', (req, res) => {
-    const frame = liveFrame(req.params.session);
+  framesRouter.post('/session/top-up', (req, res) => {
+    const frame = liveFrame(req);
     if (frame.step !== 'top_up') throw new HttpError(409, 'wrong_step', 'This step is already done.');
     const body = z.object({ amount: amountString }).safeParse(req.body);
     const cents = body.success ? apiAmountToCents(body.data.amount) : 0;
@@ -769,8 +801,8 @@ export function createMockPerflo(options: MockOptions) {
     });
   });
 
-  framesRouter.post('/:session/complete', (req, res) => {
-    const frame = liveFrame(req.params.session);
+  framesRouter.post('/session/complete', (req, res) => {
+    const frame = liveFrame(req);
     const body = z.object({ step: z.enum(['top_up', 'setup']) }).safeParse(req.body);
     if (!body.success) throw new HttpError(400, 'invalid_request', 'Unknown step.');
     if (body.data.step === 'top_up') {
@@ -793,8 +825,8 @@ export function createMockPerflo(options: MockOptions) {
     res.json({ next: 'done', ...(orderStatus ? { order_status: orderStatus } : {}) });
   });
 
-  framesRouter.post('/:session/revoke', (req, res) => {
-    const frame = liveFrame(req.params.session);
+  framesRouter.post('/session/revoke', (req, res) => {
+    const frame = liveFrame(req);
     revokeAccess(users.get(frame.userId) as MUser);
     res.json({ revoked: true });
   });

@@ -49,9 +49,11 @@ export async function signedFetch(
 export const sessionOf = (url: string) => new URL(url).searchParams.get('session') as string;
 
 export async function frameCall(base: string, frameUrl: string, action: string, body?: unknown) {
-  const response = await fetch(`${base}/partner/v2/frames/${sessionOf(frameUrl)}/${action}`, {
+  const headers: Record<string, string> = { 'X-Perflo-Frame-Session': sessionOf(frameUrl) };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const response = await fetch(`${base}/partner/v2/frames/session/${action}`, {
     method: body === undefined ? 'GET' : 'POST',
-    headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: response.status, json: (await response.json().catch(() => null)) as any };

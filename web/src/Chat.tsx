@@ -335,10 +335,12 @@ function OrderCard(props: CardProps) {
         <>
           <p>Your orders with Tiny would go over $200.00 in total, so a quick identity check is needed first. It only happens once.</p>
           <div className="row">
-            {order.kycUrl && (
+            {order.kycUrl ? (
               <a className="button primary" href={order.kycUrl} target="_blank" rel="noopener noreferrer">
                 Verify your identity
               </a>
+            ) : (
+              <p className="muted small">We could not get the ID check link right now. Try again in a minute.</p>
             )}
             <button className="secondary" disabled={busy} onClick={() => void onAdvance()}>
               I have finished, try again

@@ -94,8 +94,10 @@ const js = String.raw`(function () {
   }
 
   function call(path, body) {
-    var init = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
-    return fetch('/partner/v2/frames/' + encodeURIComponent(session) + '/' + path, init).then(function (res) {
+    var headers = { 'X-Perflo-Frame-Session': session };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    var init = body === undefined ? { headers: headers } : { method: 'POST', headers: headers, body: JSON.stringify(body) };
+    return fetch('/partner/v2/frames/session/' + path, init).then(function (res) {
       return res.json().catch(function () { return null; }).then(function (json) {
         if (!res.ok) {
           var error = new Error((json && json.error && json.error.message) || 'Something went wrong. Try again.');
