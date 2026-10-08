@@ -21,18 +21,26 @@ function tls(): ServerOptions {
   return { cert: readFileSync(CERT), key: readFileSync(KEY) };
 }
 
-function listen(server: ReturnType<typeof createHttpServer>, port: number, label: string): Promise<void> {
+function listen(
+  server: ReturnType<typeof createHttpServer>,
+  port: number,
+  label: string,
+  host = 'localhost',
+): Promise<void> {
   return new Promise((done, fail) => {
     server.once('error', (error: NodeJS.ErrnoException) =>
       fail(error.code === 'EADDRINUSE' ? new ConfigError(`Port ${port} (${label}) is already in use`) : error),
     );
-    server.listen(port, 'localhost', () => done());
+    server.listen(port, host, () => done());
   });
 }
 
 async function main(): Promise<void> {
+  // On this computer the settings live in .env. A host sets them as variables
+  // and has no file; a variable already set is never replaced by the file.
+  if (existsSync('.env')) process.loadEnvFile('.env');
   const config = loadConfig();
-  const certificate = tls();
+  const hosted = config.listen.kind === 'hosted';
   const log = new EventLog();
   const store = new Store(config.dataFile);
   const api = new PerfloApi(config.perfloApiBase, config.credentials, log);
@@ -40,6 +48,7 @@ async function main(): Promise<void> {
   const app = createDemoApp({ config, store, service, log });
 
   if (config.mode === 'mock') {
+    const certificate = tls();
     const base = new URL(config.perfloApiBase);
     const mock = createMockPerflo({
       partnerId: config.credentials.partnerId,
@@ -54,7 +63,8 @@ async function main(): Promise<void> {
     console.log(`[mock] test payments service on ${base.origin}`);
   }
 
-  const server = createHttpsServer(certificate, app);
+  // A host terminates HTTPS in front of the demo; here it needs the local certificate.
+  const server = hosted ? createHttpServer(app) : createHttpsServer(tls(), app);
   if (process.env.NODE_ENV === 'production') {
     const webRoot = resolve('dist/web');
     app.use(express.static(webRoot, { index: 'index.html' }));
@@ -68,8 +78,13 @@ async function main(): Promise<void> {
     });
     app.use(vite.middlewares);
   }
-  await listen(server, DEMO_PORT, 'demo');
-  console.log(`[demo] Tiny on ${DEMO_ORIGIN} (${config.mode} mode, payments at ${config.perfloOrigin})`);
+  if (config.listen.kind === 'hosted') {
+    await listen(server, config.listen.port, 'demo', '0.0.0.0');
+    console.log(`[demo] Tiny on port ${config.listen.port} (${config.mode} mode, payments at ${config.perfloOrigin})`);
+  } else {
+    await listen(server, DEMO_PORT, 'demo');
+    console.log(`[demo] Tiny on ${DEMO_ORIGIN} (${config.mode} mode, payments at ${config.perfloOrigin})`);
+  }
 }
 
 main().catch((error: unknown) => {

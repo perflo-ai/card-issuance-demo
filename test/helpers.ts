@@ -92,6 +92,7 @@ export function makeDemo(base: string, mode: 'mock' | 'live' = 'mock') {
     perfloOrigin: new URL(base).origin,
     credentials: CREDS,
     dataFile,
+    listen: { kind: 'local' },
   };
   const log = new EventLog();
   const store = new Store(dataFile);
