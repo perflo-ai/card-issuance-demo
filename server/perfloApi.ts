@@ -40,10 +40,10 @@ export const accountResponse = z.object({
   user_id: z.string(),
   balance: money,
   limits: z.object({
-    per_order: amount,
-    per_month: amount,
-    spent_this_month: amount,
-    remaining_this_month: amount,
+    per_order: money,
+    per_month: money,
+    spent_this_month: money,
+    remaining_this_month: money,
   }),
   identity_check: z.object({ required_above: amount, status: identityStatus }),
   open_cards: z.array(
@@ -119,6 +119,8 @@ interface RequestOptions {
   body?: unknown;
   token?: string;
   idempotencyKey?: string;
+  /** Overrides the default request timeout. */
+  timeoutMs?: number;
 }
 
 export interface CreateOrderInput {
@@ -131,6 +133,13 @@ export interface CreateOrderInput {
 }
 
 const TIMEOUT_MS = 30_000;
+/**
+ * POST /orders can wait while Perflo pays for and creates the card (it answers
+ * `issuing` past its own budget, about 25 s end to end). Giving up earlier
+ * leaves an order that went through looking failed; a retry with the same
+ * Idempotency-Key is still safe, it only returns the order.
+ */
+const ORDER_TIMEOUT_MS = 90_000;
 
 export class PerfloApi {
   constructor(
@@ -163,7 +172,7 @@ export class PerfloApi {
         method,
         headers,
         body: rawBody.length > 0 ? rawBody : undefined,
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
       });
     } catch (error) {
       const reason = error instanceof Error && error.name === 'TimeoutError' ? 'timed out' : 'could not connect';
@@ -245,7 +254,7 @@ export class PerfloApi {
 
   /** 201 ready, 202 waiting states and 422 declined are all order answers, not errors. */
   async createOrder(demoUserId: string, token: string, idempotencyKey: string, body: CreateOrderInput): Promise<OrderResponse> {
-    const r = await this.request(demoUserId, 'POST', '/partner/v2/orders', { token, idempotencyKey, body });
+    const r = await this.request(demoUserId, 'POST', '/partner/v2/orders', { token, idempotencyKey, body, timeoutMs: ORDER_TIMEOUT_MS });
     return this.parse(orderResponse, r.status, r.json, [201, 202, 422]);
   }
 

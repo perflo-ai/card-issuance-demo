@@ -38,6 +38,8 @@ export type OrderPhase =
 /** Everything the browser receives about an order. No tokens, no reveal links, no card numbers. */
 export interface OrderView {
   id: string;
+  /** When the person asked for it (ISO 8601). */
+  createdAt: string;
   perfloOrderId: string | null;
   merchantName: string;
   domain: string;
@@ -58,10 +60,29 @@ export interface OrderView {
   amountReturned?: string;
 }
 
+/**
+ * The one answer that carries a full card: only when the person asks to see an
+ * open card, read fresh through a new single-use reveal link, sent with
+ * Cache-Control: no-store, never stored, never logged.
+ */
+export interface CardDetailsView {
+  number: string;
+  cvv: string;
+  expMonth: string;
+  expYear: string;
+  holderName: string;
+  last4: string;
+}
+
 export interface AccountView {
   user_id: string;
   balance: { amount: string; currency: 'USD' };
-  limits: { per_order: string; per_month: string; spent_this_month: string; remaining_this_month: string };
+  limits: {
+    per_order: { amount: string; currency: 'USD' };
+    per_month: { amount: string; currency: 'USD' };
+    spent_this_month: { amount: string; currency: 'USD' };
+    remaining_this_month: { amount: string; currency: 'USD' };
+  };
   identity_check: { required_above: string; status: IdentityStatus };
   open_cards: Array<{ order_id: string; last4: string; card_limit: string; expires_at: string }>;
 }

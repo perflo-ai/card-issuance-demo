@@ -105,7 +105,7 @@ describe('first order, end to end in mock mode', () => {
     expect(Object.keys(done.checkout as object).sort()).toEqual(['cardLimit', 'expMonth', 'expYear', 'filledAt', 'last4', 'outcome']);
 
     const account = await b.get('/demo/account');
-    expect(account.body).toMatchObject({ linked: true, account: { limits: { spent_this_month: '50.00' } } });
+    expect(account.body).toMatchObject({ linked: true, account: { limits: { spent_this_month: { amount: '50.00', currency: 'USD' } } } });
     const events = await b.get('/demo/events');
     assertNothingSecretLeaks(demo, setup, due, done, account.body, events.body);
   });
@@ -209,6 +209,56 @@ describe('other order states through the demo', () => {
     const cancelled = await b.post(`/demo/cards/${ready.perfloOrderId}/cancel`);
     const load = centsToApiAmount(quote(2000).loadCents);
     expect(cancelled.body).toMatchObject({ amountReturned: load, order: { phase: 'cancelled', amountReturned: load } });
+  });
+
+  it('shows an open card on request: read fresh each time, never stored or logged, only to its owner', async () => {
+    const demo = makeDemo(mock.base);
+    const b = browser(demo);
+    await linkedWithMoney(b, '100.00');
+    await b.post('/demo/mock/stop-at-checkout', { on: true });
+    const ready = await advance(b, (await ask(b, 'buy me $20 worth of books on amazon')).id);
+    expect(ready.phase).toBe('ready');
+    const path = `/demo/orders/${ready.perfloOrderId}/card-details`;
+
+    const first = await b.post(path);
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(first.headers['cache-control']).toContain('no-store');
+    expect(first.body.card).toMatchObject({
+      number: expect.stringMatching(/^[0-9]{12,19}$/),
+      cvv: expect.stringMatching(/^[0-9]{3,4}$/),
+      expMonth: expect.stringMatching(/^[0-9]{2}$/),
+      expYear: expect.stringMatching(/^[0-9]{4}$/),
+      last4: ready.checkout?.last4,
+    });
+    expect(first.body.card.number.endsWith(first.body.card.last4)).toBe(true);
+    // A second look reads a fresh single-use link and gets the same card.
+    const second = await b.post(path);
+    expect(second.status).toBe(200);
+    expect(second.body.card.number).toBe(first.body.card.number);
+
+    // Never kept on disk or in the developer log.
+    const number = first.body.card.number as string;
+    const cvv = first.body.card.cvv as string;
+    expect(readFileSync(demo.dataFile, 'utf8')).not.toContain(number);
+    const logged = JSON.stringify(demo.log.forUser(Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users)[0]));
+    expect(logged).not.toContain(number);
+    expect(logged).not.toMatch(new RegExp(`"cvv"|cvv[^a-z]*${cvv}`));
+    expect(logged).not.toMatch(/sensitive\?t=/);
+
+    // The orders list carries when each order was made, for the Orders tab.
+    const listed = (await b.get('/demo/orders')).body.orders as OrderView[];
+    expect(listed.find((o) => o.perfloOrderId === ready.perfloOrderId)?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    // Another person cannot read it.
+    const other = browser(demo);
+    await signUp(other, 'grace@example.com');
+    expect((await other.post(path)).status).toBe(404);
+
+    // A closed card has nothing to show.
+    await b.post(`/demo/cards/${ready.perfloOrderId}/cancel`);
+    const closed = await b.post(path);
+    expect(closed.status).toBe(409);
+    expect(closed.body.error.message).toBe('This card is closed, so there are no details to show.');
   });
 
   it('access turned off: the order asks to sign in again, then continues on its own', async () => {

@@ -3,7 +3,7 @@
  * one wording. Plain language: no provider names, no technical words.
  */
 
-import type { DeclineReason, IdentityStatus } from '../../server/views';
+import type { DeclineReason, IdentityStatus, OrderPhase } from '../../server/views';
 import { apiAmountToCents, formatUsd } from '../../server/money';
 
 /** "412.80" from the API -> "$412.80". */
@@ -64,4 +64,43 @@ export function when(iso: string): string {
 
 export function expiry(month: string, year: string): string {
   return `${month}/${year.slice(-2)}`;
+}
+
+/** "4242424242424242" -> "4242 4242 4242 4242". */
+export function cardNumber(digits: string): string {
+  return digits.replace(/(.{4})(?=.)/g, '$1 ');
+}
+
+/** One short word or two for where an order stands, used wherever an order is listed. */
+export function phaseLabel(phase: OrderPhase): string {
+  switch (phase) {
+    case 'draft':
+      return 'Not sent yet';
+    case 'discarded':
+      return 'Not sent';
+    case 'needs_setup':
+      return 'Waiting for setup';
+    case 'placing':
+      return 'Sending';
+    case 'payment_required':
+      return 'Needs money added';
+    case 'login_required':
+      return 'Needs sign-in';
+    case 'identity_check_required':
+      return 'Needs identity check';
+    case 'issuing':
+      return 'Getting card ready';
+    case 'ready':
+      return 'Card open';
+    case 'declined':
+      return 'Declined';
+    case 'completed':
+      return 'Paid';
+    case 'cancelled':
+      return 'Cancelled';
+    case 'expired':
+      return 'Expired';
+    case 'failed':
+      return 'Not completed';
+  }
 }

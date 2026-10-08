@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import { identityText, money, when } from './copy';
+import { Orders } from './Orders';
 import { PerfloFrame } from './PerfloFrame';
 import type { AccountView, LogEntry, MeView } from '../../server/views';
 
@@ -17,6 +18,7 @@ interface Props {
 }
 
 type OpenFrame = { kind: 'limits' | 'top_up'; url: string } | null;
+type Tab = 'payments' | 'orders';
 
 export function Panel({ perfloOrigin, mode, refreshKey, limitsRequest, onAccountChanged, me, onMe }: Props) {
   const [account, setAccount] = useState<AccountView | null>(null);
@@ -24,6 +26,7 @@ export function Panel({ perfloOrigin, mode, refreshKey, limitsRequest, onAccount
   const [frame, setFrame] = useState<OpenFrame>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<Tab>('payments');
 
   useEffect(() => {
     let live = true;
@@ -99,8 +102,30 @@ export function Panel({ perfloOrigin, mode, refreshKey, limitsRequest, onAccount
   };
 
   return (
-    <aside className="panel" aria-label="Payments">
-      <section className="box">
+    <aside className="panel" aria-label="Payments and orders">
+      <div className="tabs" role="tablist" aria-label="Payments and orders">
+        {(['payments', 'orders'] as const).map((t) => (
+          <button
+            key={t}
+            role="tab"
+            id={`tab-${t}`}
+            aria-selected={tab === t}
+            aria-controls={`tabpanel-${t}`}
+            className={tab === t ? 'tab active' : 'tab'}
+            onClick={() => setTab(t)}
+          >
+            {t === 'payments' ? 'Payments' : 'Orders'}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'orders' && (
+        <div role="tabpanel" id="tabpanel-orders" aria-labelledby="tab-orders">
+          <Orders refreshKey={refreshKey} onAccountChanged={onAccountChanged} />
+        </div>
+      )}
+
+      <section className="box" role="tabpanel" id="tabpanel-payments" aria-labelledby="tab-payments" hidden={tab !== 'payments'}>
         <h2>Payments</h2>
         {linked === null && <p className="muted">Loading...</p>}
         {linked === false && (
@@ -114,13 +139,13 @@ export function Panel({ perfloOrigin, mode, refreshKey, limitsRequest, onAccount
             </p>
             <dl className="facts">
               <dt>Per order, up to</dt>
-              <dd>{money(account.limits.per_order)}</dd>
+              <dd>{money(account.limits.per_order.amount)}</dd>
               <dt>Per month, up to</dt>
-              <dd>{money(account.limits.per_month)}</dd>
+              <dd>{money(account.limits.per_month.amount)}</dd>
               <dt>Used this month</dt>
-              <dd>{money(account.limits.spent_this_month)}</dd>
+              <dd>{money(account.limits.spent_this_month.amount)}</dd>
               <dt>Left this month</dt>
-              <dd>{money(account.limits.remaining_this_month)}</dd>
+              <dd>{money(account.limits.remaining_this_month.amount)}</dd>
               <dt>Identity check</dt>
               <dd>{identityText(account.identity_check.status, account.identity_check.required_above)}</dd>
             </dl>

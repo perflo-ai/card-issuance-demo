@@ -1,5 +1,6 @@
 import type {
   AccountView,
+  CardDetailsView,
   DemoConfigView,
   LinkStatus,
   LogEntry,
@@ -62,6 +63,8 @@ export const api = {
   account: () => request<{ linked: false } | { linked: true; account: AccountView }>('GET', '/demo/account'),
   limitsLink: () => request<{ frameUrl: string }>('POST', '/demo/limits-link'),
   topUp: (amount?: string) => request<{ frameUrl: string }>('POST', '/demo/top-ups', amount ? { amount } : {}),
+  cardDetails: (perfloOrderId: string) =>
+    request<{ card: CardDetailsView }>('POST', `/demo/orders/${encodeURIComponent(perfloOrderId)}/card-details`),
   cancelCard: (perfloOrderId: string) =>
     request<{ amountReturned: string; order?: OrderView }>('POST', `/demo/cards/${encodeURIComponent(perfloOrderId)}/cancel`),
   events: (after: number) => request<{ events: LogEntry[] }>('GET', `/demo/events?after=${after}`),

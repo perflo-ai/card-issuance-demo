@@ -5,8 +5,10 @@ Perflo's Partner API v2 the way a real partner would. Use it to demo the flow an
 backends end to end. Local only: this repository has no remote.
 
 - **Tiny's server** (`server/`, Express + TypeScript) holds the partner id and secret, signs every Perflo
-  request, and keeps each user's access token. The secret, the tokens and full card details never reach
-  the browser or the logs.
+  request, and keeps each user's access token. The secret and the tokens never reach the browser or the
+  logs. Full card details reach the browser only when the person presses "Show card details" on an open
+  card: each press reads them fresh through a new single-use reveal link, the answer is `no-store`, and
+  they are never stored or logged.
 - **Tiny's web app** (`web/`, Vite + React) is a chat in the spirit of the partner's screens 1 to 9. Perflo
   appears only inside its own frames, embedded in the chat.
 - **A mock Perflo** (`server/mock/`) for `DEMO_MODE=mock`, so the demo runs before the real backends are
@@ -95,6 +97,10 @@ In live mode Tiny never buys anything: there is no real shop. After the card det
 checkout form in memory and stops, and says so in the chat. The card stays open until you cancel it or it
 expires after 12 hours, and unused money goes back to the balance either way. A live order still moves
 real money from the balance onto the card, so use test accounts.
+
+The right panel has two tabs. **Payments** is the balance, limits and money controls. **Orders** lists every
+order sent to payments, newest first, with its status, what was paid or returned, and for an open card the
+card itself (number and security code hidden until "Show card details") and a Cancel card button.
 
 Frames from an `http://localhost` backend embedded in the https demo page are mixed content. Chrome and
 Firefox treat `localhost` as trustworthy; Safari may block them. This was not verified in a browser.

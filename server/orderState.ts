@@ -46,6 +46,7 @@ export function withoutRevealLink(response: OrderResponse): OrderResponse {
 export function toView(order: DemoOrder, user: DemoUser): OrderView {
   const base: OrderView = {
     id: order.id,
+    createdAt: order.createdAt,
     perfloOrderId: order.perfloOrderId,
     merchantName: order.intent.merchantName,
     domain: order.intent.domain,

@@ -8,7 +8,7 @@ import type { EventLog } from './eventLog.js';
 import { centsToApiAmount } from './money.js';
 import { nextStep, TERMINAL_STATUSES, withoutRevealLink } from './orderState.js';
 import { PerfloApiError, type AccountResponse, type OrderResponse, type PerfloApi } from './perfloApi.js';
-import { revealCard, RevealError, simulateCheckout } from './checkout.js';
+import { revealCard, RevealError, simulateCheckout, type RevealedCard } from './checkout.js';
 import type { DemoOrder, DemoUser, Store } from './store.js';
 
 import type { LinkStatus, Notice } from './views.js';
@@ -270,6 +270,39 @@ export class DemoService {
       }
       return { amountReturned: result.amount_returned, order };
     });
+  }
+
+  /**
+   * The full card, for the person to see: a fresh single-use reveal link every
+   * time, read through the relay that decrypts it. Returned to the caller only;
+   * never stored, and the log records just the last four digits.
+   */
+  async cardDetails(user: DemoUser, perfloOrderId: string): Promise<RevealedCard> {
+    const order = this.store.orderByPerfloId(user.id, perfloOrderId);
+    if (!order) throw new DemoError('not_found', 'That order was not found.');
+    if (!user.perflo) throw new DemoError('not_linked', 'Payments are not set up yet');
+    const closed = new DemoError('conflict', 'This card is closed, so there are no details to show.');
+    if (order.last !== null && TERMINAL_STATUSES.has(order.last.status)) throw closed;
+
+    let revealUrl: string;
+    try {
+      revealUrl = (await this.api.cardReveal(user.id, perfloOrderId, user.perflo.token)).reveal_url;
+    } catch (error) {
+      if (error instanceof PerfloApiError && error.code === 'card_not_open') throw closed;
+      throw error;
+    }
+    try {
+      const card = await revealCard(revealUrl, this.fetchImpl);
+      this.log.add(user.id, 'demo', `Card details shown to the person (card ending ${card.last4})`);
+      return card;
+    } catch (error) {
+      const code = error instanceof RevealError ? error.code : 'unavailable';
+      this.log.add(user.id, 'demo', `Card details could not be read (${code})`);
+      throw new DemoError(
+        'conflict',
+        code === 'still_locked' ? 'The card details are not ready yet. Try again in a moment.' : 'Could not open the card details. Try again.',
+      );
+    }
   }
 
   /** null when this person has not set up payments, or their access was removed. */
