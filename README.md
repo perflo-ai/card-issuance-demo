@@ -105,6 +105,24 @@ card itself (number and security code hidden until "Show card details") and a Ca
 Frames from an `http://localhost` backend embedded in the https demo page are mixed content. Chrome and
 Firefox treat `localhost` as trustworthy; Safari may block them. This was not verified in a browser.
 
+## Hosting (Railway or similar)
+
+A host sets `PORT`, terminates HTTPS itself and has no `.env` file. With `PORT` set the demo
+listens on that port over plain HTTP on every interface; without it, it runs on
+`https://localhost:5174` as above. Mock mode only runs on this computer.
+
+1. **Variables:** `DEMO_MODE=live`, `PERFLO_API_BASE`, `PARTNER_ID`, `PARTNER_KEY_VERSION`,
+   `PARTNER_SECRET`. A `.env` file is read only when present and never replaces a variable the
+   host already set.
+2. **Build and start:** `npm ci --include=dev && npm run build`, then `npm start`. The build needs
+   the dev dependencies (TypeScript, Vite).
+3. **Frames:** add the host's address (for example `https://tiny-demo.up.railway.app`) to this
+   partner's allowed origins in Perflo (Builder > Agent > Website embeds). Until then every Perflo
+   frame answers 404 inside the demo.
+4. **Data:** users, orders and access tokens live in `DEMO_DATA_FILE` (default
+   `data/demo-store.json`). On a host without a volume that file is lost on every deploy, and
+   people must connect again. Point `DEMO_DATA_FILE` at a mounted volume to keep it.
+
 ## How it talks to Perflo
 
 - **Signing**: `server/signing.ts` mirrors `perflo-backend-api/src/partner/partnerSignature.ts` byte for

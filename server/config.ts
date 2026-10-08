@@ -1,13 +1,21 @@
 import { KEY_VERSION_PATTERN, PARTNER_ID_PATTERN, SECRET_PATTERN, type PartnerCredentials } from './signing.js';
 
 /**
- * The browser origin of the demo. Perflo's dev seed allows exactly this origin
- * to embed frames, so it is fixed rather than configurable.
+ * The browser origin of the demo on this computer. Perflo's dev seed allows
+ * exactly this origin to embed frames. A hosted demo is reached at the host's
+ * own address, which must be added to the partner's allowed origins in Perflo.
  */
 export const DEMO_PORT = 5174;
 export const DEMO_ORIGIN = `https://localhost:${DEMO_PORT}`;
 
 export type DemoMode = 'live' | 'mock';
+
+/**
+ * local: https://localhost:5174 with the local certificate.
+ * hosted: the platform set PORT and terminates HTTPS itself, so the demo
+ * listens on that port over plain HTTP on every interface.
+ */
+export type DemoListen = { kind: 'local' } | { kind: 'hosted'; port: number };
 
 export interface DemoConfig {
   mode: DemoMode;
@@ -16,6 +24,7 @@ export interface DemoConfig {
   perfloOrigin: string;
   credentials: PartnerCredentials;
   dataFile: string;
+  listen: DemoListen;
 }
 
 export class ConfigError extends Error {
@@ -54,6 +63,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DemoConfig {
   if (mode === 'mock' && !isLocal) {
     throw new ConfigError('In mock mode PERFLO_API_BASE must be a localhost URL; the mock listens on its port');
   }
+  const listen = listenFrom(env);
+  if (mode === 'mock' && listen.kind === 'hosted') {
+    throw new ConfigError('Mock mode only runs on this computer. Set DEMO_MODE=live to host the demo.');
+  }
   if (mode === 'mock' && base.port === String(DEMO_PORT)) {
     throw new ConfigError(`The mock cannot share port ${DEMO_PORT} with the demo`);
   }
@@ -74,5 +87,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DemoConfig {
     perfloOrigin: base.origin,
     credentials: { partnerId, keyVersion, secret },
     dataFile: env.DEMO_DATA_FILE?.trim() || 'data/demo-store.json',
+    listen,
   };
+}
+
+function listenFrom(env: NodeJS.ProcessEnv): DemoListen {
+  const raw = env.PORT?.trim();
+  if (!raw) return { kind: 'local' };
+  const port = /^[0-9]{1,5}$/.test(raw) ? Number(raw) : NaN;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new ConfigError('PORT must be a whole number from 1 to 65535');
+  }
+  return { kind: 'hosted', port };
 }
