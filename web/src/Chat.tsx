@@ -124,7 +124,7 @@ export function Chat({ perfloOrigin, onAccountChanged, onChangeLimits }: ChatPro
                 error={errors[m.orderId] ?? ''}
                 perfloOrigin={perfloOrigin}
                 onAdvance={() => advance(m.orderId)}
-                onWatch={(from) => watch(m.orderId, from)}
+                onWatch={(from, tries, delayMs) => watch(m.orderId, from, tries, delayMs)}
                 onDiscard={async () => {
                   try {
                     put((await api.discard(m.orderId)).order);
@@ -185,7 +185,7 @@ interface CardProps {
   error: string;
   perfloOrigin: string;
   onAdvance: () => Promise<OrderView | null>;
-  onWatch: (from: OrderPhase) => Promise<void>;
+  onWatch: (from: OrderPhase, tries?: number, delayMs?: number) => Promise<void>;
   onDiscard: () => void;
   onCancelCard: (perfloOrderId: string) => void;
   onChangeLimits: () => void;
@@ -196,6 +196,7 @@ function OrderCard(props: CardProps) {
   const { order, notice, busy, error, perfloOrigin, onAdvance, onWatch } = props;
   const [frameOpen, setFrameOpen] = useState(false);
   const [linkProblem, setLinkProblem] = useState<'' | 'expired' | 'slow'>('');
+  const [checkingIdentity, setCheckingIdentity] = useState(false);
   const amount = formatUsd(order.amountCents);
   const watching = useRef(false);
 
@@ -207,6 +208,20 @@ function OrderCard(props: CardProps) {
       watching.current = false;
     });
   }, [order.phase, onWatch]);
+
+  /**
+   * The result can take a minute to reach the order after the person finishes the
+   * check, so one look is not enough: keep looking for two minutes. Gently, because
+   * while the check is still due each look asks for a fresh check link.
+   */
+  const checkIdentityDone = async () => {
+    setCheckingIdentity(true);
+    try {
+      await onWatch('identity_check_required', 20, 6000);
+    } finally {
+      setCheckingIdentity(false);
+    }
+  };
 
   const afterSetup = async (link: LinkStatus | undefined) => {
     let status = link;
@@ -337,17 +352,20 @@ function OrderCard(props: CardProps) {
     case 'identity_check_required':
       body = (
         <>
-          <p>Your orders with Tiny would go over $200.00 in total, so a quick identity check is needed first. It only happens once.</p>
+          <p>A quick identity check is needed before Tiny can pay for this. It only happens once.</p>
           <div className="row">
             {order.kycUrl ? (
               <a className="button primary" href={order.kycUrl} target="_blank" rel="noopener noreferrer">
                 Verify your identity
               </a>
             ) : (
-              <p className="muted small">We could not get the ID check link right now. Try again in a minute.</p>
+              <p className="muted small">
+                There is no check link right now. If you have already finished it, your order goes ahead as soon as the
+                result is confirmed, usually within a minute.
+              </p>
             )}
-            <button className="secondary" disabled={busy} onClick={() => void onAdvance()}>
-              I have finished, try again
+            <button className="secondary" disabled={busy || checkingIdentity} onClick={() => void checkIdentityDone()}>
+              {checkingIdentity ? 'Checking...' : 'I have finished, try again'}
             </button>
           </div>
         </>
