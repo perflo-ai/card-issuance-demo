@@ -147,9 +147,11 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
     res.json({ reply, order: toView(order, user) });
   });
 
-  app.get('/demo/orders', (req, res) => {
+  app.get('/demo/orders', async (req, res) => {
     const user = currentUser(req);
-    res.json({ orders: store.ordersFor(user.id).map((o) => toView(o, user)) });
+    await service.refreshOrders(user);
+    const fresh = store.user(user.id);
+    res.json({ orders: store.ordersFor(fresh.id).map((o) => toView(o, fresh)) });
   });
 
   app.post('/demo/orders/:id/discard', (req, res) => {

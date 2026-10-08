@@ -129,7 +129,10 @@ Firefox treat `localhost` as trustworthy; Safari may block them. This was not ve
 - **Frames**: embedded with `allow="payment"`. Messages are accepted only from the `PERFLO_API_BASE` origin,
   from that frame's window, and only in the SPEC object shape.
 - **Sign-up**: Tiny never re-attaches an account by email. Each sign-up is a new person; Perflo's emailed
-  code is what proves the email.
+  code is what proves the email. Once a new account links to a Perflo user that an earlier Tiny account
+  already linked to, it is the same person, so the earlier account's orders move onto the new one.
+- **Orders tab**: before listing, orders that are still moving are read again from Perflo (`GET /orders/:id`,
+  never a new order). The chat keeps checking a card that is getting ready for up to five minutes.
 
 ## Scripts
 

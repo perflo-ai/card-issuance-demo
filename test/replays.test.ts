@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -119,5 +119,115 @@ describe('POST /users replays never carry a token', () => {
     expect(keys[1]).toBeTruthy();
     expect(keys[2]).toBeTruthy();
     expect(keys[1]).not.toBe(keys[2]);
+  });
+});
+
+describe('the orders list reads moving orders from Perflo', () => {
+  it('regression: 2026-10-08 an order still issuing locally shows ready once Perflo says so, by a GET and never a new order', async () => {
+    const ready = {
+      order_id: 'ord_1',
+      status: 'ready',
+      card_id: 'card_1',
+      last4: '2852',
+      card_limit: '20.00',
+      card_expires_at: '2026-10-09T02:06:30.202Z',
+      reveal_url: 'https://perflo.test/reveal/once',
+      reveal_expires_at: '2026-10-08T14:20:00.000Z',
+    };
+    const { fake, calls } = scripted({ 'GET /partner/v2/orders/ord_1': [{ status: 200, body: ready }] });
+    const { service, store, user, order } = setup(fake);
+    store.updateOrder(order, (o) => {
+      o.state = 'placed';
+      o.perfloOrderId = 'ord_1';
+      o.last = { order_id: 'ord_1', status: 'issuing' };
+    });
+
+    await service.refreshOrders(user);
+
+    const view = toView(store.order(user.id, order.id)!, store.user(user.id));
+    expect(view.phase).toBe('ready');
+    expect(view.cardLast4).toBe('2852');
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /partner/v2/orders/ord_1']);
+    // The one-time reveal link is never kept, and a refresh never opens the card.
+    expect(JSON.stringify(store.order(user.id, order.id))).not.toContain('reveal/once');
+    expect(store.order(user.id, order.id)!.revealUsed).toBe(false);
+  });
+
+  it('leaves settled orders and orders never sent alone, and keeps the last status when the read fails', async () => {
+    const { fake, calls } = scripted({ 'GET /partner/v2/orders/ord_2': [{ status: 503, body: { error: { code: 'unavailable', message: 'Try again.' } } }] });
+    const { service, store, user, order } = setup(fake);
+    store.updateOrder(order, (o) => {
+      o.state = 'placed';
+      o.perfloOrderId = 'ord_done';
+      o.last = { order_id: 'ord_done', status: 'cancelled' };
+    });
+    const moving = store.createOrder(user.id, { merchantName: 'Amazon', domain: 'amazon.com', amountCents: 2000, description: 'headphones' });
+    store.updateOrder(moving, (o) => {
+      o.state = 'placed';
+      o.perfloOrderId = 'ord_2';
+      o.last = { order_id: 'ord_2', status: 'issuing' };
+    });
+    store.createOrder(user.id, { merchantName: 'Amazon', domain: 'amazon.com', amountCents: 500, description: 'cable' });
+
+    await service.refreshOrders(user);
+
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /partner/v2/orders/ord_2']);
+    expect(store.order(user.id, moving.id)!.last?.status).toBe('issuing');
+  });
+});
+
+describe('one person, one Tiny account, decided by Perflo', () => {
+  const intent = { merchantName: 'Amazon', domain: 'amazon.com', amountCents: 2000, description: 'headphones' };
+
+  it('linking to a Perflo user who already has a Tiny account brings that account\'s orders along', () => {
+    const store = new Store(join(mkdtempSync(join(tmpdir(), 'tiny-link-')), 's.json'));
+    const first = store.createUser('Ada', 'Lovelace', 'ada@example.com');
+    store.linkPerflo(first.user.id, { userId: 'usr_1', token: 'ptk_first_token_value' });
+    store.createOrder(first.user.id, intent);
+
+    const again = store.createUser('Ada', 'Lovelace', 'ada@example.com');
+    expect(store.ordersFor(again.user.id)).toHaveLength(0);
+    store.linkPerflo(again.user.id, { userId: 'usr_1', token: 'ptk_second_token_value' });
+
+    expect(store.ordersFor(again.user.id)).toHaveLength(1);
+    expect(store.userForSession(first.sessionId)?.id).toBe(again.user.id);
+    expect(() => store.user(first.user.id)).toThrow();
+  });
+
+  it('never joins accounts that share only a typed email', () => {
+    const store = new Store(join(mkdtempSync(join(tmpdir(), 'tiny-email-')), 's.json'));
+    const owner = store.createUser('Ada', 'Lovelace', 'ada@example.com');
+    store.linkPerflo(owner.user.id, { userId: 'usr_1', token: 'ptk_owner_token_value' });
+    store.createOrder(owner.user.id, intent);
+    const stranger = store.createUser('Ada', 'Lovelace', 'ada@example.com');
+    store.linkPerflo(stranger.user.id, { userId: 'usr_2', token: 'ptk_stranger_token_value' });
+
+    expect(store.ordersFor(stranger.user.id)).toHaveLength(0);
+    expect(store.ordersFor(owner.user.id)).toHaveLength(1);
+  });
+
+  it('folds accounts an earlier version left for one Perflo user into the newest, when the store opens', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'tiny-open-')), 's.json');
+    const user = (id: string, createdAt: string, perfloUserId: string | null) => ({
+      id, firstName: 'Ada', lastName: 'L', email: 'ada@example.com', createdAt,
+      perflo: perfloUserId ? { userId: perfloUserId, token: `ptk_${id}_token_value` } : null, pendingLogin: null,
+    });
+    const order = (id: string, demoUserId: string) => ({ id, demoUserId, idempotencyKey: id, intent, state: 'draft', perfloOrderId: null, last: null, revealUsed: false, checkout: null, amountReturned: null, createdAt: '2026-10-08T10:00:00.000Z' });
+    writeFileSync(file, JSON.stringify({
+      sessions: { s1: 'old', s2: 'new', s3: 'unlinked' },
+      users: {
+        old: user('old', '2026-10-08T08:00:00.000Z', 'usr_1'),
+        new: user('new', '2026-10-08T14:00:00.000Z', 'usr_1'),
+        unlinked: user('unlinked', '2026-10-08T15:00:00.000Z', null),
+      },
+      orders: { o1: order('o1', 'old'), o2: order('o2', 'new'), o3: order('o3', 'unlinked') },
+    }));
+
+    const store = new Store(file);
+    expect(store.userForSession('s1')?.id).toBe('new');
+    expect(store.ordersFor('new').map((o) => o.id).sort()).toEqual(['o1', 'o2']);
+    expect(store.ordersFor('unlinked').map((o) => o.id)).toEqual(['o3']);
+    expect(store.user('new').perflo?.token).toBe('ptk_new_token_value');
+    expect(new Store(file).userForSession('s1')?.id).toBe('new');
   });
 });

@@ -66,9 +66,12 @@ export function Chat({ perfloOrigin, onAccountChanged, onChangeLimits }: ChatPro
     [put, onAccountChanged],
   );
 
-  /** Looks again until the order leaves `from`, for a bounded time. Retry is always a status read, never a new order. */
+  /**
+   * Looks again until the order leaves `from`, for a bounded time. Retry is always a status read, never a new order.
+   * Five minutes: a card can take a few minutes to be ready, and giving up sooner left a ready card showing as not ready.
+   */
   const watch = useCallback(
-    async (id: string, from: OrderPhase, tries = 15, delayMs = 2000) => {
+    async (id: string, from: OrderPhase, tries = 100, delayMs = 3000) => {
       for (let i = 0; i < tries; i++) {
         const order = await advance(id);
         if (!order || order.phase !== from) return;
