@@ -14,7 +14,7 @@ import { toView } from './orderState.js';
 import { PerfloApiError, PerfloUnavailableError } from './perfloApi.js';
 import { DemoError, type DemoService } from './service.js';
 import type { DemoUser, Store } from './store.js';
-import { FRAME_EVENT_TYPES } from './views.js';
+import { FRAME_EVENT_TYPES, type CardDetailsView } from './views.js';
 
 const SESSION_COOKIE = 'tiny_session';
 
@@ -207,6 +207,14 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
       cents = parsed;
     }
     res.json({ frameUrl: await service.topUpLink(user, cents) });
+  });
+
+  app.post('/demo/orders/:perfloOrderId/card-details', async (req, res) => {
+    const user = currentUser(req);
+    const card = await service.cardDetails(user, req.params.perfloOrderId);
+    res.set('Cache-Control', 'no-store');
+    const view: CardDetailsView = card;
+    res.json({ card: view });
   });
 
   app.post('/demo/cards/:orderId/cancel', async (req, res) => {

@@ -5,7 +5,8 @@
  * `t` value is the credential) answering the ms-card sensitive-details envelope,
  * decrypted by Evervault on the way out (SPEC 4 clarification). The full card
  * exists only in local variables of these functions: it is never stored,
- * logged, put in an error message, or sent to the browser.
+ * logged or put in an error message. It reaches the browser only through
+ * POST /demo/orders/:id/card-details, when the person asks to see an open card.
  */
 
 import { z } from 'zod';

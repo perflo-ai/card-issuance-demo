@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { api, wait, type FrameEventPayload } from './api';
-import { declineFallback, declineHint, expiry, money, when } from './copy';
+import { CardDetails } from './CardDetails';
+import { declineFallback, declineHint, money, when } from './copy';
 import { PerfloFrame } from './PerfloFrame';
 import { formatUsd } from '../../server/money';
 import type { LinkStatus, Notice, OrderPhase, OrderView } from '../../server/views';
@@ -362,11 +363,15 @@ function OrderCard(props: CardProps) {
     case 'ready':
       body = order.checkout ? (
         <>
-          <p className="card-line">
-            One-time card <strong>.... {order.checkout.last4}</strong> · up to {money(order.checkout.cardLimit)} · expires{' '}
-            {expiry(order.checkout.expMonth, order.checkout.expYear)}
-          </p>
-          <p className="muted small">Card details went straight to Tiny&apos;s checkout. They are never shown in this chat.</p>
+          {order.perfloOrderId && (
+            <CardDetails
+              perfloOrderId={order.perfloOrderId}
+              last4={order.checkout.last4}
+              cardLimit={order.checkout.cardLimit}
+              expMonth={order.checkout.expMonth}
+              expYear={order.checkout.expYear}
+            />
+          )}
           {order.checkout.outcome === 'filled_not_submitted' && (
             <p>
               I filled in the checkout on {order.domain}. This demo stops before buying, so the card stays open until you cancel it
@@ -386,6 +391,9 @@ function OrderCard(props: CardProps) {
             Your one-time card <strong>.... {order.cardLast4}</strong> is ready
             {order.cardLimit ? `, up to ${money(order.cardLimit)}` : ''}.
           </p>
+          {order.perfloOrderId && order.cardLast4 && (
+            <CardDetails perfloOrderId={order.perfloOrderId} last4={order.cardLast4} cardLimit={order.cardLimit} />
+          )}
           {notice === 'card_locked' && <p className="error">The card details could not be opened. Try again in a moment.</p>}
           {notice === 'reveal_failed' && <p className="error">I could not open the card details. Try again.</p>}
           <div className="row">

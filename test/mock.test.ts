@@ -111,7 +111,12 @@ describe('users and logins', () => {
     expect(account.json).toEqual({
       user_id: userId,
       balance: { amount: '100.00', currency: 'USD' },
-      limits: { per_order: '500.00', per_month: '1000.00', spent_this_month: '0.00', remaining_this_month: '1000.00' },
+      limits: {
+        per_order: { amount: '500.00', currency: 'USD' },
+        per_month: { amount: '1000.00', currency: 'USD' },
+        spent_this_month: { amount: '0.00', currency: 'USD' },
+        remaining_this_month: { amount: '1000.00', currency: 'USD' },
+      },
       identity_check: { required_above: '200.00', status: 'not_required' },
       open_cards: [],
     });

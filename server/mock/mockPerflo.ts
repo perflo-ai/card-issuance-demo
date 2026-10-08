@@ -528,10 +528,10 @@ export function createMockPerflo(options: MockOptions) {
       user_id: user.userId,
       balance: { amount: centsToApiAmount(user.balanceCents), currency: 'USD' },
       limits: {
-        per_order: centsToApiAmount(grant.perOrderCents),
-        per_month: centsToApiAmount(grant.perMonthCents),
-        spent_this_month: centsToApiAmount(spent),
-        remaining_this_month: centsToApiAmount(Math.max(0, grant.perMonthCents - spent)),
+        per_order: { amount: centsToApiAmount(grant.perOrderCents), currency: 'USD' },
+        per_month: { amount: centsToApiAmount(grant.perMonthCents), currency: 'USD' },
+        spent_this_month: { amount: centsToApiAmount(spent), currency: 'USD' },
+        remaining_this_month: { amount: centsToApiAmount(Math.max(0, grant.perMonthCents - spent)), currency: 'USD' },
       },
       identity_check: {
         required_above: centsToApiAmount(NO_KYC_LIMIT_CENTS),
