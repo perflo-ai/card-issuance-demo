@@ -50,10 +50,7 @@ export class DemoService {
 
   private storeToken(user: DemoUser, userId: string, token: string): DemoUser {
     // Written to disk before anything else: Perflo hands a token out once.
-    return this.store.updateUser(user.id, (u) => {
-      u.perflo = { userId, token };
-      u.pendingLogin = null;
-    });
+    return this.store.linkPerflo(user.id, { userId, token });
   }
 
   /**
@@ -186,10 +183,45 @@ export class DemoService {
     });
   }
 
+  /**
+   * Brings the person's orders that are still moving up to date with Perflo
+   * before they are listed: a plain status read (GET) per order, never a new
+   * order. An order another flow is working on right now is left to that flow.
+   * A read that fails keeps the last known status and says so in the log.
+   */
+  async refreshOrders(user: DemoUser): Promise<void> {
+    const current = this.store.user(user.id);
+    if (!current.perflo) return;
+    const moving = this.store
+      .ordersFor(current.id)
+      .filter((o) => o.perfloOrderId !== null && o.last !== null && !TERMINAL_STATUSES.has(o.last.status));
+    for (const order of moving) {
+      const key = `order:${order.id}`;
+      if (this.locks.has(key)) continue;
+      await this.exclusive(key, async () => {
+        const fresh = this.store.user(current.id);
+        if (!fresh.perflo || order.perfloOrderId === null) return;
+        try {
+          const latest = await this.api.getOrder(fresh.id, order.perfloOrderId);
+          if (latest.status === 'login_required') {
+            // Access was removed: same handling as any other read of this order.
+            await this.handle(fresh, order, latest, { checkout: false });
+            return;
+          }
+          this.store.updateOrder(order, (o) => (o.last = withoutRevealLink(latest)));
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : 'unknown error';
+          this.log.add(fresh.id, 'demo', `Could not refresh order ${order.perfloOrderId}: ${reason}`);
+        }
+      });
+    }
+  }
+
   private async handle(
     user: DemoUser,
     order: DemoOrder,
     response: OrderResponse,
+    options: { checkout: boolean } = { checkout: true },
   ): Promise<{ order: DemoOrder; user: DemoUser; notice: Notice }> {
     this.store.updateOrder(order, (o) => {
       o.perfloOrderId = response.order_id;
@@ -207,7 +239,7 @@ export class DemoService {
       return { order, user: updated, notice: null };
     }
 
-    if (step === 'reveal' && response.status === 'ready') {
+    if (options.checkout && step === 'reveal' && response.status === 'ready') {
       const notice = await this.checkoutWithCard(user, order, response);
       return { order, user, notice };
     }

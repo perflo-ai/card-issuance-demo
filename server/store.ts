@@ -70,6 +70,52 @@ export class Store {
     this.data = existsSync(file)
       ? (JSON.parse(readFileSync(file, 'utf8')) as StoreShape)
       : { sessions: {}, users: {}, orders: {} };
+    let folded = false;
+    for (const user of Object.values(this.data.users)) {
+      if (user.perflo && this.data.users[user.id] && this.foldSamePerson(this.newestLinked(user.perflo.userId).id)) folded = true;
+    }
+    if (folded) this.save();
+  }
+
+  private newestLinked(perfloUserId: string): DemoUser {
+    return Object.values(this.data.users)
+      .filter((u) => u.perflo?.userId === perfloUserId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  }
+
+  /**
+   * One person, one Tiny account, decided by Perflo and never by a typed email:
+   * Tiny accounts linked to the same Perflo user have each proved that email
+   * with Perflo's code. Each sign-up starts a new account (anyone can type an
+   * email), so without this a person who signed in again lost sight of their
+   * earlier orders. Moves the others' orders and sessions onto `keepId` and
+   * removes them. Returns whether anything moved.
+   */
+  private foldSamePerson(keepId: string): boolean {
+    const keep = this.data.users[keepId];
+    if (!keep?.perflo) return false;
+    const others = Object.values(this.data.users).filter((u) => u.id !== keepId && u.perflo?.userId === keep.perflo?.userId);
+    for (const other of others) {
+      for (const order of Object.values(this.data.orders)) {
+        if (order.demoUserId === other.id) order.demoUserId = keepId;
+      }
+      for (const [sid, uid] of Object.entries(this.data.sessions)) {
+        if (uid === other.id) this.data.sessions[sid] = keepId;
+      }
+      delete this.data.users[other.id];
+    }
+    return others.length > 0;
+  }
+
+  /** Stores the Perflo link for a Tiny account, and folds in the person's other Tiny accounts. */
+  linkPerflo(id: string, link: PerfloLink): DemoUser {
+    const user = this.data.users[id];
+    if (!user) throw new Error('unknown demo user');
+    user.perflo = link;
+    user.pendingLogin = null;
+    this.foldSamePerson(id);
+    this.save();
+    return user;
   }
 
   private save(): void {
