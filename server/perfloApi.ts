@@ -140,6 +140,12 @@ const TIMEOUT_MS = 30_000;
  * Idempotency-Key is still safe, it only returns the order.
  */
 const ORDER_TIMEOUT_MS = 90_000;
+/**
+ * Cancelling a ready card waits while Perflo drains and deletes it (about 17 s
+ * on 2026-10-08, and Perflo itself waits up to 60 s). A cancel is safe to send
+ * again: a cancelled order answers with what was recorded.
+ */
+const CANCEL_TIMEOUT_MS = 90_000;
 
 export class PerfloApi {
   constructor(
@@ -283,6 +289,7 @@ export class PerfloApi {
   async cancelOrder(demoUserId: string, orderId: string, token: string): Promise<z.infer<typeof cancelResponse>> {
     const r = await this.request(demoUserId, 'POST', `/partner/v2/orders/${encodeURIComponent(orderId)}/cancel`, {
       token,
+      timeoutMs: CANCEL_TIMEOUT_MS,
     });
     return this.parse(cancelResponse, r.status, r.json, [200]);
   }
