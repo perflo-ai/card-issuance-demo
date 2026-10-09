@@ -42,7 +42,7 @@ describe('signature check', () => {
   it('refuses unsigned and wrongly signed requests with the error envelope', async () => {
     const unsigned = await fetch(`${mock.base}/partner/v2/users`, { method: 'POST' });
     expect(unsigned.status).toBe(401);
-    expect(await unsigned.json()).toEqual({ error: { code: 'unauthorized', message: 'Request could not be verified.' } });
+    expect(await unsigned.json()).toEqual({ error: { code: 'unauthorized', message: 'We could not confirm who sent this request.' } });
     const wrong = await signedFetch(mock.base, 'POST', '/partner/v2/users', { body: { external_user_id: 'x' }, secret: 'B'.repeat(43) });
     expect(wrong.status).toBe(401);
   });

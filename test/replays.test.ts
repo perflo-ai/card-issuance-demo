@@ -154,7 +154,8 @@ describe('the orders list reads moving orders from Perflo', () => {
   });
 
   it('leaves settled orders and orders never sent alone, and keeps the last status when the read fails', async () => {
-    const { fake, calls } = scripted({ 'GET /partner/v2/orders/ord_2': [{ status: 503, body: { error: { code: 'unavailable', message: 'Try again.' } } }] });
+    const busy = { status: 503, body: { error: { code: 'service_unavailable', message: 'Try again.' } } };
+    const { fake, calls } = scripted({ 'GET /partner/v2/orders/ord_2': [busy, busy, busy] });
     const { service, store, user, order } = setup(fake);
     store.updateOrder(order, (o) => {
       o.state = 'placed';
@@ -171,7 +172,8 @@ describe('the orders list reads moving orders from Perflo', () => {
 
     await service.refreshOrders(user);
 
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /partner/v2/orders/ord_2']);
+    // A read is tried three times when payments says to try again; then the last known status stays.
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(Array(3).fill('GET /partner/v2/orders/ord_2'));
     expect(store.order(user.id, moving.id)!.last?.status).toBe('issuing');
   });
 });

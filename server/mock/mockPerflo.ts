@@ -415,25 +415,25 @@ export function createMockPerflo(options: MockOptions) {
     const result = verifySignature(req.headers, req.method, req.originalUrl, rawBody, (partnerId) =>
       partnerId === options.partnerId ? { [options.keyVersion]: options.secret } : null,
     );
-    if (!result.ok) return next(new HttpError(401, 'unauthorized', 'Request could not be verified.'));
+    if (!result.ok) return next(new HttpError(401, 'unauthorized', 'We could not confirm who sent this request.'));
     next();
   };
 
   const bearerUser = (req: Request): { user: MUser; token: string } | { revoked: MUser } => {
     const header = req.get('authorization') ?? '';
     const match = /^Bearer ([A-Za-z0-9_-]{8,200})$/.exec(header);
-    if (!match) throw new HttpError(401, 'unauthorized', 'This person needs to set up payments again.');
+    if (!match) throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
     const live = tokens.get(match[1]);
     if (live) return { user: users.get(live) as MUser, token: match[1] };
     const revoked = revokedTokens.get(match[1]);
     if (revoked) return { revoked: users.get(revoked) as MUser };
-    throw new HttpError(401, 'unauthorized', 'This person needs to set up payments again.');
+    throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
   };
 
   const userFromToken = (req: Request, userId: string): MUser => {
     const who = bearerUser(req);
     if ('revoked' in who || who.user.userId !== userId) {
-      throw new HttpError(401, 'unauthorized', 'This person needs to set up payments again.');
+      throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
     }
     return who.user;
   };
@@ -590,14 +590,14 @@ export function createMockPerflo(options: MockOptions) {
       throw new HttpError(400, 'invalid_request', 'Some order details are missing or not valid.');
     }
     const owner = 'revoked' in who ? who.revoked : who.user;
-    if (owner.userId !== body.data.user_id) throw new HttpError(401, 'unauthorized', 'This person needs to set up payments again.');
+    if (owner.userId !== body.data.user_id) throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
 
     const scope = `ptn:${options.partnerId}:${key}`;
     const bodyHash = createHash('sha256').update((req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.alloc(0)).digest('hex');
     const stored = idempotency.get(scope);
     if (stored) {
       if (stored.bodyHash !== bodyHash) {
-        throw new HttpError(409, 'idempotency_conflict', 'This order key was already used for a different order.');
+        throw new HttpError(409, 'idempotency_key_reused', 'This key was already used for a different request. Use a new key.');
       }
       return res.status(stored.status).json(stored.body);
     }
@@ -664,7 +664,7 @@ export function createMockPerflo(options: MockOptions) {
     if (order.status === 'ready' || order.status === 'issuing') {
       returned = (order.card as MCard).loadCents;
     } else if (!['awaiting_login', 'awaiting_payment', 'identity_check_required'].includes(order.status)) {
-      throw new HttpError(409, 'not_cancellable', 'This order is already finished.');
+      throw new HttpError(409, 'order_not_cancellable', 'This order can no longer be cancelled.');
     }
     user.balanceCents += returned;
     order.status = 'cancelled';
@@ -677,7 +677,7 @@ export function createMockPerflo(options: MockOptions) {
   const liveFrame = (req: Request): MFrame => {
     const sessionId = req.get('x-perflo-frame-session') ?? '';
     const frame = /^fs_[A-Za-z0-9_-]{43}$/.test(sessionId) ? frames.get(sessionId) : undefined;
-    if (!frame) throw new HttpError(404, 'frame_not_found', 'This link is not valid.');
+    if (!frame) throw new HttpError(404, 'not_found', 'This link is not valid.');
     if (frame.expiresAt < Date.now()) throw new HttpError(410, 'frame_expired', 'This link has expired. Go back and ask for a new one.');
     return frame;
   };
@@ -728,7 +728,7 @@ export function createMockPerflo(options: MockOptions) {
 
   framesRouter.post('/session/login', (req, res) => {
     const frame = liveFrame(req);
-    if (frame.purpose !== 'setup' || frame.step !== 'login') throw new HttpError(409, 'wrong_step', 'This step is already done.');
+    if (frame.purpose !== 'setup' || frame.step !== 'login') throw new HttpError(409, 'frame_step_invalid', 'This step is already done.');
     const body = z.object({ privy_access_token: z.string().max(400) }).safeParse(req.body);
     // Mock sign-in token: "mock-otp:<email>:<code>". The real frame sends a Privy access token.
     // "mock-otp:<code>" when Perflo already knows the email, "mock-otp:<email>:<code>" when the frame asked for it.
@@ -736,7 +736,7 @@ export function createMockPerflo(options: MockOptions) {
     const user = users.get(frame.userId) as MUser;
     const email = user.email ?? match?.[1] ?? null;
     if (!match || match[2] !== MOCK_CODE || !email) {
-      throw new HttpError(401, 'code_invalid', 'That code is not right. Check it and try again.');
+      throw new HttpError(401, 'sign_in_failed', 'That code is not right. Check it and try again.');
     }
     user.email = email;
     frame.loggedIn = true;
@@ -748,7 +748,7 @@ export function createMockPerflo(options: MockOptions) {
 
   framesRouter.post('/session/limits', (req, res) => {
     const frame = liveFrame(req);
-    if (frame.step !== 'limits') throw new HttpError(409, 'wrong_step', 'This step is already done.');
+    if (frame.step !== 'limits') throw new HttpError(409, 'frame_step_invalid', 'This step is already done.');
     const body = limitsBody.safeParse(req.body);
     if (!body.success) throw new HttpError(400, 'limits_invalid', 'Choose an amount per order and per month.');
     const perOrder = apiAmountToCents(body.data.per_order);
@@ -776,7 +776,7 @@ export function createMockPerflo(options: MockOptions) {
 
   framesRouter.post('/session/top-up', (req, res) => {
     const frame = liveFrame(req);
-    if (frame.step !== 'top_up') throw new HttpError(409, 'wrong_step', 'This step is already done.');
+    if (frame.step !== 'top_up') throw new HttpError(409, 'frame_step_invalid', 'This step is already done.');
     const body = z.object({ amount: amountString }).safeParse(req.body);
     const cents = body.success ? apiAmountToCents(body.data.amount) : 0;
     if (cents <= 0 || cents > MAX_TOP_UP_CENTS) throw new HttpError(400, 'amount_invalid', 'Enter an amount between $0.01 and $10,000.00.');
@@ -812,7 +812,7 @@ export function createMockPerflo(options: MockOptions) {
     } else {
       const user = users.get(frame.userId) as MUser;
       if (frame.purpose !== 'setup' || !user.grant || !user.token) {
-        throw new HttpError(409, 'wrong_step', 'Setup is not finished yet.');
+        throw new HttpError(409, 'frame_step_invalid', 'Setup is not finished yet.');
       }
       frame.step = 'done';
     }

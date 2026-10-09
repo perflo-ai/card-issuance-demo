@@ -11,9 +11,9 @@ import type { EventLog } from './eventLog.js';
 import { parseOrderMessage } from './intent.js';
 import { formatUsd, parseDecimalToCents } from './money.js';
 import { toView } from './orderState.js';
-import { PerfloApiError, PerfloUnavailableError } from './perfloApi.js';
 import { rateLimit, sameOriginOnly, securityHeaders } from './security.js';
-import { DemoError, type DemoService } from './service.js';
+import { HttpError, toBrowserError } from './errors.js';
+import type { DemoService } from './service.js';
 import { SESSION_TTL_MS, type DemoUser, type Store } from './store.js';
 import { FRAME_EVENT_TYPES, type CardDetailsView, type MeView } from './views.js';
 
@@ -35,15 +35,6 @@ const frameEvent = z.object({
   order_id: z.string().max(200).optional(),
   code: z.string().max(100).optional(),
 });
-
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
 
 function sessionId(req: Request): string | undefined {
   const header = req.headers.cookie;
@@ -351,27 +342,9 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch, 
   app.use('/demo', (_req, _res, next) => next(new HttpError(404, 'Not found.')));
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    if (error instanceof HttpError) return res.status(error.status).json({ error: { message: error.message } });
-    if (error instanceof DemoError) {
-      const status = error.code === 'not_found' ? 404 : error.code === 'bad_request' ? 400 : 409;
-      return res.status(status).json({ error: { message: error.message } });
-    }
-    if (error instanceof PerfloUnavailableError) {
-      return res.status(503).json({ error: { message: 'Payments are not reachable right now. Try again in a moment.' } });
-    }
-    if (error instanceof PerfloApiError) {
-      // Perflo's messages are written for people (SPEC 4); anything else gets a generic line.
-      const message =
-        error.httpStatus === 401
-          ? 'Payments need to be set up again. Send your request once more.'
-          : error.code === 'unknown'
-            ? 'Payments could not do that right now. Try again.'
-            : error.message;
-      return res.status(error.httpStatus >= 500 ? 502 : 409).json({ error: { message } });
-    }
-    if (error instanceof SyntaxError) return res.status(400).json({ error: { message: 'The request could not be read.' } });
-    console.error('[demo] unexpected error:', error instanceof Error ? `${error.name}: ${error.message}` : 'unknown');
-    res.status(500).json({ error: { message: 'Something went wrong. Try again.' } });
+    const failure = toBrowserError(error);
+    if (failure.operatorNote) console.error(`[demo] ${failure.status}: ${failure.operatorNote}`);
+    res.status(failure.status).json({ error: { message: failure.message } });
   });
 
   return app;

@@ -7,7 +7,7 @@ import type { DemoConfig } from './config.js';
 import type { EventLog } from './eventLog.js';
 import { centsToApiAmount } from './money.js';
 import { nextStep, TERMINAL_STATUSES, withoutRevealLink } from './orderState.js';
-import { PerfloApiError, type AccountResponse, type OrderResponse, type PerfloApi } from './perfloApi.js';
+import { isUserTokenRefused, PerfloApiError, PerfloUnavailableError, type AccountResponse, type OrderResponse, type PerfloApi } from './perfloApi.js';
 import { revealCard, RevealError, simulateCheckout, type RevealedCard } from './checkout.js';
 import type { DemoOrder, DemoUser, Store } from './store.js';
 
@@ -64,10 +64,10 @@ export class DemoService {
         return this.storeToken(user, again.user_id, again.user_access_token);
       }
       if (again.status === 'login_required') {
-        throw new PerfloApiError(409, 'login_required', 'This person needs to set up payments again.');
+        throw new DemoError('conflict', 'Payments need to be set up again. Send your request once more.');
       }
     }
-    throw new PerfloApiError(502, 'reissue_without_token', 'Payments did not return access for this person');
+    throw new PerfloUnavailableError('Payments did not return access for this person');
   }
 
   /**
@@ -162,7 +162,7 @@ export class DemoService {
         try {
           response = await this.api.createOrder(current.id, current.perflo.token, order.idempotencyKey, this.orderBody(order, current.perflo.userId));
         } catch (error) {
-          if (!(error instanceof PerfloApiError) || error.httpStatus !== 401) throw error;
+          if (!isUserTokenRefused(error)) throw error;
           // Our token is not accepted any more: drop it and link again.
           this.log.add(current.id, 'demo', 'Access token refused: setting up access again');
           current = this.store.updateUser(current.id, (u) => (u.perflo = null));
@@ -342,7 +342,7 @@ export class DemoService {
     try {
       return await this.api.getAccount(user.id, user.perflo.userId, user.perflo.token);
     } catch (error) {
-      if (error instanceof PerfloApiError && error.httpStatus === 401) {
+      if (isUserTokenRefused(error)) {
         this.store.updateUser(user.id, (u) => (u.perflo = null));
         return null;
       }
