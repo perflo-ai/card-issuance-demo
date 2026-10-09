@@ -3,7 +3,7 @@ import { HttpError, toBrowserError } from '../server/errors.js';
 import { EventLog } from '../server/eventLog.js';
 import { PARTNER_ERROR_CODES, PerfloApi, PerfloApiError, PerfloUnavailableError } from '../server/perfloApi.js';
 import { DemoError } from '../server/service.js';
-import { CREDS } from './helpers.js';
+import { CREDS, urlOf } from './helpers.js';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -59,7 +59,7 @@ describe('PerfloApi retries only reads, and only when told to try again', () => 
   function scripted(answers: Array<{ status: number; body?: unknown; headers?: Record<string, string> } | 'down'>) {
     const calls: string[] = [];
     const fake: typeof fetch = async (input, init) => {
-      calls.push(`${init?.method ?? 'GET'} ${new URL(String(input)).pathname}`);
+      calls.push(`${init?.method ?? 'GET'} ${new URL(urlOf(input)).pathname}`);
       const next = answers.shift();
       if (next === undefined) throw new Error('unscripted');
       if (next === 'down') throw new TypeError('fetch failed');

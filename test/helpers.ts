@@ -32,12 +32,24 @@ export async function startMock(slowIssueMs = 50): Promise<{ base: string; close
   return { base, close: () => new Promise<void>((done) => server.close(() => done())) };
 }
 
+/** The address a fake fetch was called with, whatever form it was given in. */
+export function urlOf(input: string | URL | Request): string {
+  return typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+}
+
+/**
+ * JSON answers in tests are read field by field right after asserting their shape, so they are
+ * typed loosely on purpose. Production code validates every answer with zod at the boundary.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type LooseJson = any;
+
 export async function signedFetch(
   base: string,
   method: 'GET' | 'POST',
   path: string,
   options: { body?: unknown; token?: string; idem?: string; secret?: string; rawBody?: string } = {},
-): Promise<{ status: number; json: any }> {
+): Promise<{ status: number; json: LooseJson }> {
   const raw = options.rawBody ?? (options.body === undefined ? '' : JSON.stringify(options.body));
   const bytes = Buffer.from(raw, 'utf8');
   const headers: Record<string, string> = {
@@ -68,7 +80,7 @@ export async function frameCall(base: string, frameUrl: string, action: string, 
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  return { status: response.status, json: (await response.json().catch(() => null)) as any };
+  return { status: response.status, json: (await response.json().catch(() => null)) as LooseJson };
 }
 
 /**

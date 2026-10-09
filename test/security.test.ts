@@ -199,7 +199,7 @@ describe('response headers', () => {
     expect(dev.headers['strict-transport-security']).toBeUndefined();
 
     const built = await request(app(undefined, true).app).get('/demo/config').set('Host', HOST);
-    const csp = built.headers['content-security-policy'] as string;
+    const csp = built.headers['content-security-policy'];
     expect(csp).toContain("script-src 'self'");
     expect(csp).toContain(`frame-src ${new URL(mock.base).origin}`);
     expect(csp).toContain("frame-ancestors 'none'");

@@ -110,12 +110,13 @@ export class Store {
       }
     }
     for (const user of Object.values(this.data.users)) {
-      if (user.perflo && this.data.users[user.id] && this.foldSamePerson(this.newestLinked(user.perflo.userId).id)) changed = true;
+      const newest = user.perflo && this.data.users[user.id] ? this.newestLinked(user.perflo.userId) : undefined;
+      if (newest && this.foldSamePerson(newest.id)) changed = true;
     }
     if (changed) this.save();
   }
 
-  private newestLinked(perfloUserId: string): DemoUser {
+  private newestLinked(perfloUserId: string): DemoUser | undefined {
     return Object.values(this.data.users)
       .filter((u) => u.perflo?.userId === perfloUserId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -189,9 +190,9 @@ export class Store {
   }
 
   userForSession(sessionId: string | undefined): DemoUser | null {
-    if (!sessionId || !Object.hasOwn(this.data.sessions, sessionId)) return null;
+    if (!sessionId) return null;
     const record = this.data.sessions[sessionId];
-    if (record.expiresAt <= Date.now()) {
+    if (!record || record.expiresAt <= Date.now()) {
       delete this.data.sessions[sessionId];
       this.save();
       return null;
@@ -206,8 +207,8 @@ export class Store {
    * linked account once the short grace period ends.
    */
   rotateSession(sessionId: string): string | null {
-    if (!Object.hasOwn(this.data.sessions, sessionId)) return null;
     const old = this.data.sessions[sessionId];
+    if (!old) return null;
     const fresh = this.newSession(old.userId);
     old.expiresAt = Math.min(old.expiresAt, Date.now() + ROTATION_GRACE_MS);
     this.save();

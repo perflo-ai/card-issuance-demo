@@ -64,9 +64,12 @@ export function securityHeaders({ perfloOrigin, production, hosted }: HeaderOpti
  */
 export function sameOriginOnly({ publicOrigin, trustProxy }: { publicOrigin: string | null; trustProxy: boolean }): RequestHandler {
   return (req, res, next) => {
-    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+      next();
+      return;
+    }
     const origin = req.get('origin');
-    let allowed = false;
+    let allowed: boolean;
     if (publicOrigin !== null) {
       allowed = origin === publicOrigin;
     } else {
@@ -103,7 +106,10 @@ export function rateLimit({ windowMs, max, counts = () => true, now = Date.now }
   const windows = new Map<string, { start: number; hits: number }>();
   let lastSweep = now();
   return (req: Request, res: Response, next: NextFunction) => {
-    if (!counts(req)) return next();
+    if (!counts(req)) {
+      next();
+      return;
+    }
     const at = now();
     if (at - lastSweep > windowMs) {
       for (const [key, window] of windows) if (at - window.start >= windowMs) windows.delete(key);

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDemoApp } from '../server/app.js';
 import { quote } from '../server/mock/mockPerflo.js';
 import { centsToApiAmount } from '../server/money.js';
-import type { OrderView } from '../server/views.js';
+import type { MeView, OrderView } from '../server/views.js';
 import { finishSetup, makeDemo, payInFrame, startMock, wait } from './helpers.js';
 
 let mock: { base: string; close: () => Promise<void> };
@@ -39,19 +39,19 @@ function browser(demo: ReturnType<typeof makeDemo>) {
 async function signUp(b: ReturnType<typeof browser>) {
   const res = await b.post('/demo/session');
   expect(res.status).toBe(200);
-  return res.body.user;
+  return res.body.user as MeView;
 }
 
 async function ask(b: ReturnType<typeof browser>, text: string): Promise<OrderView> {
   const res = await b.post('/demo/chat', { text });
   expect(res.status).toBe(200);
-  return res.body.order;
+  return res.body.order as OrderView;
 }
 
 async function advance(b: ReturnType<typeof browser>, id: string): Promise<OrderView> {
   const res = await b.post(`/demo/orders/${id}/advance`);
   expect(res.status, JSON.stringify(res.body)).toBe(200);
-  return res.body.order;
+  return res.body.order as OrderView;
 }
 
 /** Setup through the frame, then the frame event the browser forwards. */
@@ -192,7 +192,7 @@ describe('anonymous sessions and connecting first', () => {
     const second = await signUp(stranger);
     expect(second.linked).toBe(false);
     const store = JSON.parse(readFileSync(demo.dataFile, 'utf8'));
-    const users = Object.values(store.users) as Array<{ id: string; perflo: unknown }>;
+    const users: Array<{ id: string; perflo: unknown }> = Object.values(store.users);
     expect(users).toHaveLength(2);
     expect(users[0].id).not.toBe(users[1].id);
     expect(users.filter((u) => u.perflo !== null)).toHaveLength(1);
@@ -317,7 +317,7 @@ describe('other order states through the demo', () => {
       expYear: expect.stringMatching(/^[0-9]{4}$/),
       last4: ready.checkout?.last4,
     });
-    expect(first.body.card.number.endsWith(first.body.card.last4)).toBe(true);
+    expect((first.body.card.number as string).endsWith(first.body.card.last4 as string)).toBe(true);
     // A second look reads a fresh single-use link and gets the same card.
     const second = await b.post(path);
     expect(second.status).toBe(200);

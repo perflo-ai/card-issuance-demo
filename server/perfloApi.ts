@@ -392,11 +392,11 @@ export class PerfloApi {
   }
 }
 
-// The browser-facing copies in views.ts must stay identical to these contract shapes.
+// The browser-facing copies in views.ts must stay identical to these contract shapes: a difference fails the typecheck.
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
-const contractChecks: [Same<AccountResponse, AccountView>, Same<DeclineReason, DeclineReasonView>, Same<IdentityStatus, IdentityStatusView>] = [
-  true,
-  true,
-  true,
+type Assert<T extends true> = T;
+export type ContractChecks = [
+  Assert<Same<AccountResponse, AccountView>>,
+  Assert<Same<DeclineReason, DeclineReasonView>>,
+  Assert<Same<IdentityStatus, IdentityStatusView>>,
 ];
-void contractChecks;

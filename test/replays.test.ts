@@ -8,7 +8,7 @@ import { toView } from '../server/orderState.js';
 import { PerfloApi } from '../server/perfloApi.js';
 import { DemoService } from '../server/service.js';
 import { Store } from '../server/store.js';
-import { CREDS } from './helpers.js';
+import { CREDS, urlOf } from './helpers.js';
 
 const BASE = 'https://perflo.test';
 
@@ -16,11 +16,11 @@ const BASE = 'https://perflo.test';
 function scripted(routes: Record<string, Array<{ status: number; body: unknown }>>) {
   const calls: Array<{ method: string; path: string; headers: Record<string, string> }> = [];
   const fake: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
+    const url = new URL(urlOf(input));
     const method = init?.method ?? 'GET';
     const key = url.origin === BASE ? `${method} ${url.pathname}` : `${method} ${url.origin}${url.pathname}`;
     calls.push({ method, path: url.pathname, headers: { ...(init?.headers as Record<string, string>) } });
-    const next = routes[key]?.shift();
+    const next = Object.hasOwn(routes, key) ? routes[key].shift() : undefined;
     if (!next) throw new Error(`unscripted call: ${key}`);
     return new Response(JSON.stringify(next.body), { status: next.status, headers: { 'Content-Type': 'application/json' } });
   };

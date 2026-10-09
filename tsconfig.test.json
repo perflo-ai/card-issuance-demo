@@ -1,5 +1,7 @@
 {
   "extends": "./tsconfig.server.json",
-  "compilerOptions": { "noEmit": true, "rootDir": ".", "module": "ESNext", "moduleResolution": "Bundler" },
+  // Tests index into answers they have just asserted on; the code under test is checked with
+  // noUncheckedIndexedAccess by tsconfig.server.json and tsconfig.web.json.
+  "compilerOptions": { "noEmit": true, "rootDir": ".", "module": "ESNext", "moduleResolution": "Bundler", "noUncheckedIndexedAccess": false },
   "include": ["server/**/*.ts", "test/**/*.ts", "web/src/frameEvents.ts", "web/src/api.ts", "web/src/polling.ts", "web/src/progress.ts"]
 }

@@ -114,7 +114,10 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
   app.use('/demo', express.json({ limit: '16kb' }));
   app.use('/demo', (req, res, next) => {
     // req.is() is null for a request with no body and false for a body of another type: both are refused.
-    if (req.method === 'POST' && !req.is('application/json')) return next(new HttpError(415, 'Send JSON.'));
+    if (req.method === 'POST' && !req.is('application/json')) {
+      next(new HttpError(415, 'Send JSON.'));
+      return;
+    }
     // Balances, orders and card details are this person's alone: never kept by a browser or proxy cache.
     res.set('Cache-Control', 'no-store');
     next();

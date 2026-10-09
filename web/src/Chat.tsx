@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type SubmitEvent, type ReactNode } from 'react';
 import { api, type FrameEventPayload } from './api';
 import { pageVisibility } from './browser';
 import { CardDetails } from './CardDetails';
@@ -176,7 +176,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
     await current.done;
   };
 
-  const send = async (event: FormEvent) => {
+  const send = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     const value = text.trim();
     if (!value || sending) return;
@@ -186,9 +186,10 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
     try {
       const result = await api.chat(value);
       setMessages((m) => [...m, { id: newId(), kind: 'assistant', text: result.reply }]);
-      if (result.order) {
-        onOrder(result.order);
-        setMessages((m) => [...m, { id: newId(), kind: 'order', orderId: result.order!.id }]);
+      const order = result.order;
+      if (order) {
+        onOrder(order);
+        setMessages((m) => [...m, { id: newId(), kind: 'order', orderId: order.id }]);
       }
     } catch (error) {
       setMessages((m) => [
@@ -234,12 +235,19 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
             Hi. Tell me what to buy and I will handle the checkout. For example: buy me $50 worth of headphones on amazon.
           </div>
         )}
-        {messages.map((m) =>
-          m.kind === 'order' ? (
-            orders[m.orderId] && orders[m.orderId].phase !== 'discarded' ? (
+        {messages.map((m) => {
+          if (m.kind !== 'order') {
+            return (
+              <div key={m.id} className={`bubble ${m.kind}`}>
+                {m.text}
+              </div>
+            );
+          }
+          const order = orders[m.orderId];
+          return order && order.phase !== 'discarded' ? (
               <OrderCard
                 key={m.id}
-                order={orders[m.orderId]}
+                order={order}
                 seen={seen[m.orderId] ?? []}
                 notice={notices[m.orderId] ?? null}
                 action={actions[m.orderId] ?? null}
@@ -254,16 +262,11 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
                 onChangeLimits={onChangeLimits}
                 onAccountChanged={onAccountChanged}
               />
-            ) : null
-          ) : (
-            <div key={m.id} className={`bubble ${m.kind}`}>
-              {m.text}
-            </div>
-          ),
-        )}
+            ) : null;
+        })}
         <div ref={end} />
       </div>
-      <form className="composer" onSubmit={send}>
+      <form className="composer" onSubmit={(event) => void send(event)}>
         <label htmlFor="msg" className="visually-hidden">
           Message Tiny
         </label>
@@ -378,7 +381,7 @@ export function OrderCard(props: CardProps) {
           <SetupFlow
             perfloOrigin={perfloOrigin}
             disabled={busy}
-            open={async () => order.frameUrl ?? null}
+            open={() => Promise.resolve(order.frameUrl ?? null)}
             onLinked={async () => {
               props.onAccountChanged();
               if (order.phase === 'login_required') await onWatch('login_required', true);

@@ -31,7 +31,7 @@ export class EventLog {
   private sameAsPrevious(entry: LogEntry): boolean {
     for (let i = this.entries.length - 1; i >= 0; i--) {
       const previous = this.entries[i];
-      if (previous.demoUserId !== entry.demoUserId) continue;
+      if (previous?.demoUserId !== entry.demoUserId) continue;
       return (
         previous.kind === entry.kind &&
         previous.summary === entry.summary &&

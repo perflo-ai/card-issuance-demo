@@ -13,7 +13,7 @@ export function readFrameEvent(data: unknown): FrameEventPayload | null {
   if (typeof record.frame_session_id !== 'string') return null;
   const event: FrameEventPayload = { type: record.type, frame_session_id: record.frame_session_id };
   for (const key of OPTIONAL_IDS) {
-    if (typeof record[key] === 'string') event[key] = record[key] as string;
+    if (typeof record[key] === 'string') event[key] = record[key];
   }
   return event;
 }

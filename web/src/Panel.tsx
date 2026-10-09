@@ -293,8 +293,9 @@ function DeveloperLog() {
         try {
           const { events } = await api.events(last.current);
           setError('');
-          if (events.length === 0) return;
-          last.current = events[events.length - 1].id;
+          const newest = events.at(-1);
+          if (!newest) return;
+          last.current = newest.id;
           setEntries((all) => [...all, ...events].slice(-200));
         } catch {
           setError('The log could not be read. It catches up after your next action.');

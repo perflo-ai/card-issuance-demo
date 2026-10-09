@@ -163,7 +163,7 @@ export async function simulateCheckout(
   };
   if (submitTo === null) return { ...summary, outcome: 'filled_not_submitted' };
 
-  let charged = false;
+  let charged: boolean;
   try {
     const response = await fetchImpl(submitTo, {
       method: 'POST',

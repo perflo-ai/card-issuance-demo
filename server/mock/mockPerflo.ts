@@ -416,17 +416,20 @@ export function createMockPerflo(options: MockOptions) {
     const result = verifySignature(req.headers, req.method, req.originalUrl, rawBody, (partnerId) =>
       partnerId === options.partnerId ? { [options.keyVersion]: options.secret } : null,
     );
-    if (!result.ok) return next(new HttpError(401, 'unauthorized', 'We could not confirm who sent this request.'));
+    if (!result.ok) {
+      next(new HttpError(401, 'unauthorized', 'We could not confirm who sent this request.'));
+      return;
+    }
     next();
   };
 
   const bearerUser = (req: Request): { user: MUser; token: string } | { revoked: MUser } => {
     const header = req.get('authorization') ?? '';
-    const match = /^Bearer ([A-Za-z0-9_-]{8,200})$/.exec(header);
-    if (!match) throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
-    const live = tokens.get(match[1]);
-    if (live) return { user: users.get(live) as MUser, token: match[1] };
-    const revoked = revokedTokens.get(match[1]);
+    const token = /^Bearer ([A-Za-z0-9_-]{8,200})$/.exec(header)?.[1];
+    if (token === undefined) throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
+    const live = tokens.get(token);
+    if (live) return { user: users.get(live) as MUser, token };
+    const revoked = revokedTokens.get(token);
     if (revoked) return { revoked: users.get(revoked) as MUser };
     throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
   };
@@ -472,9 +475,11 @@ export function createMockPerflo(options: MockOptions) {
     if (user && user.grant && user.token) {
       if (reissue) {
         const token = mintToken(user);
-        return send(200, { status: 'approved', user_id: user.userId, user_access_token: token });
+        send(200, { status: 'approved', user_id: user.userId, user_access_token: token });
+        return;
       }
-      return send(200, { status: 'approved', user_id: user.userId });
+      send(200, { status: 'approved', user_id: user.userId });
+      return;
     }
     if (!user) {
       user = {
@@ -876,12 +881,12 @@ export function createMockPerflo(options: MockOptions) {
     const signature = verifySignature(req.headers, 'GET', req.originalUrl, Buffer.alloc(0), (partnerId) =>
       partnerId === options.partnerId ? { [options.keyVersion]: options.secret } : null,
     );
-    const bearer = /^Bearer ([A-Za-z0-9_-]{8,200})$/.exec(req.get('authorization') ?? '');
-    if (!signature.ok || !bearer || tokens.get(bearer[1]) !== order.userId) return refuse();
+    const bearer = /^Bearer ([A-Za-z0-9_-]{8,200})$/.exec(req.get('authorization') ?? '')?.[1];
+    if (!signature.ok || bearer === undefined || tokens.get(bearer) !== order.userId) return refuse();
     refresh(order);
     if (order.status !== 'ready') return refuse();
     entry.consumed = true;
-    const card = order.card as MCard;
+    const card = order.card;
     const user = users.get(order.userId) as MUser;
     res.set('Cache-Control', 'no-store').json({
       success: true,
@@ -936,7 +941,7 @@ export function createMockPerflo(options: MockOptions) {
   });
 
   app.post('/mock/kyc', (req, res) => {
-    const ref = typeof req.body?.ref === 'string' ? req.body.ref : '';
+    const ref = z.object({ ref: z.string().max(100) }).safeParse(req.body).data?.ref ?? '';
     const user = [...users.values()].find((u) => u.kycRef === ref);
     res.set('Content-Security-Policy', "default-src 'self'; form-action 'self'").type('html');
     if (!user) return res.status(404).send(kycPage('missing', ''));

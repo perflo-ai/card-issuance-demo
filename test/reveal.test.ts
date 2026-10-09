@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { revealCard, RevealError } from '../server/checkout.js';
 import { canonicalRequestString, signCanonicalString, verifySignature } from '../server/signing.js';
-import { CREDS } from './helpers.js';
+import { CREDS, urlOf } from './helpers.js';
 
 const LINK = 'https://cards.perflo.test/partner-cards/card_1/sensitive?t=single-use-value';
 const TOKEN = 'ptk_test_person_token_value';
@@ -10,7 +10,7 @@ const CARD = { success: true, data: { card_number: '4111111111111111', cvv: '123
 function scripted(answers: Array<{ status: number; body?: unknown; headers?: Record<string, string> }>) {
   const calls: Array<{ url: string; method: string; headers: Record<string, string> }> = [];
   const fake: typeof fetch = async (input, init) => {
-    calls.push({ url: String(input), method: init?.method ?? 'GET', headers: { ...(init?.headers as Record<string, string>) } });
+    calls.push({ url: urlOf(input), method: init?.method ?? 'GET', headers: { ...(init?.headers as Record<string, string>) } });
     const next = answers.shift();
     if (!next) throw new Error('unscripted');
     return new Response(JSON.stringify(next.body ?? {}), { status: next.status, headers: { 'Content-Type': 'application/json', ...next.headers } });

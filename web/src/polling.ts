@@ -106,6 +106,8 @@ export function singleFlight(task: () => Promise<void>): () => Promise<void> {
         do {
           again = false;
           await task();
+          // `again` is set by calls made while the task was running, which the type checker cannot see.
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
         } while (again);
       } finally {
         running = null;
