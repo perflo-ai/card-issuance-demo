@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type SubmitEvent, type ReactNode } from 'react';
 import { api, type FrameEventPayload } from './api';
-import { pageVisibility, useFocusWhenClosed, useOnMount } from './browser';
+import { pageVisibility, useFocusWhenClosed } from './browser';
 import { CardDetails } from './CardDetails';
 import { declineFallback, declineHint, money, stalledText, stepLabel, waitingText, when, type Waiting } from './copy';
 import { PerfloFrame } from './PerfloFrame';
@@ -25,8 +25,8 @@ interface ChatProps {
   onOrder: (order: OrderView) => void;
   onAccountChanged: () => void;
   onChangeLimits: () => void;
-  /** Just connected: put the cursor in the message box, the next thing to use. */
-  focusComposer?: boolean;
+  /** Payments were just set up (or turned back on) from an order in the chat. */
+  onLinked: () => void;
 }
 
 let nextId = 0;
@@ -53,7 +53,7 @@ interface Watch {
   done: Promise<void>;
 }
 
-export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountChanged, onChangeLimits, focusComposer = false }: ChatProps) {
+export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountChanged, onChangeLimits, onLinked }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [notices, setNotices] = useState<Record<string, Notice>>({});
   const [actions, setActions] = useState<Record<string, Action | null>>({});
@@ -66,10 +66,6 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
   const inflight = useRef(new Map<string, Promise<OrderView | null>>());
   const watches = useRef(new Map<string, Watch>());
   const seeded = useRef(false);
-  const composer = useRef<HTMLInputElement>(null);
-  useOnMount(() => {
-    if (focusComposer) composer.current?.focus();
-  });
 
   // The orders already made appear in the chat once, when the list first arrives.
   useEffect(() => {
@@ -267,6 +263,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
               onCancelCard={(perfloOrderId) => void cancelCard(m.orderId, perfloOrderId)}
               onChangeLimits={onChangeLimits}
               onAccountChanged={onAccountChanged}
+              onLinked={onLinked}
             />
           ) : null;
         })}
@@ -277,7 +274,6 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
           Message Tiny
         </label>
         <input
-          ref={composer}
           id="msg"
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -320,6 +316,7 @@ interface CardProps {
   onCancelCard: (perfloOrderId: string) => void;
   onChangeLimits: () => void;
   onAccountChanged: () => void;
+  onLinked: () => void;
 }
 
 export function OrderCard(props: CardProps) {
@@ -404,6 +401,7 @@ export function OrderCard(props: CardProps) {
             disabled={busy}
             open={() => Promise.resolve(order.frameUrl ?? null)}
             onLinked={async () => {
+              props.onLinked();
               props.onAccountChanged();
               if (order.phase === 'login_required') await onWatch('login_required', true);
               else await onAdvance('place');

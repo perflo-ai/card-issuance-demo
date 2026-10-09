@@ -141,7 +141,7 @@ describe('first order, end to end in mock mode', () => {
   });
 });
 
-describe('anonymous sessions and connecting first', () => {
+describe('anonymous sessions and setting up payments in the chat', () => {
   it('a first visit makes an anonymous account; the same browser keeps it', async () => {
     const demo = makeDemo(mock.base);
     const b = browser(demo);
@@ -152,40 +152,42 @@ describe('anonymous sessions and connecting first', () => {
     expect(Object.keys(Object.values(store.users)[0] as object).sort()).toEqual(['createdAt', 'id', 'pendingLogin', 'perflo']);
   });
 
-  it('connects before any order: POST /users carries no email or name, the frame asks for the email', async () => {
+  it('payments are set up in the chat, on the first order: POST /users carries no email or name', async () => {
     const demo = makeDemo(mock.base);
     const b = browser(demo);
     await signUp(b);
-    const start = await b.post('/demo/link/start');
-    expect(start.body).toMatchObject({ link: 'login_required', frameUrl: expect.stringContaining('/partner/v2/frames/setup?session=') });
-    // Asking again while the link is still open reuses it: one read of the login, no second POST /users.
-    const again = await b.post('/demo/link/start');
-    expect(again.body.frameUrl).toBe(start.body.frameUrl);
-    await setUp(b, start.body.frameUrl);
+    // There is no separate screen to connect from first.
+    expect((await b.post('/demo/link/start')).status).toBe(404);
+    const draft = await ask(b, 'buy me $5 worth of stickers on amazon');
+    const setup = await advance(b, draft.id);
+    expect(setup).toMatchObject({ phase: 'needs_setup', frameUrl: expect.stringContaining('/partner/v2/frames/setup?session=') });
+    // Looking again while the setup link is still open reuses it: no second POST /users.
+    expect((await advance(b, draft.id)).frameUrl).toBe(setup.frameUrl);
+    await setUp(b, setup.frameUrl as string);
     expect((await b.post('/demo/session')).body.user.linked).toBe(true);
-    expect((await b.post('/demo/link/start')).body).toEqual({ link: 'linked' });
 
     const userId = Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users)[0];
     const posts = demo.log.forUser(userId).filter((e) => e.summary.startsWith('POST /partner/v2/users'));
     expect(posts).toHaveLength(1);
     expect((posts[0].detail as { request: unknown }).request).toEqual({ external_user_id: userId });
 
-    // Then the first order goes straight to payments.
-    const draft = await ask(b, 'buy me $5 worth of stickers on amazon');
+    // Then the same order goes on to payments.
     expect((await advance(b, draft.id)).phase).toBe('payment_required');
   });
 
-  it('a setup link that expired is replaced on the next start', async () => {
+  it('a setup link that expired in the chat is replaced when the person starts again', async () => {
     const demo = makeDemo(mock.base);
     const b = browser(demo);
     await signUp(b);
-    const first = (await b.post('/demo/link/start')).body.frameUrl as string;
-    // Half an hour later the login has expired: the start looks first, then asks for a new one.
+    const draft = await ask(b, 'buy me $5 worth of stickers on amazon');
+    const first = (await advance(b, draft.id)).frameUrl as string;
+    // Half an hour later the login has expired: the look says so, and the next step asks for a new link.
     vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 31 * 60_000 });
     try {
-      const next = await b.post('/demo/link/start');
-      expect(next.body.link).toBe('login_required');
-      expect(next.body.frameUrl).not.toBe(first);
+      expect((await b.post('/demo/link/refresh')).body).toEqual({ link: 'expired' });
+      const next = await advance(b, draft.id);
+      expect(next.phase).toBe('needs_setup');
+      expect(next.frameUrl).not.toBe(first);
     } finally {
       vi.useRealTimers();
     }
@@ -241,11 +243,12 @@ describe('other order states through the demo', () => {
       const demo = makeDemo(slow.base);
       const b = browser(demo);
       await signUp(b);
-      const start = await b.post('/demo/link/start');
-      await finishSetup(slow.base, start.body.frameUrl);
+      const first = await ask(b, 'buy me $1.00 worth of gum on amazon');
+      const frameUrl = (await advance(b, first.id)).frameUrl as string;
+      await finishSetup(slow.base, frameUrl);
       await b.post('/demo/frame-events', {
         type: 'perflo:setup_completed',
-        frame_session_id: new URL(start.body.frameUrl).searchParams.get('session'),
+        frame_session_id: new URL(frameUrl).searchParams.get('session'),
       });
       const link = await b.post('/demo/top-ups', { amount: '200.00' });
       await payInFrame(slow.base, link.body.frameUrl, '200.00');
@@ -417,7 +420,7 @@ describe('demo API guards', () => {
     const demo = makeDemo(mock.base);
     const b = browser(demo);
     expect((await b.get('/demo/orders')).status).toBe(401);
-    expect((await b.post('/demo/link/start')).status).toBe(401);
+    expect((await b.post('/demo/link/refresh')).status).toBe(401);
     expect(
       (
         await request(b.raw)

@@ -52,9 +52,10 @@ restart).
 
 Things to try, in order:
 
-1. Open the demo. Tiny asks for nothing about you: the first screen is **Set up payments**. The frame asks
-   for your email and the code (test code **123456**), then for your limits.
-2. `buy me $50 worth of headphones on amazon`, then confirm.
+1. Open the demo. Tiny asks for nothing about you: you land in the chat.
+2. `buy me $50 worth of headphones on amazon`, then confirm. The first order asks you to **Set up payments**,
+   right there in the chat: the frame asks for your email and the code (test code **123456**), then for your
+   limits.
 3. Your balance is empty, so the order asks you to add money. Pay in the frame (test payment, no card).
 4. The one-time card is created and Tiny checks out. You see only the last 4 digits, the expiry and the card
    limit; the card is spent at the mock shop and the order shows as paid.
@@ -153,7 +154,7 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
   bytes sent (a GET signs the empty body). Test vectors were computed independently in Python.
 - **Users**: `POST /users` with only Tiny's own user id as `external_user_id`: no email and no name, because
   Tiny never asks for them. The person types and proves their email in the setup frame. `login_required`
-  opens the setup frame (first on the connect screen, later in the chat if access was removed); on `perflo:setup_completed` the server reads `GET /logins/{id}` and stores the token (it
+  opens the setup frame in the chat, on the order that needs it (the first order, or the next one after access was removed); on `perflo:setup_completed` the server reads `GET /logins/{id}` and stores the token (it
   is handed out once). If Perflo says `approved` but Tiny holds no token, it asks with `reissue: true`.
 - **Orders**: `POST /orders` with an `Idempotency-Key` fixed per chat order. Every retry is
   `GET /orders/{id}` (signature only, no token), never a second POST. Each status is handled:

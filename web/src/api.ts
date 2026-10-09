@@ -70,7 +70,6 @@ export const api = {
   advance: (id: string) =>
     request<{ order: OrderView; notice: Notice; linked: boolean }>('POST', `/demo/orders/${encodeURIComponent(id)}/advance`),
   frameEvent: (event: FrameEventPayload) => request<{ link?: LinkStatus }>('POST', '/demo/frame-events', event),
-  linkStart: () => request<{ link: LinkStatus; frameUrl?: string }>('POST', '/demo/link/start'),
   refreshLink: () => request<{ link: LinkStatus }>('POST', '/demo/link/refresh'),
   account: () => request<{ linked: false } | { linked: true; account: AccountView }>('GET', '/demo/account'),
   limitsLink: () => request<{ frameUrl: string }>('POST', '/demo/limits-link'),
