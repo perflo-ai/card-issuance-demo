@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import request from 'supertest';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDemoApp } from '../server/app.js';
 import { quote } from '../server/mock/mockPerflo.js';
 import { centsToApiAmount } from '../server/money.js';
@@ -31,8 +31,9 @@ function browser(demo: ReturnType<typeof makeDemo>) {
   };
 }
 
-async function signUp(b: ReturnType<typeof browser>, email = 'ada@example.com') {
-  const res = await b.post('/demo/signup', { first_name: 'Ada', last_name: 'Lovelace', email });
+/** A first visit: the browser gets an anonymous Tiny account. No name or email is asked for. */
+async function signUp(b: ReturnType<typeof browser>) {
+  const res = await b.post('/demo/session');
   expect(res.status).toBe(200);
   return res.body.user;
 }
@@ -125,24 +126,72 @@ describe('first order, end to end in mock mode', () => {
   });
 });
 
-describe('sign-up never takes over an account by email', () => {
-  it('a second sign-up with the same email is a different person with no payments link', async () => {
+describe('anonymous sessions and connecting first', () => {
+  it('a first visit makes an anonymous account; the same browser keeps it', async () => {
+    const demo = makeDemo(mock.base);
+    const b = browser(demo);
+    expect(await signUp(b)).toEqual({ linked: false, stopAtCheckout: false });
+    expect(await signUp(b)).toEqual({ linked: false, stopAtCheckout: false });
+    const store = JSON.parse(readFileSync(demo.dataFile, 'utf8'));
+    expect(Object.keys(store.users)).toHaveLength(1);
+    expect(Object.keys(Object.values(store.users)[0] as object).sort()).toEqual(['createdAt', 'id', 'pendingLogin', 'perflo']);
+  });
+
+  it('connects before any order: POST /users carries no email or name, the frame asks for the email', async () => {
+    const demo = makeDemo(mock.base);
+    const b = browser(demo);
+    await signUp(b);
+    const start = await b.post('/demo/link/start');
+    expect(start.body).toMatchObject({ link: 'login_required', frameUrl: expect.stringContaining('/partner/v2/frames/setup?session=') });
+    // Asking again while the link is still open reuses it: one read of the login, no second POST /users.
+    const again = await b.post('/demo/link/start');
+    expect(again.body.frameUrl).toBe(start.body.frameUrl);
+    await setUp(b, start.body.frameUrl);
+    expect((await b.post('/demo/session')).body.user.linked).toBe(true);
+    expect((await b.post('/demo/link/start')).body).toEqual({ link: 'linked' });
+
+    const userId = Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users)[0];
+    const posts = demo.log.forUser(userId).filter((e) => e.summary.startsWith('POST /partner/v2/users'));
+    expect(posts).toHaveLength(1);
+    expect((posts[0].detail as { request: unknown }).request).toEqual({ external_user_id: userId });
+
+    // Then the first order goes straight to payments.
+    const draft = await ask(b, 'buy me $5 worth of stickers on amazon');
+    expect((await advance(b, draft.id)).phase).toBe('payment_required');
+  });
+
+  it('a setup link that expired is replaced on the next start', async () => {
+    const demo = makeDemo(mock.base);
+    const b = browser(demo);
+    await signUp(b);
+    const first = (await b.post('/demo/link/start')).body.frameUrl as string;
+    // Half an hour later the login has expired: the start looks first, then asks for a new one.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 31 * 60_000 });
+    try {
+      const next = await b.post('/demo/link/start');
+      expect(next.body.link).toBe('login_required');
+      expect(next.body.frameUrl).not.toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('every new browser is a different person with no payments link', async () => {
     const demo = makeDemo(mock.base);
     const owner = browser(demo);
-    const first = await signUp(owner, 'ada@example.com');
+    await signUp(owner);
     const draft = await ask(owner, 'buy me $5 worth of stickers on amazon');
     await setUp(owner, (await advance(owner, draft.id)).frameUrl as string);
-    expect((await owner.get('/demo/me')).body.user.linked).toBe(true);
+    expect((await owner.post('/demo/session')).body.user.linked).toBe(true);
 
     const stranger = browser(demo);
-    const second = await signUp(stranger, 'ada@example.com');
+    const second = await signUp(stranger);
     expect(second.linked).toBe(false);
     const store = JSON.parse(readFileSync(demo.dataFile, 'utf8'));
-    const users = Object.values(store.users) as Array<{ id: string; email: string; perflo: unknown }>;
+    const users = Object.values(store.users) as Array<{ id: string; perflo: unknown }>;
     expect(users).toHaveLength(2);
     expect(users[0].id).not.toBe(users[1].id);
     expect(users.filter((u) => u.perflo !== null)).toHaveLength(1);
-    expect(first).toMatchObject({ linked: false });
 
     // The stranger cannot see the owner's orders or balance, and must prove the email to Perflo.
     expect((await stranger.get('/demo/orders')).body.orders).toEqual([]);
@@ -169,6 +218,40 @@ describe('other order states through the demo', () => {
     expect((await advance(b, draft.id)).phase).toBe('issuing');
     await wait(80);
     expect((await advance(b, draft.id)).phase).toBe('completed');
+  });
+
+  it('watching a card get ready logs each status once, however many looks it took', async () => {
+    const slow = await startMock(400);
+    try {
+      const demo = makeDemo(slow.base);
+      const b = browser(demo);
+      await signUp(b);
+      const start = await b.post('/demo/link/start');
+      await finishSetup(slow.base, start.body.frameUrl);
+      await b.post('/demo/frame-events', { type: 'perflo:setup_completed', frame_session_id: new URL(start.body.frameUrl).searchParams.get('session') });
+      const link = await b.post('/demo/top-ups', { amount: '200.00' });
+      await payInFrame(slow.base, link.body.frameUrl, '200.00');
+      const draft = await ask(b, 'book the 150.00 hotel on united.com');
+      expect((await advance(b, draft.id)).phase).toBe('issuing');
+      let looks = 0;
+      let phase = 'issuing';
+      while (phase === 'issuing') {
+        await wait(60);
+        phase = (await advance(b, draft.id)).phase;
+        looks++;
+      }
+      expect(phase).toBe('completed');
+      expect(looks).toBeGreaterThan(2);
+      const userId = Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users)[0];
+      const reads = demo.log.forUser(userId).filter((e) => e.summary.startsWith('GET /partner/v2/orders/'));
+      expect(reads.map((e) => e.summary.replace(/ord_[A-Za-z0-9_-]+/, 'ID'))).toEqual([
+        'GET /partner/v2/orders/ID -> 200 issuing',
+        'GET /partner/v2/orders/ID -> 200 ready',
+        'GET /partner/v2/orders/ID -> 200 completed',
+      ]);
+    } finally {
+      await slow.close();
+    }
   });
 
   it('identity check, then the order continues', async () => {
@@ -251,7 +334,7 @@ describe('other order states through the demo', () => {
 
     // Another person cannot read it.
     const other = browser(demo);
-    await signUp(other, 'grace@example.com');
+    await signUp(other);
     expect((await other.post(path)).status).toBe(404);
 
     // A closed card has nothing to show.
@@ -269,7 +352,7 @@ describe('other order states through the demo', () => {
     const draft = await ask(b, 'buy me $20 worth of books on amazon');
     const blocked = await advance(b, draft.id);
     expect(blocked.phase).toBe('login_required');
-    expect((await b.get('/demo/me')).body.user.linked).toBe(false);
+    expect((await b.post('/demo/session')).body.user.linked).toBe(false);
     await setUp(b, blocked.frameUrl as string);
     expect((await advance(b, draft.id)).phase).toBe('completed');
   });
@@ -312,12 +395,14 @@ describe('live mode never buys', () => {
 });
 
 describe('demo API guards', () => {
-  it('needs a session, refuses non-JSON bodies and bad sign-ups', async () => {
+  it('needs a session and refuses non-JSON bodies; the old sign-up route is gone', async () => {
     const demo = makeDemo(mock.base);
     const b = browser(demo);
-    expect((await b.get('/demo/me')).status).toBe(401);
-    expect((await request(b.raw).post('/demo/signup').set('Content-Type', 'text/plain').send('x')).status).toBe(415);
-    expect((await b.post('/demo/signup', { first_name: 'A', last_name: 'B', email: 'not-an-email' })).status).toBe(400);
+    expect((await b.get('/demo/orders')).status).toBe(401);
+    expect((await b.post('/demo/link/start')).status).toBe(401);
+    expect((await request(b.raw).post('/demo/session').set('Content-Type', 'text/plain').send('x')).status).toBe(415);
+    expect((await b.post('/demo/signup', { first_name: 'A', last_name: 'B', email: 'a@example.com' })).status).toBe(404);
+    expect((await b.get('/demo/me')).status).toBe(404);
     await signUp(b);
     expect((await b.post('/demo/frame-events', { type: 'perflo:something_else', frame_session_id: 'x' })).status).toBe(400);
     expect((await b.post('/demo/orders/nope/advance')).status).toBe(404);

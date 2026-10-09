@@ -198,10 +198,16 @@ export class PerfloApi {
         throw new PerfloUnavailableError('Payments service sent an unreadable answer');
       }
     }
-    this.log.add(demoUserId, 'api', `${method} ${url.pathname} -> ${response.status}`, {
-      request: options.body,
-      response: json,
-    });
+    // A read is often repeated while a status is watched: name the status it answered, and log a
+    // repeat of the same answer only once.
+    const answered = method === 'GET' && typeof (json as { status?: unknown } | null)?.status === 'string' ? ` ${(json as { status: string }).status}` : '';
+    this.log.add(
+      demoUserId,
+      'api',
+      `${method} ${url.pathname} -> ${response.status}${answered}`,
+      { request: options.body, response: json },
+      { collapse: method === 'GET' },
+    );
     return { status: response.status, json };
   }
 
@@ -223,7 +229,7 @@ export class PerfloApi {
 
   async createUser(
     demoUserId: string,
-    body: { external_user_id: string; email?: string; first_name?: string; last_name?: string; reissue?: boolean },
+    body: { external_user_id: string; reissue?: boolean },
     idempotencyKey?: string,
   ): Promise<UsersResponse> {
     const r = await this.request(demoUserId, 'POST', '/partner/v2/users', { body, ...(idempotencyKey ? { idempotencyKey } : {}) });

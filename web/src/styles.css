@@ -47,6 +47,8 @@ header.top { height: 64px; padding: 0 20px; display: flex; align-items: center; 
 .order-merchant { color: var(--ink-2); }
 .order-desc { color: var(--muted); font-size: 13px; width: 100%; }
 .steps { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 14px; display: grid; gap: 4px; }
+.steps li.done { color: var(--muted); }
+.steps li.current { color: var(--ink); font-weight: 600; }
 .card-line { font-size: 14px; }
 .done { color: var(--ok); font-weight: 600; }
 .working::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 3px; background: var(--ok); margin-right: 8px; vertical-align: middle; animation: pulse 1s ease-in-out infinite alternate; }
@@ -107,11 +109,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 .tag.frame { background: #e9f2ed; }
 .tag.api { background: #eef0f6; }
 
-.signup { max-width: 400px; width: 100%; margin: 48px auto; padding: 0 16px; }
-.signup h1 { margin: 0 0 6px; font-size: 26px; }
-.signup form { display: grid; gap: 6px; margin-top: 20px; }
-.signup label { font-size: 13px; font-weight: 600; margin-top: 8px; color: var(--ink-2); }
-.signup input { height: 46px; border: 1px solid #d9d4ce; border-radius: 12px; padding: 0 14px; background: #fff; }
-.signup button { margin-top: 16px; width: 100%; }
+.connect { max-width: 480px; width: 100%; margin: 48px auto; padding: 0 16px; }
+.connect h1 { margin: 0 0 6px; font-size: 26px; }
+.connect .box { margin-top: 20px; display: grid; gap: 10px; }
+.connect .box p, .connect .box h2 { margin: 0; }
 .check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; margin: 8px 0 12px; cursor: pointer; }
 .check input { margin-top: 3px; width: 18px; height: 18px; }

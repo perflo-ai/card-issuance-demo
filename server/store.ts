@@ -22,11 +22,12 @@ export interface PerfloLink {
   token: string;
 }
 
+/**
+ * A Tiny account. It holds no name or email: the person proves their email to
+ * Perflo inside Perflo's own sign-in frame, and Tiny never asks for it.
+ */
 export interface DemoUser {
   id: string;
-  firstName: string;
-  lastName: string;
-  email: string;
   createdAt: string;
   perflo: PerfloLink | null;
   /** The login we are waiting on, from POST /users or an order's login_required. */
@@ -70,11 +71,22 @@ export class Store {
     this.data = existsSync(file)
       ? (JSON.parse(readFileSync(file, 'utf8')) as StoreShape)
       : { sessions: {}, users: {}, orders: {} };
-    let folded = false;
+    let changed = false;
     for (const user of Object.values(this.data.users)) {
-      if (user.perflo && this.data.users[user.id] && this.foldSamePerson(this.newestLinked(user.perflo.userId).id)) folded = true;
+      // Files from earlier versions kept the name and email typed at sign-up. Nothing reads them any
+      // more, so they are dropped rather than kept as personal data with no use.
+      const legacy = user as DemoUser & { firstName?: unknown; lastName?: unknown; email?: unknown };
+      if ('firstName' in legacy || 'lastName' in legacy || 'email' in legacy) {
+        delete legacy.firstName;
+        delete legacy.lastName;
+        delete legacy.email;
+        changed = true;
+      }
     }
-    if (folded) this.save();
+    for (const user of Object.values(this.data.users)) {
+      if (user.perflo && this.data.users[user.id] && this.foldSamePerson(this.newestLinked(user.perflo.userId).id)) changed = true;
+    }
+    if (changed) this.save();
   }
 
   private newestLinked(perfloUserId: string): DemoUser {
@@ -84,11 +96,10 @@ export class Store {
   }
 
   /**
-   * One person, one Tiny account, decided by Perflo and never by a typed email:
-   * Tiny accounts linked to the same Perflo user have each proved that email
-   * with Perflo's code. Each sign-up starts a new account (anyone can type an
-   * email), so without this a person who signed in again lost sight of their
-   * earlier orders. Moves the others' orders and sessions onto `keepId` and
+   * One person, one Tiny account, decided by Perflo: Tiny accounts linked to
+   * the same Perflo user have each proved that person's email with Perflo's
+   * code. Each new browser starts a new anonymous account, so without this a
+   * person who signed in again lost sight of their earlier orders. Moves the others' orders and sessions onto `keepId` and
    * removes them. Returns whether anything moved.
    */
   private foldSamePerson(keepId: string): boolean {
@@ -126,17 +137,15 @@ export class Store {
   }
 
   /**
-   * Every sign-up is a new person with no payments link. An account is never
-   * re-attached by email: typing someone's email must not hand over their
-   * account or their access token. A returning user continues through their
-   * session cookie; a new one proves the email to Perflo with the emailed code.
+   * A new browser gets a new anonymous account with no payments link and no
+   * personal details. A returning browser continues through its session
+   * cookie. The person connects by proving their email to Perflo with the
+   * emailed code; if that Perflo user already has a Tiny account, the two are
+   * folded together (see foldSamePerson).
    */
-  createUser(firstName: string, lastName: string, email: string): { user: DemoUser; sessionId: string } {
+  createUser(): { user: DemoUser; sessionId: string } {
     const user: DemoUser = {
       id: randomUUID(),
-      firstName,
-      lastName,
-      email,
       createdAt: new Date().toISOString(),
       perflo: null,
       pendingLogin: null,

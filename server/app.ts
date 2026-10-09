@@ -14,7 +14,7 @@ import { toView } from './orderState.js';
 import { PerfloApiError, PerfloUnavailableError } from './perfloApi.js';
 import { DemoError, type DemoService } from './service.js';
 import type { DemoUser, Store } from './store.js';
-import { FRAME_EVENT_TYPES, type CardDetailsView } from './views.js';
+import { FRAME_EVENT_TYPES, type CardDetailsView, type MeView } from './views.js';
 
 const SESSION_COOKIE = 'tiny_session';
 
@@ -26,12 +26,6 @@ const frameEvent = z.object({
   top_up_id: z.string().max(200).optional(),
   order_id: z.string().max(200).optional(),
   code: z.string().max(100).optional(),
-});
-
-const signupBody = z.object({
-  first_name: z.string().trim().min(1).max(100),
-  last_name: z.string().trim().min(1).max(100),
-  email: z.string().trim().toLowerCase().email().max(320),
 });
 
 class HttpError extends Error {
@@ -104,10 +98,7 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
     return user;
   };
 
-  const meView = (user: DemoUser) => ({
-    firstName: user.firstName,
-    lastName: user.lastName,
-    email: user.email,
+  const meView = (user: DemoUser): MeView => ({
     linked: user.perflo !== null,
     stopAtCheckout: user.testStopAtCheckout === true,
   });
@@ -116,17 +107,18 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
     res.json({ mode: config.mode, perfloOrigin: config.perfloOrigin });
   });
 
-  app.post('/demo/signup', (req, res) => {
-    const body = signupBody.safeParse(req.body);
-    if (!body.success) throw new HttpError(400, 'Enter your first name, last name and a valid email.');
-    const { user, sessionId: sid } = store.createUser(body.data.first_name, body.data.last_name, body.data.email);
-    log.add(user.id, 'demo', 'Signed in to Tiny');
+  /**
+   * The browser's Tiny account: the one its session cookie names, or a new
+   * anonymous one (no name, no email) on a first visit. Nothing personal is
+   * asked for; the person proves their email to Perflo in the sign-in frame.
+   */
+  app.post('/demo/session', (req, res) => {
+    const existing = store.userForSession(sessionId(req));
+    if (existing) return res.json({ user: meView(existing) });
+    const { user, sessionId: sid } = store.createUser();
+    log.add(user.id, 'demo', 'New visit to Tiny');
     res.cookie(SESSION_COOKIE, sid, { httpOnly: true, secure: true, sameSite: 'lax', path: '/' });
     res.json({ user: meView(user) });
-  });
-
-  app.get('/demo/me', (req, res) => {
-    res.json({ user: meView(currentUser(req)) });
   });
 
   app.post('/demo/logout', (req, res) => {
@@ -179,6 +171,22 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
       return res.json({ link: status });
     }
     res.json({});
+  });
+
+  /** Connect: the setup frame to show, or `linked` when Perflo already gave this person's access back. */
+  app.post('/demo/link/start', async (req, res) => {
+    let current = currentUser(req);
+    if (current.pendingLogin) {
+      // A setup link from an earlier visit may have expired: look first, so the frame never opens on a dead link.
+      const looked = await service.refreshLogin(current);
+      if (looked.status === 'linked') return res.json({ link: 'linked' });
+      current = looked.user;
+    }
+    const { user, status } = await service.ensureLinked(current);
+    if (status === 'login_required' && user.pendingLogin) {
+      return res.json({ link: status, frameUrl: user.pendingLogin.loginUrl });
+    }
+    res.json({ link: status });
   });
 
   app.post('/demo/link/refresh', async (req, res) => {

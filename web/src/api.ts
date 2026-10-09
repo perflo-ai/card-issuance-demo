@@ -19,7 +19,28 @@ export class ApiError extends Error {
   }
 }
 
+const settled = new Set<() => void>();
+
+/**
+ * Calls `listener` each time a request to Tiny's server finishes, whatever the
+ * outcome. Every line of the developer log is written while the server handles
+ * one of these requests, so the log reads new lines only then, instead of on a
+ * timer. Reads of the log itself are not reported. Returns an unsubscribe.
+ */
+export function onRequestSettled(listener: () => void): () => void {
+  settled.add(listener);
+  return () => settled.delete(listener);
+}
+
 async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+  try {
+    return await send<T>(method, path, body);
+  } finally {
+    if (!path.startsWith('/demo/events')) for (const listener of settled) listener();
+  }
+}
+
+async function send<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
   let response: Response;
   try {
     response = await fetch(path, {
@@ -49,9 +70,8 @@ export interface FrameEventPayload {
 
 export const api = {
   config: () => request<DemoConfigView>('GET', '/demo/config'),
-  me: () => request<{ user: MeView }>('GET', '/demo/me'),
-  signup: (first_name: string, last_name: string, email: string) =>
-    request<{ user: MeView }>('POST', '/demo/signup', { first_name, last_name, email }),
+  /** This browser's Tiny account, made on the first visit. */
+  session: () => request<{ user: MeView }>('POST', '/demo/session'),
   logout: () => request<{ ok: true }>('POST', '/demo/logout'),
   chat: (text: string) => request<{ reply: string; order?: OrderView }>('POST', '/demo/chat', { text }),
   orders: () => request<{ orders: OrderView[] }>('GET', '/demo/orders'),
@@ -59,6 +79,7 @@ export const api = {
   advance: (id: string) =>
     request<{ order: OrderView; notice: Notice; linked: boolean }>('POST', `/demo/orders/${encodeURIComponent(id)}/advance`),
   frameEvent: (event: FrameEventPayload) => request<{ link?: LinkStatus }>('POST', '/demo/frame-events', event),
+  linkStart: () => request<{ link: LinkStatus; frameUrl?: string }>('POST', '/demo/link/start'),
   refreshLink: () => request<{ link: LinkStatus }>('POST', '/demo/link/refresh'),
   account: () => request<{ linked: false } | { linked: true; account: AccountView }>('GET', '/demo/account'),
   limitsLink: () => request<{ frameUrl: string }>('POST', '/demo/limits-link'),
@@ -71,5 +92,3 @@ export const api = {
   mockRevoke: () => request<{ ok: true }>('POST', '/demo/mock/revoke-access'),
   mockStopAtCheckout: (on: boolean) => request<{ user: MeView }>('POST', '/demo/mock/stop-at-checkout', { on }),
 };
-
-export const wait = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));

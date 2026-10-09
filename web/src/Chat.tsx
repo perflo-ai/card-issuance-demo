@@ -1,15 +1,28 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { api, wait, type FrameEventPayload } from './api';
+import { api, type FrameEventPayload } from './api';
+import { pageVisibility } from './browser';
 import { CardDetails } from './CardDetails';
-import { declineFallback, declineHint, money, when } from './copy';
+import { declineFallback, declineHint, money, stalledText, stepLabel, waitingText, when, type Waiting } from './copy';
 import { PerfloFrame } from './PerfloFrame';
+import { backoff, poll } from './polling';
+import { orderSteps, stepOf, type StepKey } from './progress';
+import { SetupFlow } from './Setup';
+import { StepList } from './Steps';
 import { formatUsd } from '../../server/money';
-import type { LinkStatus, Notice, OrderPhase, OrderView } from '../../server/views';
+import type { Notice, OrderPhase, OrderView } from '../../server/views';
 
 type Message = { id: string; kind: 'user' | 'assistant'; text: string } | { id: string; kind: 'order'; orderId: string };
 
+/** What the person (or Tiny, for 'watch') is doing with an order right now. One at a time per order. */
+type Action = 'place' | 'pay' | 'check' | 'cancel' | 'discard' | 'watch';
+
 interface ChatProps {
   perfloOrigin: string;
+  orders: Record<string, OrderView>;
+  /** The steps each order has been seen on, from the statuses the server returned. */
+  seen: Record<string, StepKey[]>;
+  loaded: boolean;
+  onOrder: (order: OrderView) => void;
   onAccountChanged: () => void;
   onChangeLimits: () => void;
 }
@@ -17,69 +30,151 @@ interface ChatProps {
 let nextId = 0;
 const newId = () => `m${++nextId}`;
 
-/** Phases that move on by themselves, and which we watch for a while. */
 const SETTLED: ReadonlySet<OrderPhase> = new Set(['declined', 'completed', 'cancelled', 'expired', 'failed', 'discarded']);
 
-export function Chat({ perfloOrigin, onAccountChanged, onChangeLimits }: ChatProps) {
+/**
+ * How Tiny keeps looking at an order that is waiting on the payments side. Each look is a status read
+ * (never a new order) and starts only after the previous one finished. Identity checks are looked at
+ * gently, because while one is still due each look asks payments for a fresh check link.
+ */
+const WATCH: Partial<Record<OrderPhase, { waiting: Waiting; delay: (attempt: number) => number; budgetMs: number }>> = {
+  // A card can take a few minutes to be ready; giving up sooner left a ready card showing as not ready.
+  issuing: { waiting: 'card', delay: backoff(2000, 10_000), budgetMs: 5 * 60_000 },
+  payment_required: { waiting: 'money', delay: backoff(2000, 10_000), budgetMs: 5 * 60_000 },
+  login_required: { waiting: 'placing', delay: backoff(2000, 10_000), budgetMs: 5 * 60_000 },
+  identity_check_required: { waiting: 'identity', delay: backoff(6000, 15_000), budgetMs: 2 * 60_000 },
+};
+
+interface Watch {
+  from: OrderPhase;
+  stop: AbortController;
+  done: Promise<void>;
+}
+
+export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountChanged, onChangeLimits }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [orders, setOrders] = useState<Record<string, OrderView>>({});
   const [notices, setNotices] = useState<Record<string, Notice>>({});
-  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [actions, setActions] = useState<Record<string, Action | null>>({});
+  const [waiting, setWaiting] = useState<Record<string, Waiting | null>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const end = useRef<HTMLDivElement>(null);
+  const inflight = useRef(new Map<string, Promise<OrderView | null>>());
+  const watches = useRef(new Map<string, Watch>());
+  const seeded = useRef(false);
 
+  // The orders already made appear in the chat once, when the list first arrives.
   useEffect(() => {
-    api
-      .orders()
-      .then(({ orders: list }) => {
-        setOrders(Object.fromEntries(list.map((o) => [o.id, o])));
-        setMessages(list.map((o) => ({ id: newId(), kind: 'order' as const, orderId: o.id })));
-      })
-      .catch(() => undefined);
-  }, []);
+    if (!loaded || seeded.current) return;
+    seeded.current = true;
+    setMessages((current) => {
+      const shown = new Set(current.flatMap((m) => (m.kind === 'order' ? [m.orderId] : [])));
+      const earlier = Object.keys(orders)
+        .filter((id) => !shown.has(id))
+        .map((orderId) => ({ id: newId(), kind: 'order' as const, orderId }));
+      return [...earlier, ...current];
+    });
+  }, [loaded, orders]);
 
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages.length]);
 
-  const put = useCallback((order: OrderView) => setOrders((all) => ({ ...all, [order.id]: order })), []);
-
-  const advance = useCallback(
-    async (id: string): Promise<OrderView | null> => {
-      setBusy((b) => ({ ...b, [id]: true }));
-      setErrors((e) => ({ ...e, [id]: '' }));
-      try {
-        const result = await api.advance(id);
-        put(result.order);
-        setNotices((n) => ({ ...n, [id]: result.notice }));
-        onAccountChanged();
-        return result.order;
-      } catch (error) {
-        setErrors((e) => ({ ...e, [id]: error instanceof Error ? error.message : 'Something went wrong.' }));
-        return null;
-      } finally {
-        setBusy((b) => ({ ...b, [id]: false }));
-      }
+  // Leaving the chat (signing out) stops every watch.
+  useEffect(
+    () => () => {
+      for (const w of watches.current.values()) w.stop.abort();
+      watches.current.clear();
     },
-    [put, onAccountChanged],
+    [],
+  );
+
+  const setFor = <T,>(set: (f: (all: Record<string, T>) => Record<string, T>) => void, id: string, value: T) =>
+    set((all) => ({ ...all, [id]: value }));
+
+  /**
+   * One step forward for an order. A second call while one is on its way joins it, so a
+   * double click or a watch look never sends the same request twice.
+   */
+  const advance = useCallback(
+    (id: string, action: Action): Promise<OrderView | null> => {
+      const running = inflight.current.get(id);
+      if (running) return running;
+      const run = (async () => {
+        setFor(setActions, id, action);
+        setFor(setErrors, id, '');
+        try {
+          const result = await api.advance(id);
+          onOrder(result.order);
+          setFor(setNotices, id, result.notice);
+          return result.order;
+        } catch (error) {
+          setFor(setErrors, id, error instanceof Error ? error.message : 'Something went wrong. Try again.');
+          return null;
+        } finally {
+          inflight.current.delete(id);
+          setFor(setActions, id, null);
+        }
+      })();
+      inflight.current.set(id, run);
+      return run;
+    },
+    [onOrder],
   );
 
   /**
-   * Looks again until the order leaves `from`, for a bounded time. Retry is always a status read, never a new order.
-   * Five minutes: a card can take a few minutes to be ready, and giving up sooner left a ready card showing as not ready.
+   * Keeps looking at an order until it leaves `from`, for a bounded time. One watch per order:
+   * asking again for the same wait joins it; `restart` looks again now. A new watch waits for
+   * the old one to stop, so looks never overlap.
    */
   const watch = useCallback(
-    async (id: string, from: OrderPhase, tries = 100, delayMs = 3000) => {
-      for (let i = 0; i < tries; i++) {
-        const order = await advance(id);
-        if (!order || order.phase !== from) return;
-        await wait(delayMs);
-      }
+    (id: string, from: OrderPhase, restart = false): Promise<void> => {
+      const previous = watches.current.get(id);
+      if (previous && previous.from === from && !restart) return previous.done;
+      const plan = WATCH[from];
+      if (!plan) return Promise.resolve();
+      const stop = new AbortController();
+      const done = (async () => {
+        if (previous) {
+          previous.stop.abort();
+          await previous.done;
+        }
+        if (stop.signal.aborted) return;
+        setFor(setWaiting, id, plan.waiting);
+        setFor(setNotes, id, '');
+        try {
+          const result = await poll({
+            look: () => advance(id, 'watch'),
+            settled: (order) => !order || order.phase !== from,
+            delay: plan.delay,
+            budgetMs: plan.budgetMs,
+            signal: stop.signal,
+            visibility: pageVisibility,
+          });
+          if (result === 'gave_up') setFor(setNotes, id, stalledText(plan.waiting));
+        } finally {
+          if (watches.current.get(id)?.stop === stop) {
+            watches.current.delete(id);
+            setFor(setWaiting, id, null);
+          }
+        }
+      })();
+      watches.current.set(id, { from, stop, done });
+      return done;
     },
     [advance],
   );
+
+  const stopWatching = async (id: string) => {
+    const current = watches.current.get(id);
+    if (!current) return;
+    watches.current.delete(id);
+    current.stop.abort();
+    setFor(setWaiting, id, null);
+    await current.done;
+  };
 
   const send = async (event: FormEvent) => {
     event.preventDefault();
@@ -92,16 +187,42 @@ export function Chat({ perfloOrigin, onAccountChanged, onChangeLimits }: ChatPro
       const result = await api.chat(value);
       setMessages((m) => [...m, { id: newId(), kind: 'assistant', text: result.reply }]);
       if (result.order) {
-        put(result.order);
+        onOrder(result.order);
         setMessages((m) => [...m, { id: newId(), kind: 'order', orderId: result.order!.id }]);
       }
     } catch (error) {
       setMessages((m) => [
         ...m,
-        { id: newId(), kind: 'assistant', text: error instanceof Error ? error.message : 'Something went wrong.' },
+        { id: newId(), kind: 'assistant', text: error instanceof Error ? error.message : 'Something went wrong. Try again.' },
       ]);
     } finally {
       setSending(false);
+    }
+  };
+
+  const discard = async (id: string) => {
+    setFor(setActions, id, 'discard');
+    try {
+      onOrder((await api.discard(id)).order);
+    } catch (error) {
+      setFor(setErrors, id, error instanceof Error ? error.message : 'Something went wrong. Try again.');
+    } finally {
+      setFor(setActions, id, null);
+    }
+  };
+
+  const cancelCard = async (id: string, perfloOrderId: string) => {
+    await stopWatching(id);
+    setFor(setActions, id, 'cancel');
+    setFor(setErrors, id, '');
+    try {
+      const result = await api.cancelCard(perfloOrderId);
+      if (result.order) onOrder(result.order);
+      else onAccountChanged();
+    } catch (error) {
+      setFor(setErrors, id, error instanceof Error ? error.message : 'Something went wrong. Try again.');
+    } finally {
+      setFor(setActions, id, null);
     }
   };
 
@@ -119,31 +240,17 @@ export function Chat({ perfloOrigin, onAccountChanged, onChangeLimits }: ChatPro
               <OrderCard
                 key={m.id}
                 order={orders[m.orderId]}
+                seen={seen[m.orderId] ?? []}
                 notice={notices[m.orderId] ?? null}
-                busy={!!busy[m.orderId]}
+                action={actions[m.orderId] ?? null}
+                waiting={waiting[m.orderId] ?? null}
+                note={notes[m.orderId] ?? ''}
                 error={errors[m.orderId] ?? ''}
                 perfloOrigin={perfloOrigin}
-                onAdvance={() => advance(m.orderId)}
-                onWatch={(from, tries, delayMs) => watch(m.orderId, from, tries, delayMs)}
-                onDiscard={async () => {
-                  try {
-                    put((await api.discard(m.orderId)).order);
-                  } catch (error) {
-                    setErrors((e) => ({ ...e, [m.orderId]: error instanceof Error ? error.message : 'Something went wrong.' }));
-                  }
-                }}
-                onCancelCard={async (perfloOrderId) => {
-                  setBusy((b) => ({ ...b, [m.orderId]: true }));
-                  try {
-                    const result = await api.cancelCard(perfloOrderId);
-                    if (result.order) put(result.order);
-                    onAccountChanged();
-                  } catch (error) {
-                    setErrors((e) => ({ ...e, [m.orderId]: error instanceof Error ? error.message : 'Something went wrong.' }));
-                  } finally {
-                    setBusy((b) => ({ ...b, [m.orderId]: false }));
-                  }
-                }}
+                onAdvance={(action) => advance(m.orderId, action)}
+                onWatch={(from, restart) => watch(m.orderId, from, restart)}
+                onDiscard={() => void discard(m.orderId)}
+                onCancelCard={(perfloOrderId) => void cancelCard(m.orderId, perfloOrderId)}
                 onChangeLimits={onChangeLimits}
                 onAccountChanged={onAccountChanged}
               />
@@ -168,7 +275,7 @@ export function Chat({ perfloOrigin, onAccountChanged, onChangeLimits }: ChatPro
           autoComplete="off"
           maxLength={500}
         />
-        <button type="submit" aria-label="Send" disabled={sending || !text.trim()}>
+        <button type="submit" aria-label={sending ? 'Sending' : 'Send'} disabled={sending || !text.trim()}>
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M9 14V4M4.5 8.5 9 4l4.5 4.5" />
           </svg>
@@ -180,74 +287,41 @@ export function Chat({ perfloOrigin, onAccountChanged, onChangeLimits }: ChatPro
 
 interface CardProps {
   order: OrderView;
+  seen: StepKey[];
   notice: Notice;
-  busy: boolean;
+  action: Action | null;
+  waiting: Waiting | null;
+  note: string;
   error: string;
   perfloOrigin: string;
-  onAdvance: () => Promise<OrderView | null>;
-  onWatch: (from: OrderPhase, tries?: number, delayMs?: number) => Promise<void>;
+  onAdvance: (action: Action) => Promise<OrderView | null>;
+  onWatch: (from: OrderPhase, restart?: boolean) => Promise<void>;
   onDiscard: () => void;
   onCancelCard: (perfloOrderId: string) => void;
   onChangeLimits: () => void;
   onAccountChanged: () => void;
 }
 
-function OrderCard(props: CardProps) {
-  const { order, notice, busy, error, perfloOrigin, onAdvance, onWatch } = props;
+export function OrderCard(props: CardProps) {
+  const { order, action, waiting, note, error, perfloOrigin, onAdvance, onWatch } = props;
   const [frameOpen, setFrameOpen] = useState(false);
-  const [linkProblem, setLinkProblem] = useState<'' | 'expired' | 'slow'>('');
-  const [checkingIdentity, setCheckingIdentity] = useState(false);
   const amount = formatUsd(order.amountCents);
-  const watching = useRef(false);
+  const busy = action !== null;
 
-  // Card issuing finishes on its own: keep looking for a while.
+  // A card being made finishes on its own: keep looking while it does. Only when the phase changes:
+  // after a watch gave up, it starts again only when the person asks.
+  const watchLatest = useRef(onWatch);
+  watchLatest.current = onWatch;
   useEffect(() => {
-    if (order.phase !== 'issuing' || watching.current) return;
-    watching.current = true;
-    onWatch('issuing').finally(() => {
-      watching.current = false;
-    });
-  }, [order.phase, onWatch]);
+    if (order.phase === 'issuing') void watchLatest.current('issuing');
+  }, [order.phase]);
 
-  /**
-   * The result can take a minute to reach the order after the person finishes the
-   * check, so one look is not enough: keep looking for two minutes. Gently, because
-   * while the check is still due each look asks for a fresh check link.
-   */
-  const checkIdentityDone = async () => {
-    setCheckingIdentity(true);
-    try {
-      await onWatch('identity_check_required', 20, 6000);
-    } finally {
-      setCheckingIdentity(false);
-    }
-  };
-
-  const afterSetup = async (link: LinkStatus | undefined) => {
-    let status = link;
-    // The sign-in can take a moment to show as approved; look a few more times.
-    for (let i = 0; status === 'pending' && i < 8; i++) {
-      await wait(1500);
-      status = (await api.refreshLink().catch(() => ({ link: 'pending' as const }))).link;
-    }
-    if (status === 'expired') return setLinkProblem('expired');
-    if (status !== 'linked') return setLinkProblem('slow');
-    setFrameOpen(false);
-    setLinkProblem('');
-    props.onAccountChanged();
-    if (order.phase === 'login_required') await onWatch('login_required');
-    else await onAdvance();
-  };
-
-  const onFrameEvent = (event: FrameEventPayload, link: LinkStatus | undefined) => {
+  const onFrameEvent = (event: FrameEventPayload) => {
     if (event.type === 'perflo:closed') setFrameOpen(false);
-    if (event.type === 'perflo:setup_completed') void afterSetup(link);
-    if (event.type === 'perflo:top_up_completed') {
-      if (!event.order_id || event.order_id === order.perfloOrderId) {
-        setFrameOpen(false);
-        props.onAccountChanged();
-        void onWatch('payment_required');
-      }
+    if (event.type === 'perflo:top_up_completed' && (!event.order_id || event.order_id === order.perfloOrderId)) {
+      setFrameOpen(false);
+      props.onAccountChanged();
+      void onWatch('payment_required', true);
     }
   };
 
@@ -259,6 +333,21 @@ function OrderCard(props: CardProps) {
     </div>
   );
 
+  // The order's steps, while it is on its way. Setup has its own list (the frame's steps).
+  const current = stepOf(order.phase);
+  const showSteps =
+    current !== null && current !== 'setup' && !(order.phase === 'ready' && order.checkout && order.checkout.outcome !== 'charge_refused');
+  const steps = showSteps
+    ? orderSteps(current, new Set(props.seen)).map((s) => ({ label: stepLabel(s.key, order.domain), state: s.state }))
+    : null;
+
+  const cancelButton = (className: string) =>
+    order.perfloOrderId && (
+      <button className={className} disabled={busy} onClick={() => props.onCancelCard(order.perfloOrderId as string)}>
+        {action === 'cancel' ? 'Cancelling...' : 'Cancel card'}
+      </button>
+    );
+
   let body: ReactNode = null;
   switch (order.phase) {
     case 'draft':
@@ -266,8 +355,8 @@ function OrderCard(props: CardProps) {
         <>
           <p>Pay {amount} at {order.domain}?</p>
           <div className="row">
-            <button className="primary" disabled={busy} onClick={() => void onAdvance()}>
-              Yes, go ahead
+            <button className="primary" disabled={busy} onClick={() => void onAdvance('place')}>
+              {action === 'place' ? 'Placing your order...' : 'Yes, go ahead'}
             </button>
             <button className="secondary" disabled={busy} onClick={props.onDiscard}>
               Not now
@@ -286,44 +375,31 @@ function OrderCard(props: CardProps) {
           ) : (
             <p className="muted">Payments for Tiny were turned off. Sign in again to allow this order.</p>
           )}
-          <ol className="steps">
-            <li>Verify it is you</li>
-            <li>Allow Tiny to pay for you</li>
-            <li>Add money if needed</li>
-          </ol>
-          {frameOpen && order.frameUrl ? (
-            <PerfloFrame src={order.frameUrl} title="Set up payments" perfloOrigin={perfloOrigin} onEvent={onFrameEvent} />
-          ) : (
-            <button className="primary" disabled={busy} onClick={() => setFrameOpen(true)}>
-              Set up payments
-            </button>
+          <SetupFlow
+            perfloOrigin={perfloOrigin}
+            disabled={busy}
+            open={async () => order.frameUrl ?? null}
+            onLinked={async () => {
+              props.onAccountChanged();
+              if (order.phase === 'login_required') await onWatch('login_required', true);
+              else await onAdvance('place');
+            }}
+            onExpired={() => void onAdvance('check')}
+          />
+          {action === 'place' && (
+            <p className="working" role="status">
+              {waitingText('placing')}
+            </p>
           )}
-          {linkProblem === 'expired' && (
-            <div className="problem">
-              <p>That setup link expired.</p>
-              <button className="secondary" onClick={() => { setLinkProblem(''); setFrameOpen(false); void onAdvance(); }}>
-                Start again
-              </button>
-            </div>
-          )}
-          {linkProblem === 'slow' && (
-            <div className="problem">
-              <p>Setup is taking longer than usual.</p>
-              <button className="secondary" onClick={() => void afterSetup('pending')}>
-                Check again
-              </button>
-            </div>
-          )}
-          {!frameOpen && <p className="muted small">About a minute. Only needed once.</p>}
         </>
       );
       break;
     case 'placing':
       body = (
         <>
-          <p>Placing your order...</p>
-          <button className="secondary" disabled={busy} onClick={() => void onAdvance()}>
-            Check again
+          <p>{waitingText('placing')}</p>
+          <button className="secondary" disabled={busy} onClick={() => void onAdvance('check')}>
+            {action === 'check' ? 'Checking...' : 'Check again'}
           </button>
         </>
       );
@@ -341,8 +417,8 @@ function OrderCard(props: CardProps) {
               <button className="primary" disabled={busy} onClick={() => setFrameOpen(true)}>
                 Add {money(order.amountDue ?? '0.00')}
               </button>
-              <button className="secondary" disabled={busy} onClick={() => void onAdvance()}>
-                I already added money
+              <button className="secondary" disabled={busy} onClick={() => void onAdvance('check')}>
+                {action === 'check' ? 'Checking...' : 'I already added money'}
               </button>
             </div>
           )}
@@ -364,8 +440,12 @@ function OrderCard(props: CardProps) {
                 result is confirmed, usually within a minute.
               </p>
             )}
-            <button className="secondary" disabled={busy || checkingIdentity} onClick={() => void checkIdentityDone()}>
-              {checkingIdentity ? 'Checking...' : 'I have finished, try again'}
+            <button
+              className="secondary"
+              disabled={busy || waiting === 'identity'}
+              onClick={() => void onWatch('identity_check_required', true)}
+            >
+              {waiting === 'identity' ? 'Checking...' : 'I have finished, try again'}
             </button>
           </div>
         </>
@@ -374,8 +454,8 @@ function OrderCard(props: CardProps) {
     case 'issuing':
       body = (
         <>
-          <p className="working">Getting your one-time card ready...</p>
-          <button className="secondary" disabled={busy} onClick={() => void onAdvance()}>
+          {!waiting && <p>{waitingText('card')}</p>}
+          <button className="secondary" disabled={busy} onClick={() => void onWatch('issuing', true)}>
             Check again
           </button>
         </>
@@ -400,11 +480,7 @@ function OrderCard(props: CardProps) {
             </p>
           )}
           {order.checkout.outcome === 'charge_refused' && <p>The shop did not accept the card. You can cancel it to get the money back.</p>}
-          {order.perfloOrderId && (
-            <button className="secondary" disabled={busy} onClick={() => props.onCancelCard(order.perfloOrderId as string)}>
-              Cancel card
-            </button>
-          )}
+          {cancelButton('secondary')}
         </>
       ) : (
         <>
@@ -415,17 +491,13 @@ function OrderCard(props: CardProps) {
           {order.perfloOrderId && order.cardLast4 && (
             <CardDetails perfloOrderId={order.perfloOrderId} last4={order.cardLast4} cardLimit={order.cardLimit} />
           )}
-          {notice === 'card_locked' && <p className="error">The card details could not be opened. Try again in a moment.</p>}
-          {notice === 'reveal_failed' && <p className="error">I could not open the card details. Try again.</p>}
+          {props.notice === 'card_locked' && <p className="error">The card details could not be opened. Try again in a moment.</p>}
+          {props.notice === 'reveal_failed' && <p className="error">I could not open the card details. Try again.</p>}
           <div className="row">
-            <button className="primary" disabled={busy} onClick={() => void onAdvance()}>
-              Use the card
+            <button className="primary" disabled={busy} onClick={() => void onAdvance('pay')}>
+              {action === 'pay' ? `Paying at ${order.domain}...` : 'Use the card'}
             </button>
-            {order.perfloOrderId && (
-              <button className="secondary" disabled={busy} onClick={() => props.onCancelCard(order.perfloOrderId as string)}>
-                Cancel card
-              </button>
-            )}
+            {cancelButton('secondary')}
           </div>
         </>
       );
@@ -480,9 +552,16 @@ function OrderCard(props: CardProps) {
   }
 
   return (
-    <article className={`order-card ${SETTLED.has(order.phase) ? 'settled' : ''}`} aria-busy={busy}>
+    <article className={`order-card ${SETTLED.has(order.phase) ? 'settled' : ''}`} aria-busy={busy || waiting !== null}>
       {header}
+      {steps && <StepList items={steps} active={busy || waiting !== null} />}
       {body}
+      {waiting && (
+        <p className="working" role="status">
+          {waitingText(waiting)}
+        </p>
+      )}
+      {note && !waiting && <p className="muted small">{note}</p>}
       {error && (
         <p className="error" role="alert">
           {error}

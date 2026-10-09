@@ -59,9 +59,17 @@ export async function frameCall(base: string, frameUrl: string, action: string, 
   return { status: response.status, json: (await response.json().catch(() => null)) as any };
 }
 
-/** What a person does in the setup frame: code, limits, then (if asked) money, then finish. */
-export async function finishSetup(base: string, frameUrl: string, limits = { per_order: '500.00', per_month: '1000.00' }) {
-  const login = await frameCall(base, frameUrl, 'login', { privy_access_token: 'mock-otp:123456' });
+/**
+ * What a person does in the setup frame: email and code, limits, then (if asked) money, then finish.
+ * Tiny sends no email, so the person types it in the frame (the mock's token carries it).
+ */
+export async function finishSetup(
+  base: string,
+  frameUrl: string,
+  limits = { per_order: '500.00', per_month: '1000.00' },
+  email = 'ada@example.com',
+) {
+  const login = await frameCall(base, frameUrl, 'login', { privy_access_token: `mock-otp:${email}:123456` });
   if (login.status !== 200) throw new Error(`login ${login.status}`);
   const saved = await frameCall(base, frameUrl, 'limits', limits);
   if (saved.status !== 200) throw new Error(`limits ${saved.status}`);

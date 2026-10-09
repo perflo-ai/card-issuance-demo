@@ -6,9 +6,6 @@ import { redact } from '../server/redact.js';
 
 const user = (over: Partial<DemoUser> = {}): DemoUser => ({
   id: 'u1',
-  firstName: 'Ada',
-  lastName: 'Lovelace',
-  email: 'ada@example.com',
   createdAt: '2026-10-07T00:00:00Z',
   perflo: { userId: 'usr_1', token: 'ptk_test_secret_token' },
   pendingLogin: null,

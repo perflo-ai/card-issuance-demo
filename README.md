@@ -47,13 +47,14 @@ PARTNER_SECRET=<any 43 base64url characters>
 ```
 
 `npm run dev` starts the test payments service on `PERFLO_API_BASE` as well. Its state is in memory, so a
-restart starts it fresh (the demo's own store in `data/` is kept: sign up again after a restart).
+restart starts it fresh (the demo's own store in `data/` is kept: sign out and set up payments again after a
+restart).
 
 Things to try, in order:
 
-1. Sign up with any name and email.
-2. `buy me $50 worth of headphones on amazon`, then confirm. Tiny asks you to set up payments once: the
-   frame asks for the code (test code **123456**), then for your limits.
+1. Open the demo. Tiny asks for nothing about you: the first screen is **Set up payments**. The frame asks
+   for your email and the code (test code **123456**), then for your limits.
+2. `buy me $50 worth of headphones on amazon`, then confirm.
 3. Your balance is empty, so the order asks you to add money. Pay in the frame (test payment, no card).
 4. The one-time card is created and Tiny checks out. You see only the last 4 digits, the expiry and the card
    limit; the card is spent at the mock shop and the order shows as paid.
@@ -65,8 +66,13 @@ Things to try, in order:
    - **Turn off Tiny's access**: your next order asks you to sign in again, then continues by itself.
 9. **Add money** and **Change limits** in the side panel open Perflo's frames directly.
 
+Each order in the chat lists its steps (identity check and adding money only when the order asked for them)
+and says what Tiny is doing or waiting for right now, from the statuses payments returned.
+
 The developer log at the bottom of the panel shows every call Tiny's server made and every frame event,
-with access tokens, card details and link codes removed.
+with access tokens, card details and link codes removed. A status read that gets the same answer as the line
+before it is not repeated, so the log shows one line per change. It reads new lines after each request the page
+makes, not on a timer.
 
 Mock rules (illustrative numbers from the SPEC, not production values): card load = max($15, order x 1.033 +
 $0.25), card fee $1; orders above $100 issue after about 3 seconds; identity check above $200 of total card
@@ -130,15 +136,17 @@ listens on that port over plain HTTP on every interface; without it, it runs on
   `X-Partner-Signature` = base64url HMAC-SHA256 of
   `keyVersion\nMETHOD\npath\ntimestamp\nsha256hex(raw body)`, path without the query string, over the exact
   bytes sent (a GET signs the empty body). Test vectors were computed independently in Python.
-- **Users**: `POST /users` with Tiny's own user id as `external_user_id`. `login_required` opens the setup
-  frame in the chat; on `perflo:setup_completed` the server reads `GET /logins/{id}` and stores the token (it
+- **Users**: `POST /users` with only Tiny's own user id as `external_user_id`: no email and no name, because
+  Tiny never asks for them. The person types and proves their email in the setup frame. `login_required`
+  opens the setup frame (first on the connect screen, later in the chat if access was removed); on `perflo:setup_completed` the server reads `GET /logins/{id}` and stores the token (it
   is handed out once). If Perflo says `approved` but Tiny holds no token, it asks with `reissue: true`.
 - **Orders**: `POST /orders` with an `Idempotency-Key` fixed per chat order. Every retry is
   `GET /orders/{id}` (signature only, no token), never a second POST. Each status is handled:
   `ready` (read the card once through `reveal_url`, later reveals through `/card-reveal`), `payment_required`
   (add money frame, then look again after `perflo:top_up_completed`), `login_required` (setup frame, the
   order resumes on its own), `identity_check_required` (opens in a new tab, then try again), `issuing`
-  (looks again every 2 seconds), `declined`, `completed`, `cancelled`, `expired`, `failed`.
+  (looks again after 2 seconds, then a little longer each time up to 10 seconds, for up to five minutes),
+  `declined`, `completed`, `cancelled`, `expired`, `failed`.
 - **Replays**: Perflo never replays a token or a link. A `POST /users` replay has no token, so a reissue is
   asked with a new Idempotency-Key. A `card-reveal` replay (201 with only a message) is asked again with a new
   key, and a ready replay without `reveal_url` goes through `/card-reveal`. An identity check answer without
@@ -146,11 +154,17 @@ listens on that port over plain HTTP on every interface; without it, it runs on
   minute.
 - **Frames**: embedded with `allow="payment"`. Messages are accepted only from the `PERFLO_API_BASE` origin,
   from that frame's window, and only in the SPEC object shape.
-- **Sign-up**: Tiny never re-attaches an account by email. Each sign-up is a new person; Perflo's emailed
-  code is what proves the email. Once a new account links to a Perflo user that an earlier Tiny account
-  already linked to, it is the same person, so the earlier account's orders move onto the new one.
-- **Orders tab**: before listing, orders that are still moving are read again from Perflo (`GET /orders/:id`,
-  never a new order). The chat keeps checking a card that is getting ready for up to five minutes.
+- **Accounts**: a first visit gets an anonymous Tiny account (a session cookie, no personal details).
+  Perflo's emailed code is what proves who the person is. Once an account links to a Perflo user that an
+  earlier Tiny account already linked to, it is the same person, so the earlier account's orders move onto the
+  new one.
+- **Requests**: the page asks only when something can have changed. Nothing is read on a timer while the page
+  is quiet. While an order waits on payments (a card getting ready, money arriving, an identity check result)
+  one look runs at a time, the wait between looks grows, looking pauses while the tab is hidden, and it stops
+  at the answer or after its time limit (then a "Check again" button). The balance is read after an order
+  changes status, a card is cancelled, money or limits are saved, and when the tab comes back into view.
+- **Orders tab**: the same list as the chat. Opening the tab reads it once; orders that are still moving are
+  read again from Perflo first (`GET /orders/:id`, never a new order).
 
 ## Scripts
 

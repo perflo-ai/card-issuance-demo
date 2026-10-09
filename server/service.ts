@@ -70,13 +70,12 @@ export class DemoService {
     throw new PerfloApiError(502, 'reissue_without_token', 'Payments did not return access for this person');
   }
 
+  /**
+   * Tiny knows nobody's name or email: the person types and proves their email
+   * in Perflo's sign-in frame. So only Tiny's own id is sent.
+   */
   private userBody(user: DemoUser) {
-    return {
-      external_user_id: user.id,
-      email: user.email,
-      first_name: user.firstName,
-      last_name: user.lastName,
-    };
+    return { external_user_id: user.id };
   }
 
   /** Makes sure we hold an access token for this person, or starts the one-time setup. */

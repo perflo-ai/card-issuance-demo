@@ -1,13 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { api } from './api';
+import { useOnMount } from './browser';
 import { CardDetails } from './CardDetails';
 import { money, phaseLabel, when } from './copy';
 import { formatUsd } from '../../server/money';
 import type { OrderView } from '../../server/views';
 
 interface Props {
-  /** Bumped by the chat whenever an order or money may have changed. */
-  refreshKey: number;
+  /** The person's orders, shared with the chat. null until the first list arrives. */
+  orders: OrderView[] | null;
+  error: string;
+  /** Reads the list again, with orders that are still moving brought up to date first. */
+  onRefresh: () => Promise<void>;
+  onOrder: (order: OrderView) => void;
   onAccountChanged: () => void;
 }
 
@@ -18,49 +23,45 @@ function sentOrders(orders: OrderView[]): OrderView[] {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export function Orders({ refreshKey, onAccountChanged }: Props) {
-  const [orders, setOrders] = useState<OrderView[] | null>(null);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [reload, setReload] = useState(0);
+export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: Props) {
+  const [refreshing, setRefreshing] = useState(false);
+  const [cancelling, setCancelling] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState('');
 
-  useEffect(() => {
-    let live = true;
-    const load = () =>
-      api
-        .orders()
-        .then((r) => live && setOrders(sentOrders(r.orders)))
-        .catch((e: unknown) => live && setError(e instanceof Error ? e.message : 'Could not load your orders.'));
-    void load();
-    const timer = setInterval(load, 10_000);
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
-  }, [refreshKey, reload]);
+  // Opening the tab looks again once; after that the list follows what the chat learns.
+  useOnMount(() => {
+    setRefreshing(true);
+    void onRefresh().finally(() => setRefreshing(false));
+  });
 
   const cancelCard = async (perfloOrderId: string) => {
-    setError('');
-    setBusy(true);
+    setCancelError('');
+    setCancelling(perfloOrderId);
     try {
-      await api.cancelCard(perfloOrderId);
-      setReload((n) => n + 1);
-      onAccountChanged();
+      const result = await api.cancelCard(perfloOrderId);
+      if (result.order) onOrder(result.order);
+      else onAccountChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong.');
+      setCancelError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
     } finally {
-      setBusy(false);
+      setCancelling(null);
     }
   };
 
+  const list = orders ? sentOrders(orders) : null;
   return (
     <section className="box">
       <h2>Orders</h2>
-      {orders === null && !error && <p className="muted">Loading...</p>}
-      {orders?.length === 0 && <p className="muted">No orders yet. Ask Tiny to buy something in the chat.</p>}
-      {orders && orders.length > 0 && (
+      {list === null && !error && <p className="muted">Loading...</p>}
+      {list !== null && refreshing && (
+        <p className="muted small" role="status">
+          Checking for updates...
+        </p>
+      )}
+      {list?.length === 0 && <p className="muted">No orders yet. Ask Tiny to buy something in the chat.</p>}
+      {list && list.length > 0 && (
         <ul className="orders">
-          {orders.map((order) => {
+          {list.map((order) => {
             const last4 = order.checkout?.last4 ?? order.cardLast4;
             return (
               <li key={order.id}>
@@ -86,8 +87,12 @@ export function Orders({ refreshKey, onAccountChanged }: Props) {
                       expMonth={order.checkout?.expMonth}
                       expYear={order.checkout?.expYear}
                     />
-                    <button className="link" disabled={busy} onClick={() => void cancelCard(order.perfloOrderId as string)}>
-                      Cancel card
+                    <button
+                      className="link"
+                      disabled={cancelling !== null}
+                      onClick={() => void cancelCard(order.perfloOrderId as string)}
+                    >
+                      {cancelling === order.perfloOrderId ? 'Cancelling...' : 'Cancel card'}
                     </button>
                   </>
                 )}
@@ -96,9 +101,9 @@ export function Orders({ refreshKey, onAccountChanged }: Props) {
           })}
         </ul>
       )}
-      {error && (
+      {(error || cancelError) && (
         <p className="error" role="alert">
-          {error}
+          {cancelError || error}
         </p>
       )}
     </section>

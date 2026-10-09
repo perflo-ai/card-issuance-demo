@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -32,7 +32,7 @@ function setup(fake: typeof fetch, linked = true) {
   const log = new EventLog();
   const store = new Store(config.dataFile);
   const service = new DemoService(store, new PerfloApi(BASE, CREDS, log, fake), log, config, fake);
-  let { user } = store.createUser('Ada', 'Lovelace', 'ada@example.com');
+  let { user } = store.createUser();
   if (linked) user = store.updateUser(user.id, (u) => (u.perflo = { userId: 'usr_1', token: 'ptk_test_token_value' }));
   const order = store.createOrder(user.id, { merchantName: 'United', domain: 'united.com', amountCents: 25000, description: 'flight' });
   return { service, store, user, order };
@@ -181,11 +181,11 @@ describe('one person, one Tiny account, decided by Perflo', () => {
 
   it('linking to a Perflo user who already has a Tiny account brings that account\'s orders along', () => {
     const store = new Store(join(mkdtempSync(join(tmpdir(), 'tiny-link-')), 's.json'));
-    const first = store.createUser('Ada', 'Lovelace', 'ada@example.com');
+    const first = store.createUser();
     store.linkPerflo(first.user.id, { userId: 'usr_1', token: 'ptk_first_token_value' });
     store.createOrder(first.user.id, intent);
 
-    const again = store.createUser('Ada', 'Lovelace', 'ada@example.com');
+    const again = store.createUser();
     expect(store.ordersFor(again.user.id)).toHaveLength(0);
     store.linkPerflo(again.user.id, { userId: 'usr_1', token: 'ptk_second_token_value' });
 
@@ -194,12 +194,12 @@ describe('one person, one Tiny account, decided by Perflo', () => {
     expect(() => store.user(first.user.id)).toThrow();
   });
 
-  it('never joins accounts that share only a typed email', () => {
+  it('never joins accounts linked to different Perflo users', () => {
     const store = new Store(join(mkdtempSync(join(tmpdir(), 'tiny-email-')), 's.json'));
-    const owner = store.createUser('Ada', 'Lovelace', 'ada@example.com');
+    const owner = store.createUser();
     store.linkPerflo(owner.user.id, { userId: 'usr_1', token: 'ptk_owner_token_value' });
     store.createOrder(owner.user.id, intent);
-    const stranger = store.createUser('Ada', 'Lovelace', 'ada@example.com');
+    const stranger = store.createUser();
     store.linkPerflo(stranger.user.id, { userId: 'usr_2', token: 'ptk_stranger_token_value' });
 
     expect(store.ordersFor(stranger.user.id)).toHaveLength(0);
@@ -229,5 +229,10 @@ describe('one person, one Tiny account, decided by Perflo', () => {
     expect(store.ordersFor('unlinked').map((o) => o.id)).toEqual(['o3']);
     expect(store.user('new').perflo?.token).toBe('ptk_new_token_value');
     expect(new Store(file).userForSession('s1')?.id).toBe('new');
+    // Names and emails typed at the old sign-up are dropped from the file: nothing uses them any more.
+    const saved = readFileSync(file, 'utf8');
+    expect(saved).not.toContain('ada@example.com');
+    expect(saved).not.toContain('firstName');
+    expect(Object.keys(store.user('unlinked')).sort()).toEqual(['createdAt', 'id', 'pendingLogin', 'perflo']);
   });
 });
