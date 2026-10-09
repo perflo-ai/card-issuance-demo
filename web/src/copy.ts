@@ -121,7 +121,7 @@ export function waitingText(waiting: Waiting): string {
     case 'money':
       return 'Waiting for your money to arrive...';
     case 'card':
-      return 'Getting your one-time card ready...';
+      return 'Getting your card ready...';
   }
 }
 
@@ -141,6 +141,22 @@ export function stalledText(waiting: Waiting): string {
   }
 }
 
+/**
+ * What a card is called. "One-time card" only while it serves one order: a card payments gave to
+ * several orders (see cards.ts) is just "Card".
+ */
+export function cardName(shared: boolean): string {
+  return shared ? 'Card' : 'One-time card';
+}
+
+/** On the card, for an order placed on the same card as an earlier one. */
+export const SAME_CARD_TEXT = 'Same card as your last order';
+
+/** The cancel button next to an open order. On a shared card it cancels this order only; the card stays open. */
+export function cancelLabel(shared: boolean): string {
+  return shared ? 'Cancel order' : 'Cancel card';
+}
+
 /** Said when a card's cancel has not gone through after about two minutes of trying, next to "Check again". */
 export const CANCEL_SLOW_TEXT = 'Cancelling is taking longer than usual. Your money will come back on its own; check again in a minute.';
 
@@ -154,7 +170,7 @@ export function stepLabel(step: StepKey, domain: string): string {
     case 'money':
       return 'Add money';
     case 'card':
-      return 'Get your one-time card ready';
+      return 'Get your card ready';
     case 'pay':
       return `Pay at ${domain}`;
   }

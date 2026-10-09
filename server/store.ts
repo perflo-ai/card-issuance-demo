@@ -70,6 +70,18 @@ export interface DemoOrder {
   checkout: CheckoutSummary | null;
   amountReturned: string | null;
   createdAt: string;
+  /**
+   * The card Perflo answered when the order was ready, kept after the order moves on: a later
+   * answer (completed, cancelled) no longer names the card, and a card can serve several orders.
+   * Absent until the order was ready, and on orders stored by earlier versions.
+   */
+  card?: OrderCard;
+}
+
+export interface OrderCard {
+  cardId: string;
+  last4: string;
+  expiresAt: string;
 }
 
 /** How long a browser stays signed in to Tiny without coming back. */
@@ -144,6 +156,10 @@ const orderRecord = z
     checkout: checkoutSummary.nullable(),
     amountReturned: z.string().nullable(),
     createdAt: isoTime,
+    card: z
+      .object({ cardId: z.string().min(1), last4: z.string(), expiresAt: z.string() })
+      .strict()
+      .optional(),
   })
   .strict();
 const sessionRecord = z.union([

@@ -52,6 +52,12 @@ export interface OrderView {
   amountDue?: string;
   declineReason?: DeclineReason;
   declineMessage?: string;
+  /**
+   * The card this order was paid with, from the first time Perflo answered it ready. A partner in
+   * reuse mode answers the same card for every order within the card's 12 hours, so orders with the
+   * same cardId share one card (web/src/cards.ts). An id only: it opens nothing without Tiny's keys.
+   */
+  cardId?: string;
   cardLast4?: string;
   cardLimit?: string;
   cardExpiresAt?: string;

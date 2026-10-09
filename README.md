@@ -68,6 +68,13 @@ Things to try, in order:
    - **Stop at the checkout page**: the card stays open, so you can **Cancel card** and see the money return.
    - **Turn off Tiny's access**: your next order asks you to sign in again, then continues by itself.
 9. **Add money** and **Change limits** in the side panel open Perflo's frames directly.
+10. Card reuse: restart with `MOCK_REUSE_CARDS=true` and the mock answers like a partner in reuse mode. Every
+    order within a card's 12 hours comes back on the same card (no second card fee), paying one order leaves
+    the money on the card, cancelling one order leaves the card open for the others, and the card closes at its
+    12 hours, returning what is left. Tiny is not told the mode: it sees two orders answered with the same card,
+    so the first order on a card shows "One-time card" until a second one lands on it. From then on the card is
+    "Card", later orders say "Same card as your last order", the Payments panel shows the card once with what its
+    open orders are for together, and each order's cancel button says **Cancel order**.
 
 Each order in the chat lists its steps (identity check and adding money only when the order asked for them)
 and says what Tiny is doing or waiting for right now, from the statuses payments returned.

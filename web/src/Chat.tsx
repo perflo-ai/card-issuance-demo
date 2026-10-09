@@ -3,7 +3,20 @@ import { api, type FrameEventPayload } from './api';
 import { pageVisibility, useFocusWhenClosed } from './browser';
 import { cancelUntilDone } from './cancel';
 import { CardDetails } from './CardDetails';
-import { CANCEL_SLOW_TEXT, declineFallback, declineHint, money, stalledText, stepLabel, waitingText, when, type Waiting } from './copy';
+import { cardUse, type CardUse } from './cards';
+import {
+  CANCEL_SLOW_TEXT,
+  cancelLabel,
+  cardName,
+  declineFallback,
+  declineHint,
+  money,
+  stalledText,
+  stepLabel,
+  waitingText,
+  when,
+  type Waiting,
+} from './copy';
 import { onLive } from './live';
 import { PerfloFrame } from './PerfloFrame';
 import { orderSteps, stepOf, type StepKey } from './progress';
@@ -217,6 +230,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
     }
   };
 
+  const orderList = Object.values(orders);
   return (
     <section className="chat" aria-label="Chat with Tiny">
       <div className="messages">
@@ -238,6 +252,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
             <OrderCard
               key={m.id}
               order={order}
+              cardUse={cardUse(order, orderList)}
               seen={seen[m.orderId] ?? []}
               notice={notices[m.orderId] ?? null}
               action={actions[m.orderId] ?? null}
@@ -292,6 +307,8 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
 
 interface CardProps {
   order: OrderView;
+  /** Whether the order's card serves other orders too. */
+  cardUse: CardUse;
   seen: StepKey[];
   notice: Notice;
   action: Action | null;
@@ -313,6 +330,7 @@ interface CardProps {
 
 export function OrderCard(props: CardProps) {
   const { order, action, waiting, note, error, perfloOrigin, onAdvance, onExpect } = props;
+  const shared = props.cardUse.shared;
   const [frameOpen, setFrameOpen] = useState(false);
   const card = useRef<HTMLElement>(null);
   useFocusWhenClosed(frameOpen, card);
@@ -355,7 +373,7 @@ export function OrderCard(props: CardProps) {
   const cancelButton = (className: string) =>
     order.perfloOrderId && (
       <button className={className} disabled={busy} onClick={() => props.onCancelCard(order.perfloOrderId as string)}>
-        {action === 'cancel' ? 'Cancelling...' : cancelSlow ? 'Check again' : 'Cancel card'}
+        {action === 'cancel' ? 'Cancelling...' : cancelSlow ? 'Check again' : cancelLabel(shared)}
       </button>
     );
 
@@ -487,27 +505,41 @@ export function OrderCard(props: CardProps) {
               perfloOrderId={order.perfloOrderId}
               last4={order.checkout.last4}
               cardLimit={order.checkout.cardLimit}
+              use={props.cardUse}
               expMonth={order.checkout.expMonth}
               expYear={order.checkout.expYear}
             />
           )}
-          {order.checkout.outcome === 'filled_not_submitted' && (
+          {order.checkout.outcome === 'filled_not_submitted' &&
+            (shared ? (
+              <p>
+                I filled in the checkout on {order.domain}. This demo stops before buying. The card stays open for your later orders until
+                it expires{order.cardExpiresAt ? ` (${when(order.cardExpiresAt)})` : ''}, and unused money goes back to your balance when it
+                closes.
+              </p>
+            ) : (
+              <p>
+                I filled in the checkout on {order.domain}. This demo stops before buying, so the card stays open until you cancel it
+                {order.cardExpiresAt ? ` or it expires (${when(order.cardExpiresAt)})` : ''}. Unused money goes back to your balance.
+              </p>
+            ))}
+          {order.checkout.outcome === 'charge_refused' && (
             <p>
-              I filled in the checkout on {order.domain}. This demo stops before buying, so the card stays open until you cancel it
-              {order.cardExpiresAt ? ` or it expires (${when(order.cardExpiresAt)})` : ''}. Unused money goes back to your balance.
+              {shared
+                ? 'The shop did not accept the card. You can cancel this order to get its money back.'
+                : 'The shop did not accept the card. You can cancel it to get the money back.'}
             </p>
           )}
-          {order.checkout.outcome === 'charge_refused' && <p>The shop did not accept the card. You can cancel it to get the money back.</p>}
           {cancelButton('secondary')}
         </>
       ) : (
         <>
           <p>
-            Your one-time card <strong>.... {order.cardLast4}</strong> is ready
-            {order.cardLimit ? `, up to ${money(order.cardLimit)}` : ''}.
+            Your {cardName(shared).toLowerCase()} <strong>.... {order.cardLast4}</strong> is ready
+            {order.cardLimit ? `, up to ${money(order.cardLimit)}${shared ? ' for this order' : ''}` : ''}.
           </p>
           {order.perfloOrderId && order.cardLast4 && (
-            <CardDetails perfloOrderId={order.perfloOrderId} last4={order.cardLast4} cardLimit={order.cardLimit} />
+            <CardDetails perfloOrderId={order.perfloOrderId} last4={order.cardLast4} cardLimit={order.cardLimit} use={props.cardUse} />
           )}
           {props.notice === 'card_locked' && (
             <p className="error" role="alert">
@@ -535,7 +567,10 @@ export function OrderCard(props: CardProps) {
             Paid {money(order.amountSpent ?? '0.00')} at {order.domain}.
           </p>
           <p className="muted small">
-            {order.checkout ? `One-time card .... ${order.checkout.last4} is now closed. ` : ''}
+            {order.checkout && !shared ? `${cardName(false)} .... ${order.checkout.last4} is now closed. ` : ''}
+            {order.checkout && shared
+              ? `${cardName(true)} .... ${order.checkout.last4} stays open for your later orders until it expires${order.cardExpiresAt ? ` (${when(order.cardExpiresAt)})` : ''}, and unused money goes back to your balance when it closes. `
+              : ''}
             {order.amountReturned && order.amountReturned !== '0.00' ? `${money(order.amountReturned)} went back to your balance.` : ''}
           </p>
         </>

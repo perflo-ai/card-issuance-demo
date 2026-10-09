@@ -79,3 +79,18 @@ describe('loadConfig: the webhook secret', () => {
     expect(one).not.toBe(two);
   });
 });
+
+describe('loadConfig: mock card reuse', () => {
+  const MOCK = { ...LIVE, DEMO_MODE: 'mock', PERFLO_API_BASE: 'https://localhost:8791' };
+
+  it('is off unless MOCK_REUSE_CARDS=true', () => {
+    expect(loadConfig({ ...MOCK }).mockReuseCards).toBe(false);
+    expect(loadConfig({ ...MOCK, MOCK_REUSE_CARDS: 'false' }).mockReuseCards).toBe(false);
+    expect(loadConfig({ ...MOCK, MOCK_REUSE_CARDS: 'true' }).mockReuseCards).toBe(true);
+  });
+
+  it('refuses any other value, and refuses it in live mode, where Perflo decides', () => {
+    expect(() => loadConfig({ ...MOCK, MOCK_REUSE_CARDS: 'yes' })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...LIVE, MOCK_REUSE_CARDS: 'true' })).toThrow('MOCK_REUSE_CARDS is for mock mode only');
+  });
+});
