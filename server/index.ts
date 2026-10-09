@@ -42,6 +42,7 @@ async function main(): Promise<void> {
   const hosted = config.listen.kind === 'hosted';
   const log = new EventLog();
   const store = new Store(config.dataFile);
+  if (!store.loadedFromFile) logger.warn('no data file yet: starting with no accounts', { file: config.dataFile });
   const api = new PerfloApi(config.perfloApiBase, config.credentials, log);
   const service = new DemoService(store, api, log, config);
   const app = createDemoApp({ config, store, service, log, logger, production: process.env.NODE_ENV === 'production' });

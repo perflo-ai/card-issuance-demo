@@ -258,6 +258,8 @@ describe('one person, one Tiny account, decided by Perflo', () => {
   });
 
   it('folds accounts an earlier version left for one Perflo user into the newest, when the store opens', () => {
+    // Session ids as Tiny makes them (43 base64url characters); the old file shape stored the user id alone.
+    const [S1, S2, S3] = ['a', 'b', 'c'].map((c) => c.repeat(43));
     const file = join(mkdtempSync(join(tmpdir(), 'tiny-open-')), 's.json');
     const user = (id: string, createdAt: string, perfloUserId: string | null) => ({
       id,
@@ -284,7 +286,7 @@ describe('one person, one Tiny account, decided by Perflo', () => {
     writeFileSync(
       file,
       JSON.stringify({
-        sessions: { s1: 'old', s2: 'new', s3: 'unlinked' },
+        sessions: { [S1]: 'old', [S2]: 'new', [S3]: 'unlinked' },
         users: {
           old: user('old', '2026-10-08T08:00:00.000Z', 'usr_1'),
           new: user('new', '2026-10-08T14:00:00.000Z', 'usr_1'),
@@ -295,7 +297,7 @@ describe('one person, one Tiny account, decided by Perflo', () => {
     );
 
     const store = new Store(file);
-    expect(store.userForSession('s1')?.id).toBe('new');
+    expect(store.userForSession(S1)?.id).toBe('new');
     expect(
       store
         .ordersFor('new')
@@ -304,7 +306,7 @@ describe('one person, one Tiny account, decided by Perflo', () => {
     ).toEqual(['o1', 'o2']);
     expect(store.ordersFor('unlinked').map((o) => o.id)).toEqual(['o3']);
     expect(store.user('new').perflo?.token).toBe('ptk_new_token_value');
-    expect(new Store(file).userForSession('s1')?.id).toBe('new');
+    expect(new Store(file).userForSession(S1)?.id).toBe('new');
     // Names and emails typed at the old sign-up are dropped from the file: nothing uses them any more.
     const saved = readFileSync(file, 'utf8');
     expect(saved).not.toContain('ada@example.com');
