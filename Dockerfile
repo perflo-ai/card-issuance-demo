@@ -18,10 +18,13 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
-# The store holds access tokens: owned by the unprivileged user, on a volume so a redeploy keeps it.
-RUN mkdir -p /data && chown node:node /data
-USER node
-VOLUME ["/data"]
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+# The store holds access tokens. Attach a host volume at /data so a redeploy keeps it (Railway:
+# Volumes, not a VOLUME line, which Railway refuses). The entrypoint gives /data to the
+# unprivileged `node` user, because a host volume is mounted owned by root, and then runs as `node`.
+RUN apk add --no-cache su-exec \
+ && mkdir -p /data && chown node:node /data
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- "http://127.0.0.1:${PORT}/healthz" || exit 1
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "dist/server/index.js"]

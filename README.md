@@ -137,8 +137,12 @@ listens on that port over plain HTTP on every interface; without it, it runs on
    up to 25 s to finish. Logs are one JSON object per line on stdout, each request with an id
    (also sent back as `X-Request-Id`).
 
-A `Dockerfile` builds the same thing as one image (production dependencies only, unprivileged
-user, the store on a `/data` volume, a health check).
+A `Dockerfile` builds the same thing as one image (production dependencies only, a health check).
+It runs as the unprivileged `node` user and keeps the store at `/data/demo-store.json`. On Railway,
+add a Volume to the service with mount path `/data` so connections survive a deploy; the image has
+no `VOLUME` line because Railway refuses one. Railway mounts a volume owned by root, so the
+entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before starting. Do not set
+`RAILWAY_RUN_UID=0`: that would run the whole server as root.
 
 ## How it talks to Perflo
 
