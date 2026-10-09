@@ -22,8 +22,8 @@ interface Props {
 const FINISH_BUDGET_MS = 20_000;
 
 /**
- * The one-time setup, wherever it is asked: the connect screen and an order
- * that needs payments set up. The step list follows the frame's own events
+ * The one-time setup, shown in the chat on the order that needs payments set
+ * up (or turned back on). The step list follows the frame's own events
  * (code verified, limits saved), never a timer.
  */
 export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = false }: Props) {

@@ -238,36 +238,13 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     log.add(user.id, 'frame', event.data.type, event.data);
     if (event.data.type === 'perflo:login_completed' || event.data.type === 'perflo:setup_completed') {
       // The event only says "look now". Which login is looked at comes from this session's own
-      // record (the one its link/start or order made), never from ids in the event.
+      // record (the one its order made), never from ids in the event.
       const wasLinked = user.perflo !== null;
       const { status } = await service.refreshLogin(user);
       rotateIfLinked(req, res, user, wasLinked);
       return res.json({ link: status });
     }
     res.json({});
-  });
-
-  /** Connect: the setup frame to show, or `linked` when Perflo already gave this person's access back. */
-  app.post('/demo/link/start', async (req, res) => {
-    parse(noBody, req.body, unreadable);
-    let current = currentUser(req);
-    const wasLinked = current.perflo !== null;
-    if (current.pendingLogin) {
-      // A setup link from an earlier visit may have expired: look first, so the frame never opens on a dead link.
-      const looked = await service.refreshLogin(current);
-      if (looked.status === 'linked') {
-        rotateIfLinked(req, res, current, wasLinked);
-        return res.json({ link: 'linked' });
-      }
-      current = looked.user;
-    }
-    const { user, status } = await service.ensureLinked(current);
-    rotateIfLinked(req, res, user, wasLinked);
-    // The setup link goes only to the browser of the session that asked for it, and only in this body.
-    if (status === 'login_required' && user.pendingLogin) {
-      return res.json({ link: status, frameUrl: user.pendingLogin.loginUrl });
-    }
-    res.json({ link: status });
   });
 
   app.post('/demo/link/refresh', async (req, res) => {
@@ -373,6 +350,7 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
         note: failure.operatorNote,
       });
     }
+    if (failure.retryAfterSeconds !== undefined) res.set('Retry-After', String(failure.retryAfterSeconds));
     res.status(failure.status).json({ error: { message: failure.message } });
   });
 

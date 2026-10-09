@@ -52,9 +52,10 @@ restart).
 
 Things to try, in order:
 
-1. Open the demo. Tiny asks for nothing about you: the first screen is **Set up payments**. The frame asks
-   for your email and the code (test code **123456**), then for your limits.
-2. `buy me $50 worth of headphones on amazon`, then confirm.
+1. Open the demo. Tiny asks for nothing about you: you land in the chat.
+2. `buy me $50 worth of headphones on amazon`, then confirm. The first order asks you to **Set up payments**,
+   right there in the chat: the frame asks for your email and the code (test code **123456**), then for your
+   limits.
 3. Your balance is empty, so the order asks you to add money. Pay in the frame (test payment, no card).
 4. The one-time card is created and Tiny checks out. You see only the last 4 digits, the expiry and the card
    limit; the card is spent at the mock shop and the order shows as paid.
@@ -153,7 +154,7 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
   bytes sent (a GET signs the empty body). Test vectors were computed independently in Python.
 - **Users**: `POST /users` with only Tiny's own user id as `external_user_id`: no email and no name, because
   Tiny never asks for them. The person types and proves their email in the setup frame. `login_required`
-  opens the setup frame (first on the connect screen, later in the chat if access was removed); on `perflo:setup_completed` the server reads `GET /logins/{id}` and stores the token (it
+  opens the setup frame in the chat, on the order that needs it (the first order, or the next one after access was removed); on `perflo:setup_completed` the server reads `GET /logins/{id}` and stores the token (it
   is handed out once). If Perflo says `approved` but Tiny holds no token, it asks with `reissue: true`.
 - **Orders**: `POST /orders` with an `Idempotency-Key` fixed per chat order. Every retry is
   `GET /orders/{id}` (signature only, no token), never a second POST. Each status is handled:
@@ -162,6 +163,12 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
   order resumes on its own), `identity_check_required` (opens in a new tab, then try again), `issuing`
   (looks again after 2 seconds, then a little longer each time up to 10 seconds, for up to five minutes),
   `declined`, `completed`, `cancelled`, `expired`, `failed`.
+- **Cancel card**: `POST /orders/{id}/cancel` is safe to send again (a cancelled order answers what was
+  recorded). While it answers 503 (payments busy, for example the card issuer briefly busy while it closes
+  the card), or no answer comes in time, the page stays on "Cancelling..." and sends it again after 3, 6, 12,
+  then every 20 seconds (longer if `Retry-After` asks), for about two minutes, then says calmly that it is
+  taking longer and offers "Check again". The log shows a repeated refusal once. Any other refusal (the
+  order already finished) is shown as it is. Logic in `web/src/cancel.ts`.
 - **Replays**: Perflo never replays a token or a link. A `POST /users` replay has no token, so a reissue is
   asked with a new Idempotency-Key. A `card-reveal` replay (201 with only a message) is asked again with a new
   key, and a ready replay without `reveal_url` goes through `/card-reveal`. An identity check answer without

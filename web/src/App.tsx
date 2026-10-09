@@ -5,7 +5,6 @@ import { Chat } from './Chat';
 import { Panel } from './Panel';
 import { shared } from './polling';
 import { stepOf, type StepKey } from './progress';
-import { SetupFlow } from './Setup';
 import type { DemoConfigView, MeView, OrderPhase, OrderView } from '../../server/views';
 
 function Logo() {
@@ -25,7 +24,8 @@ export function App() {
   const [me, setMe] = useState<MeView | null>(null);
   const [fatal, setFatal] = useState('');
   const [signingOut, setSigningOut] = useState(false);
-  const [justConnected, setJustConnected] = useState(false);
+  /** Bumped on sign out, so the chat starts empty for the next person on this browser. */
+  const [visit, setVisit] = useState(0);
 
   useOnMount(() => {
     api
@@ -44,6 +44,7 @@ export function App() {
       await api.logout();
       // The next visitor on this browser starts as a new, anonymous Tiny account.
       setMe((await api.session()).user);
+      setVisit((v) => v + 1);
     } catch {
       setFatal('Could not sign you out. Reload the page to try again.');
     } finally {
@@ -79,82 +80,18 @@ export function App() {
           </div>
         )}
       </header>
-      {me.linked ? (
-        <Workspace config={config} me={me} onMe={setMe} focusComposer={justConnected} />
-      ) : (
-        <Connect
-          perfloOrigin={config.perfloOrigin}
-          onConnected={(connected) => {
-            setJustConnected(true);
-            setMe(connected);
-          }}
-        />
-      )}
+      <Workspace key={visit} config={config} me={me} onMe={setMe} />
     </div>
   );
 }
 
 /**
- * The first screen: connect payments. Tiny asks for nothing itself; the person
- * types and proves their email inside Perflo's frame.
+ * The chat, from the first visit. Payments are set up inside the chat, the
+ * first time an order needs them. The one owner of this person's orders: the
+ * chat and the Orders tab read the same list, so an order is never fetched
+ * twice to show it in two places.
  */
-function Connect({ perfloOrigin, onConnected }: { perfloOrigin: string; onConnected: (me: MeView) => void }) {
-  const [error, setError] = useState('');
-
-  const connected = async () => {
-    try {
-      onConnected((await api.session()).user);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong. Reload the page to try again.');
-    }
-  };
-
-  return (
-    <main className="connect">
-      <h1>Welcome to Tiny</h1>
-      <p className="muted">Your assistant that books and buys things for you.</p>
-      <section className="box">
-        <h2>Set up payments for Tiny</h2>
-        <p className="muted">Set up payments once. After that I can pay for things for you without stopping to ask.</p>
-        <SetupFlow
-          perfloOrigin={perfloOrigin}
-          open={async () => {
-            const result = await api.linkStart();
-            if (result.link === 'linked') {
-              await connected();
-              return null;
-            }
-            return result.frameUrl ?? null;
-          }}
-          onLinked={connected}
-        />
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-      </section>
-    </main>
-  );
-}
-
-/**
- * Signed in and connected. The one owner of this person's orders: the chat
- * and the Orders tab read the same list, so an order is never fetched twice
- * to show it in two places.
- */
-function Workspace({
-  config,
-  me,
-  onMe,
-  focusComposer,
-}: {
-  config: DemoConfigView;
-  me: MeView;
-  onMe: (me: MeView) => void;
-  /** Just connected: the chat puts the cursor in the message box. */
-  focusComposer: boolean;
-}) {
+function Workspace({ config, me, onMe }: { config: DemoConfigView; me: MeView; onMe: (me: MeView) => void }) {
   const [orders, setOrders] = useState<Record<string, OrderView>>({});
   const [seen, setSeen] = useState<Record<string, StepKey[]>>({});
   const [loaded, setLoaded] = useState(false);
@@ -225,7 +162,7 @@ function Workspace({
         onOrder={putOrder}
         onAccountChanged={accountChanged}
         onChangeLimits={() => setLimitsRequest((n) => n + 1)}
-        focusComposer={focusComposer}
+        onLinked={() => onMe({ ...me, linked: true })}
       />
       <Panel
         perfloOrigin={config.perfloOrigin}

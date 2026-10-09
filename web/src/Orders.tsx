@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { api } from './api';
-import { useOnMount } from './browser';
+import { pageVisibility, useOnMount } from './browser';
+import { cancelUntilDone } from './cancel';
 import { CardDetails } from './CardDetails';
-import { money, phaseLabel, when } from './copy';
+import { CANCEL_SLOW_TEXT, money, phaseLabel, when } from './copy';
 import { formatUsd } from '../../server/money';
 import type { OrderView } from '../../server/views';
 
@@ -25,6 +26,8 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
   const [refreshing, setRefreshing] = useState(false);
   const [cancelling, setCancelling] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState('');
+  /** The card whose cancel has not gone through yet after Tiny kept trying. */
+  const [slowCancel, setSlowCancel] = useState<string | null>(null);
 
   // Opening the tab looks again once; after that the list follows what the chat learns.
   useOnMount(() => {
@@ -34,10 +37,12 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
 
   const cancelCard = async (perfloOrderId: string) => {
     setCancelError('');
+    setSlowCancel(null);
     setCancelling(perfloOrderId);
     try {
-      const result = await api.cancelCard(perfloOrderId);
-      if (result.order) onOrder(result.order);
+      const outcome = await cancelUntilDone(() => api.cancelCard(perfloOrderId), { visibility: pageVisibility });
+      if (outcome.kind === 'slow') setSlowCancel(perfloOrderId);
+      else if (outcome.cancelled.order) onOrder(outcome.cancelled.order);
       else onAccountChanged();
     } catch (e) {
       setCancelError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
@@ -86,8 +91,17 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
                       expYear={order.checkout?.expYear}
                     />
                     <button className="link" disabled={cancelling !== null} onClick={() => void cancelCard(order.perfloOrderId as string)}>
-                      {cancelling === order.perfloOrderId ? 'Cancelling...' : 'Cancel card'}
+                      {cancelling === order.perfloOrderId
+                        ? 'Cancelling...'
+                        : slowCancel === order.perfloOrderId
+                          ? 'Check again'
+                          : 'Cancel card'}
                     </button>
+                    {slowCancel === order.perfloOrderId && cancelling === null && (
+                      <p className="muted small" role="status">
+                        {CANCEL_SLOW_TEXT}
+                      </p>
+                    )}
                   </>
                 )}
               </li>

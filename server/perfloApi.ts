@@ -146,6 +146,8 @@ export class PerfloApiError extends Error {
     readonly httpStatus: number,
     readonly code: string,
     message: string,
+    /** Seconds payments asked us to wait before trying again (its Retry-After), when it said. */
+    readonly retryAfterSeconds: number | null = null,
   ) {
     super(message);
     this.name = 'PerfloApiError';
@@ -170,6 +172,11 @@ interface RequestOptions {
   idempotencyKey?: string;
   /** Overrides the default request timeout. */
   timeoutMs?: number;
+  /**
+   * Log a repeat of the same answer only once. Always on for reads; for a write that is safe to send
+   * again and is retried while it is refused (cancel), so the log shows one line per change.
+   */
+  collapse?: boolean;
 }
 
 export interface CreateOrderInput {
@@ -209,9 +216,14 @@ const RETRY_MAX_WAIT_MS = 5_000;
 
 const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
+/** Retry-After as whole seconds (the only form payments may send), or null when absent or unreadable. */
+function retryAfterSeconds(retryAfter: string | null): number | null {
+  return retryAfter !== null && /^[0-9]{1,4}$/.test(retryAfter) ? Number(retryAfter) : null;
+}
+
 /** Retry-After in seconds when payments sent one, else a doubling wait; never more than RETRY_MAX_WAIT_MS. */
 function retryWait(attempt: number, retryAfter: string | null): number {
-  const seconds = retryAfter !== null && /^[0-9]{1,4}$/.test(retryAfter) ? Number(retryAfter) : null;
+  const seconds = retryAfterSeconds(retryAfter);
   return Math.min(RETRY_MAX_WAIT_MS, seconds !== null ? seconds * 1000 : RETRY_BASE_MS * 2 ** attempt);
 }
 
@@ -228,7 +240,7 @@ export class PerfloApi {
     method: 'GET' | 'POST',
     route: string,
     options: RequestOptions = {},
-  ): Promise<{ status: number; json: unknown }> {
+  ): Promise<{ status: number; json: unknown; retryAfter: string | null }> {
     const attempts = method === 'GET' ? READ_ATTEMPTS : 1;
     for (let attempt = 0; ; attempt++) {
       const last = attempt === attempts - 1;
@@ -251,6 +263,7 @@ export class PerfloApi {
     options: RequestOptions,
   ): Promise<{ status: number; json: unknown; retryAfter: string | null }> {
     const url = new URL(this.base + route);
+    const collapse = method === 'GET' || options.collapse === true;
     // Built once, hashed once, sent as is: the signature covers these exact bytes.
     const rawBody = options.body === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(options.body), 'utf8');
     const headers: Record<string, string> = {
@@ -271,7 +284,7 @@ export class PerfloApi {
       });
     } catch (error) {
       const reason = error instanceof Error && error.name === 'TimeoutError' ? 'timed out' : 'could not connect';
-      this.log.add(demoUserId, 'api', `${method} ${url.pathname} ${reason}`, { request: options.body });
+      this.log.add(demoUserId, 'api', `${method} ${url.pathname} ${reason}`, { request: options.body }, { collapse });
       throw new PerfloUnavailableError(`Payments service ${reason}`, true);
     }
 
@@ -281,9 +294,13 @@ export class PerfloApi {
       try {
         json = JSON.parse(text);
       } catch {
-        this.log.add(demoUserId, 'api', `${method} ${url.pathname} -> ${response.status} (not JSON)`, {
-          request: options.body,
-        });
+        this.log.add(
+          demoUserId,
+          'api',
+          `${method} ${url.pathname} -> ${response.status} (not JSON)`,
+          { request: options.body },
+          { collapse },
+        );
         throw new PerfloUnavailableError('Payments service sent an unreadable answer');
       }
     }
@@ -298,23 +315,25 @@ export class PerfloApi {
       'api',
       `${method} ${url.pathname} -> ${response.status}${answered}`,
       { request: options.body, response: json },
-      { collapse: method === 'GET' },
+      { collapse },
     );
     return { status: response.status, json, retryAfter: response.headers.get('retry-after') };
   }
 
-  private parse<T>(schema: z.ZodType<T>, status: number, json: unknown, okStatuses: number[]): T {
+  private parse<T>(schema: z.ZodType<T>, status: number, json: unknown, okStatuses: number[], retryAfter: string | null = null): T {
     if (okStatuses.includes(status)) {
       const parsed = schema.safeParse(json);
       if (parsed.success) return parsed.data;
       throw new PerfloUnavailableError(`Payments service answer did not match the contract (HTTP ${status})`);
     }
-    throw this.toError(status, json);
+    throw this.toError(status, json, retryAfter);
   }
 
-  private toError(status: number, json: unknown): PerfloApiError | PerfloUnavailableError {
+  private toError(status: number, json: unknown, retryAfter: string | null): PerfloApiError | PerfloUnavailableError {
     const parsed = errorEnvelope.safeParse(json);
-    if (parsed.success) return new PerfloApiError(status, parsed.data.error.code, parsed.data.error.message);
+    if (parsed.success) {
+      return new PerfloApiError(status, parsed.data.error.code, parsed.data.error.message, retryAfterSeconds(retryAfter));
+    }
     if (status >= 500) return new PerfloUnavailableError(`Payments service error (HTTP ${status})`);
     return new PerfloApiError(status, 'unknown', `Unexpected answer (HTTP ${status})`);
   }
@@ -384,12 +403,17 @@ export class PerfloApi {
     throw new PerfloUnavailableError('Payments did not hand out a card link');
   }
 
+  /**
+   * Not retried here (no write is), but the browser sends it again while payments says it is busy,
+   * so a repeat of the same refusal is logged once.
+   */
   async cancelOrder(demoUserId: string, orderId: string, token: string): Promise<z.infer<typeof cancelResponse>> {
     const r = await this.request(demoUserId, 'POST', `/partner/v2/orders/${encodeURIComponent(orderId)}/cancel`, {
       token,
       timeoutMs: CANCEL_TIMEOUT_MS,
+      collapse: true,
     });
-    return this.parse(cancelResponse, r.status, r.json, [200]);
+    return this.parse(cancelResponse, r.status, r.json, [200], r.retryAfter);
   }
 }
 

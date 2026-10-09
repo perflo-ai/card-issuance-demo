@@ -385,6 +385,10 @@ button:disabled {
   align-items: center;
   flex-wrap: wrap;
 }
+.cards li p {
+  flex-basis: 100%;
+  margin: 0;
+}
 .panel-frame {
   margin-top: 12px;
 }
@@ -550,25 +554,6 @@ button:disabled {
   background: #eef0f6;
 }
 
-.connect {
-  max-width: 480px;
-  width: 100%;
-  margin: 48px auto;
-  padding: 0 16px;
-}
-.connect h1 {
-  margin: 0 0 6px;
-  font-size: 26px;
-}
-.connect .box {
-  margin-top: 20px;
-  display: grid;
-  gap: 10px;
-}
-.connect .box p,
-.connect .box h2 {
-  margin: 0;
-}
 .check {
   display: flex;
   gap: 10px;

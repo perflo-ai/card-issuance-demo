@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type SubmitEvent, type ReactNode } from 'react';
 import { api, type FrameEventPayload } from './api';
-import { pageVisibility, useFocusWhenClosed, useOnMount } from './browser';
+import { pageVisibility, useFocusWhenClosed } from './browser';
+import { cancelUntilDone } from './cancel';
 import { CardDetails } from './CardDetails';
-import { declineFallback, declineHint, money, stalledText, stepLabel, waitingText, when, type Waiting } from './copy';
+import { CANCEL_SLOW_TEXT, declineFallback, declineHint, money, stalledText, stepLabel, waitingText, when, type Waiting } from './copy';
 import { PerfloFrame } from './PerfloFrame';
 import { backoff, poll } from './polling';
 import { orderSteps, stepOf, type StepKey } from './progress';
@@ -25,8 +26,8 @@ interface ChatProps {
   onOrder: (order: OrderView) => void;
   onAccountChanged: () => void;
   onChangeLimits: () => void;
-  /** Just connected: put the cursor in the message box, the next thing to use. */
-  focusComposer?: boolean;
+  /** Payments were just set up (or turned back on) from an order in the chat. */
+  onLinked: () => void;
 }
 
 let nextId = 0;
@@ -53,23 +54,21 @@ interface Watch {
   done: Promise<void>;
 }
 
-export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountChanged, onChangeLimits, focusComposer = false }: ChatProps) {
+export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountChanged, onChangeLimits, onLinked }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [notices, setNotices] = useState<Record<string, Notice>>({});
   const [actions, setActions] = useState<Record<string, Action | null>>({});
   const [waiting, setWaiting] = useState<Record<string, Waiting | null>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  /** Orders whose cancel has not gone through yet after Tiny kept trying. */
+  const [slowCancels, setSlowCancels] = useState<Record<string, boolean>>({});
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const end = useRef<HTMLDivElement>(null);
   const inflight = useRef(new Map<string, Promise<OrderView | null>>());
   const watches = useRef(new Map<string, Watch>());
   const seeded = useRef(false);
-  const composer = useRef<HTMLInputElement>(null);
-  useOnMount(() => {
-    if (focusComposer) composer.current?.focus();
-  });
 
   // The orders already made appear in the chat once, when the list first arrives.
   useEffect(() => {
@@ -218,13 +217,16 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
     }
   };
 
+  /** Stays on "Cancelling..." while payments is briefly busy, and keeps sending the cancel (safe to repeat). */
   const cancelCard = async (id: string, perfloOrderId: string) => {
     await stopWatching(id);
     setFor(setActions, id, 'cancel');
     setFor(setErrors, id, '');
+    setFor(setSlowCancels, id, false);
     try {
-      const result = await api.cancelCard(perfloOrderId);
-      if (result.order) onOrder(result.order);
+      const outcome = await cancelUntilDone(() => api.cancelCard(perfloOrderId), { visibility: pageVisibility });
+      if (outcome.kind === 'slow') setFor(setSlowCancels, id, true);
+      else if (outcome.cancelled.order) onOrder(outcome.cancelled.order);
       else onAccountChanged();
     } catch (error) {
       setFor(setErrors, id, error instanceof Error ? error.message : 'Something went wrong. Try again.');
@@ -260,6 +262,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
               waiting={waiting[m.orderId] ?? null}
               note={notes[m.orderId] ?? ''}
               error={errors[m.orderId] ?? ''}
+              cancelSlow={slowCancels[m.orderId] ?? false}
               perfloOrigin={perfloOrigin}
               onAdvance={(action) => advance(m.orderId, action)}
               onWatch={(from, restart) => watch(m.orderId, from, restart)}
@@ -267,6 +270,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
               onCancelCard={(perfloOrderId) => void cancelCard(m.orderId, perfloOrderId)}
               onChangeLimits={onChangeLimits}
               onAccountChanged={onAccountChanged}
+              onLinked={onLinked}
             />
           ) : null;
         })}
@@ -277,7 +281,6 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
           Message Tiny
         </label>
         <input
-          ref={composer}
           id="msg"
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -313,6 +316,8 @@ interface CardProps {
   waiting: Waiting | null;
   note: string;
   error: string;
+  /** The cancel has not gone through yet after Tiny kept trying: say so calmly and offer to check again. */
+  cancelSlow: boolean;
   perfloOrigin: string;
   onAdvance: (action: Action) => Promise<OrderView | null>;
   onWatch: (from: OrderPhase, restart?: boolean) => Promise<void>;
@@ -320,6 +325,7 @@ interface CardProps {
   onCancelCard: (perfloOrderId: string) => void;
   onChangeLimits: () => void;
   onAccountChanged: () => void;
+  onLinked: () => void;
 }
 
 export function OrderCard(props: CardProps) {
@@ -363,10 +369,11 @@ export function OrderCard(props: CardProps) {
     ? orderSteps(current, new Set(props.seen)).map((s) => ({ label: stepLabel(s.key, order.domain), state: s.state }))
     : null;
 
+  const cancelSlow = props.cancelSlow && action !== 'cancel';
   const cancelButton = (className: string) =>
     order.perfloOrderId && (
       <button className={className} disabled={busy} onClick={() => props.onCancelCard(order.perfloOrderId as string)}>
-        {action === 'cancel' ? 'Cancelling...' : 'Cancel card'}
+        {action === 'cancel' ? 'Cancelling...' : cancelSlow ? 'Check again' : 'Cancel card'}
       </button>
     );
 
@@ -404,6 +411,7 @@ export function OrderCard(props: CardProps) {
             disabled={busy}
             open={() => Promise.resolve(order.frameUrl ?? null)}
             onLinked={async () => {
+              props.onLinked();
               props.onAccountChanged();
               if (order.phase === 'login_required') await onWatch('login_required', true);
               else await onAdvance('place');
@@ -595,6 +603,11 @@ export function OrderCard(props: CardProps) {
         </p>
       )}
       {note && !waiting && <p className="muted small">{note}</p>}
+      {cancelSlow && order.phase === 'ready' && (
+        <p className="muted small" role="status">
+          {CANCEL_SLOW_TEXT}
+        </p>
+      )}
       {error && (
         <p className="error" role="alert">
           {error}

@@ -38,12 +38,19 @@ async function startSession(target: ReturnType<typeof app>['app']): Promise<stri
 const post = (target: ReturnType<typeof app>['app'], path: string, cookie: string, body: object = {}) =>
   request(target).post(path).set('Host', HOST).set('Origin', ORIGIN).set('Cookie', cookie).send(body);
 
+/** The setup link, as the chat gets it: the first order asks for payments to be set up. */
+async function setupLink(target: ReturnType<typeof app>['app'], cookie: string): Promise<string> {
+  const chat = await post(target, '/demo/chat', cookie, { text: 'buy me $5 worth of stickers on amazon' });
+  const advanced = await post(target, `/demo/orders/${chat.body.order.id as string}/advance`, cookie);
+  expect(advanced.body.order.phase).toBe('needs_setup');
+  return advanced.body.order.frameUrl as string;
+}
+
 /** Every route that changes something. Each must refuse a request from another site. */
 const STATE_CHANGING = [
   '/demo/session',
   '/demo/logout',
   '/demo/chat',
-  '/demo/link/start',
   '/demo/link/refresh',
   '/demo/frame-events',
   '/demo/limits-link',
@@ -80,7 +87,7 @@ describe('cross-site requests (CSRF and login CSRF)', () => {
   it('refuses a same-origin POST that is not JSON (what a plain form sends), even with no body', async () => {
     const { app: target } = app();
     const cookie = await startSession(target);
-    const empty = await request(target).post('/demo/link/start').set('Host', HOST).set('Origin', ORIGIN).set('Cookie', cookie);
+    const empty = await request(target).post('/demo/link/refresh').set('Host', HOST).set('Origin', ORIGIN).set('Cookie', cookie);
     expect(empty.status).toBe(415);
     const form = await request(target)
       .post('/demo/logout')
@@ -122,11 +129,11 @@ describe('a setup link links only the session that started it', () => {
   it('rotates the session id when the account links, and the old id stops working after a short grace', async () => {
     const { app: target } = app();
     const before = await startSession(target);
-    const start = await post(target, '/demo/link/start', before);
-    await finishSetup(mock.base, start.body.frameUrl);
+    const frameUrl = await setupLink(target, before);
+    await finishSetup(mock.base, frameUrl);
     const event = await post(target, '/demo/frame-events', before, {
       type: 'perflo:setup_completed',
-      frame_session_id: new URL(start.body.frameUrl).searchParams.get('session') as string,
+      frame_session_id: new URL(frameUrl).searchParams.get('session') as string,
     });
     expect(event.body).toEqual({ link: 'linked' });
     const after = sessionOf(event);
@@ -144,8 +151,7 @@ describe('a setup link links only the session that started it', () => {
     const { app: target, demo } = app();
     const alice = await startSession(target);
     const mallory = await startSession(target);
-    const aliceStart = await post(target, '/demo/link/start', alice);
-    const aliceFrame = aliceStart.body.frameUrl as string;
+    const aliceFrame = await setupLink(target, alice);
     await finishSetup(mock.base, aliceFrame);
     // Mallory replays Alice's frame event, ids and all, on her own session.
     const aliceLoginId = Object.values(
@@ -166,13 +172,13 @@ describe('a setup link links only the session that started it', () => {
   it('the setup link and the frame session never reach the log', async () => {
     const { app: target, demo } = app();
     const cookie = await startSession(target);
-    const start = await post(target, '/demo/link/start', cookie);
-    const frameSession = new URL(start.body.frameUrl).searchParams.get('session') as string;
+    const frameUrl = await setupLink(target, cookie);
+    const frameSession = new URL(frameUrl).searchParams.get('session') as string;
     await post(target, '/demo/frame-events', cookie, { type: 'perflo:ready', frame_session_id: frameSession });
     const userId = Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users)[0];
     const logged = JSON.stringify(demo.log.forUser(userId));
     expect(logged).not.toContain(frameSession);
-    expect(logged).not.toContain(start.body.frameUrl);
+    expect(logged).not.toContain(frameUrl);
   });
 });
 
@@ -182,7 +188,7 @@ describe('input validation on every route', () => {
     const cookie = await startSession(target);
     expect((await post(target, '/demo/orders/not-a-uuid/advance', cookie)).status).toBe(404);
     expect((await post(target, '/demo/cards/..%2F..%2Fusers/cancel', cookie)).status).toBe(404);
-    expect((await post(target, '/demo/link/start', cookie, { email: 'a@example.com' })).status).toBe(400);
+    expect((await post(target, '/demo/link/refresh', cookie, { email: 'a@example.com' })).status).toBe(400);
     expect((await post(target, '/demo/chat', cookie, { text: 'hi', extra: true })).status).toBe(400);
     expect((await post(target, '/demo/top-ups', cookie, { amount: '-5' })).status).toBe(400);
     expect((await request(target).get('/demo/events?after=-1').set('Host', HOST).set('Cookie', cookie)).status).toBe(400);

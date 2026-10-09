@@ -4,6 +4,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** How long the server asked us to wait before trying again (Retry-After), when it said. */
+    readonly retryAfterMs: number | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -45,7 +47,12 @@ async function send<T>(method: 'GET' | 'POST', path: string, body?: unknown): Pr
   }
   const json = (await response.json().catch(() => null)) as (T & { error?: { message?: string } }) | null;
   if (!response.ok) {
-    throw new ApiError(response.status, json?.error?.message ?? 'Something went wrong. Try again.');
+    const retryAfter = response.headers.get('retry-after');
+    throw new ApiError(
+      response.status,
+      json?.error?.message ?? 'Something went wrong. Try again.',
+      retryAfter !== null && /^[0-9]{1,4}$/.test(retryAfter) ? Number(retryAfter) * 1000 : null,
+    );
   }
   return json as T;
 }
@@ -70,7 +77,6 @@ export const api = {
   advance: (id: string) =>
     request<{ order: OrderView; notice: Notice; linked: boolean }>('POST', `/demo/orders/${encodeURIComponent(id)}/advance`),
   frameEvent: (event: FrameEventPayload) => request<{ link?: LinkStatus }>('POST', '/demo/frame-events', event),
-  linkStart: () => request<{ link: LinkStatus; frameUrl?: string }>('POST', '/demo/link/start'),
   refreshLink: () => request<{ link: LinkStatus }>('POST', '/demo/link/refresh'),
   account: () => request<{ linked: false } | { linked: true; account: AccountView }>('GET', '/demo/account'),
   limitsLink: () => request<{ frameUrl: string }>('POST', '/demo/limits-link'),

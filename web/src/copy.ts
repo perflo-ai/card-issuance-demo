@@ -141,6 +141,9 @@ export function stalledText(waiting: Waiting): string {
   }
 }
 
+/** Said when a card's cancel has not gone through after about two minutes of trying, next to "Check again". */
+export const CANCEL_SLOW_TEXT = 'Cancelling is taking longer than usual. Your money will come back on its own; check again in a minute.';
+
 /** One line per step of an order, for the order's step list. */
 export function stepLabel(step: StepKey, domain: string): string {
   switch (step) {
