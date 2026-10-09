@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { api, onRequestSettled } from './api';
 import { pageVisibility, useFocusWhenClosed, useOnMount, useWhenVisible } from './browser';
 import { cancelUntilDone } from './cancel';
+import { onLive } from './live';
 import { CANCEL_SLOW_TEXT, identityText, money, when } from './copy';
 import { Orders } from './Orders';
 import { PerfloFrame } from './PerfloFrame';
@@ -320,10 +321,10 @@ export function Panel(props: Props) {
 }
 
 /**
- * Every line here is written while Tiny's server answers one of this page's
- * requests, so the log reads new lines when such a request finishes (and when
- * the page comes back into view), never on a timer: nothing new can appear
- * while the page is quiet.
+ * Lines are written while Tiny's server answers one of this page's requests or
+ * handles a webhook from Perflo, so the log reads new lines when such a request
+ * finishes, when the server pushes that it wrote some, and when the page comes
+ * back into view; never on a timer.
  */
 function DeveloperLog() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
@@ -348,6 +349,14 @@ function DeveloperLog() {
   );
   useOnMount(() => void load());
   useEffect(() => onRequestSettled(() => void load()), [load]);
+  // Lines written while Tiny's server handled a webhook from Perflo arrive with a push.
+  useEffect(
+    () =>
+      onLive((message) => {
+        if (message.type === 'log') void load();
+      }),
+    [load],
+  );
   useWhenVisible(() => void load());
 
   return (

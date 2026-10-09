@@ -8,7 +8,7 @@ import { toView } from '../server/orderState.js';
 import { PerfloApi } from '../server/perfloApi.js';
 import { DemoService } from '../server/service.js';
 import { Store } from '../server/store.js';
-import { CREDS, urlOf } from './helpers.js';
+import { CREDS, urlOf, WEBHOOK_SECRET } from './helpers.js';
 
 const BASE = 'https://perflo.test';
 
@@ -36,6 +36,7 @@ function setup(fake: typeof fetch, linked = true) {
     dataFile: join(mkdtempSync(join(tmpdir(), 'tiny-replay-')), 's.json'),
     listen: { kind: 'local' },
     publicOrigin: null,
+    webhookSecret: WEBHOOK_SECRET,
   };
   const log = new EventLog();
   const store = new Store(config.dataFile);

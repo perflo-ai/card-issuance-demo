@@ -91,7 +91,7 @@ export interface LogEntry {
   id: number;
   at: string;
   demoUserId: string | null;
-  kind: 'api' | 'frame' | 'demo';
+  kind: 'api' | 'frame' | 'demo' | 'webhook';
   summary: string;
   detail?: unknown;
 }
@@ -122,3 +122,15 @@ export interface MeView {
   /** Mock mode test control. */
   stopAtCheckout: boolean;
 }
+
+/**
+ * What Tiny's server pushes to a person's open pages (server/live.ts). Never anything the page could
+ * not already read itself.
+ * - order: an order changed; the same view GET /demo/orders gives, with any checkout notice.
+ * - account: payments access or the balance may have changed; `linked` is the new state.
+ * - connected: Perflo says the person finished setting up payments. The page's own next request
+ *   (POST /demo/link/refresh) picks up the access, so the session is rotated as for any link.
+ * - log: new lines in the developer log.
+ */
+export type LiveMessage =
+  { type: 'order'; order: OrderView; notice: Notice } | { type: 'account'; linked: boolean } | { type: 'connected' } | { type: 'log' };

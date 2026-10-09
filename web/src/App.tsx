@@ -1,7 +1,8 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { useOnMount } from './browser';
 import { Chat } from './Chat';
+import { connectLive, onLive, onReconnect } from './live';
 import { Panel } from './Panel';
 import { shared } from './polling';
 import { stepOf, type StepKey } from './progress';
@@ -151,6 +152,32 @@ function Workspace({ config, me, onMe }: { config: DemoConfigView; me: MeView; o
   );
 
   useOnMount(() => void refreshOrders());
+
+  // Changes arrive as Tiny's server hears them from Perflo (webhooks); nothing here asks on a timer.
+  // After the feed drops and comes back, one read catches up on anything missed meanwhile.
+  const meLatest = useRef({ me, onMe });
+  meLatest.current = { me, onMe };
+  useEffect(() => connectLive(), []);
+  useEffect(
+    () =>
+      onLive((message) => {
+        if (message.type === 'order') putOrder(message.order);
+        if (message.type === 'account') {
+          accountChanged();
+          const { me: current, onMe: setMe } = meLatest.current;
+          if (current.linked !== message.linked) setMe({ ...current, linked: message.linked });
+        }
+      }),
+    [putOrder, accountChanged],
+  );
+  useEffect(
+    () =>
+      onReconnect(() => {
+        void refreshOrders();
+        accountChanged();
+      }),
+    [refreshOrders, accountChanged],
+  );
 
   return (
     <div className="layout">

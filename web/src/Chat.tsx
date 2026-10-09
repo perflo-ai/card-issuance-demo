@@ -4,8 +4,8 @@ import { pageVisibility, useFocusWhenClosed } from './browser';
 import { cancelUntilDone } from './cancel';
 import { CardDetails } from './CardDetails';
 import { CANCEL_SLOW_TEXT, declineFallback, declineHint, money, stalledText, stepLabel, waitingText, when, type Waiting } from './copy';
+import { onLive } from './live';
 import { PerfloFrame } from './PerfloFrame';
-import { backoff, poll } from './polling';
 import { orderSteps, stepOf, type StepKey } from './progress';
 import { SetupFlow } from './Setup';
 import { StepList } from './Steps';
@@ -14,8 +14,8 @@ import type { Notice, OrderPhase, OrderView } from '../../server/views';
 
 type Message = { id: string; kind: 'user' | 'assistant'; text: string } | { id: string; kind: 'order'; orderId: string };
 
-/** What the person (or Tiny, for 'watch') is doing with an order right now. One at a time per order. */
-type Action = 'place' | 'pay' | 'check' | 'cancel' | 'discard' | 'watch';
+/** What the person is doing with an order right now. One at a time per order. */
+type Action = 'place' | 'pay' | 'check' | 'cancel' | 'discard';
 
 interface ChatProps {
   perfloOrigin: string;
@@ -36,23 +36,17 @@ const newId = () => `m${++nextId}`;
 const SETTLED: ReadonlySet<OrderPhase> = new Set(['declined', 'completed', 'cancelled', 'expired', 'failed', 'discarded']);
 
 /**
- * How Tiny keeps looking at an order that is waiting on the payments side. Each look is a status read
- * (never a new order) and starts only after the previous one finished. Identity checks are looked at
- * gently, because while one is still due each look asks payments for a fresh check link.
+ * How long Tiny waits for Perflo's word (a webhook) after the person did something, before saying it
+ * is taking longer than usual. Nothing is asked in the meantime: the change is pushed when it happens.
+ * A timer for the words on the page only, never a request.
  */
-const WATCH: Partial<Record<OrderPhase, { waiting: Waiting; delay: (attempt: number) => number; budgetMs: number }>> = {
-  // A card can take a few minutes to be ready; giving up sooner left a ready card showing as not ready.
-  issuing: { waiting: 'card', delay: backoff(2000, 10_000), budgetMs: 5 * 60_000 },
-  payment_required: { waiting: 'money', delay: backoff(2000, 10_000), budgetMs: 5 * 60_000 },
-  login_required: { waiting: 'placing', delay: backoff(2000, 10_000), budgetMs: 5 * 60_000 },
-  identity_check_required: { waiting: 'identity', delay: backoff(6000, 15_000), budgetMs: 2 * 60_000 },
+const STALL_MS: Record<Waiting, number> = {
+  setup: 2 * 60_000,
+  placing: 5 * 60_000,
+  identity: 2 * 60_000,
+  money: 5 * 60_000,
+  card: 5 * 60_000,
 };
-
-interface Watch {
-  from: OrderPhase;
-  stop: AbortController;
-  done: Promise<void>;
-}
 
 export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountChanged, onChangeLimits, onLinked }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -67,7 +61,8 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
   const [sending, setSending] = useState(false);
   const end = useRef<HTMLDivElement>(null);
   const inflight = useRef(new Map<string, Promise<OrderView | null>>());
-  const watches = useRef(new Map<string, Watch>());
+  /** For each order Tiny is waiting on: the phase it was in when the wait began, and the stall timer. */
+  const expecting = useRef(new Map<string, { from: OrderPhase; timer: ReturnType<typeof setTimeout> }>());
   const seeded = useRef(false);
 
   // The orders already made appear in the chat once, when the list first arrives.
@@ -87,21 +82,43 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
     end.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages.length]);
 
-  // Leaving the chat (signing out) stops every watch.
+  // Leaving the chat (signing out) clears every wait.
   useEffect(
     () => () => {
-      for (const w of watches.current.values()) w.stop.abort();
-      watches.current.clear();
+      for (const w of expecting.current.values()) clearTimeout(w.timer);
+      expecting.current.clear();
     },
     [],
   );
+
+  // A checkout notice that came with a pushed order (Tiny tried the card when Perflo said it was ready).
+  useEffect(
+    () =>
+      onLive((message) => {
+        if (message.type === 'order') setNotices((all) => ({ ...all, [message.order.id]: message.notice }));
+      }),
+    [],
+  );
+
+  // A wait ends when the order moves on, which Perflo's webhook tells Tiny's server and the page hears.
+  useEffect(() => {
+    for (const [id, wait] of expecting.current) {
+      const order = orders[id];
+      if (order && order.phase !== wait.from) {
+        clearTimeout(wait.timer);
+        expecting.current.delete(id);
+        setWaiting((all) => ({ ...all, [id]: null }));
+        setNotes((all) => ({ ...all, [id]: '' }));
+      }
+    }
+  }, [orders]);
 
   const setFor = <T,>(set: (f: (all: Record<string, T>) => Record<string, T>) => void, id: string, value: T) =>
     set((all) => ({ ...all, [id]: value }));
 
   /**
    * One step forward for an order. A second call while one is on its way joins it, so a
-   * double click or a watch look never sends the same request twice.
+   * double click never sends the same request twice.
    */
   const advance = useCallback(
     (id: string, action: Action): Promise<OrderView | null> => {
@@ -130,56 +147,22 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
   );
 
   /**
-   * Keeps looking at an order until it leaves `from`, for a bounded time. One watch per order:
-   * asking again for the same wait joins it; `restart` looks again now. A new watch waits for
-   * the old one to stop, so looks never overlap.
+   * The person did something Perflo answers later (paid, finished the ID check, signed in again):
+   * show that Tiny is waiting, until the order moves on. If it has not after a while, say so calmly.
    */
-  const watch = useCallback(
-    (id: string, from: OrderPhase, restart = false): Promise<void> => {
-      const previous = watches.current.get(id);
-      if (previous && previous.from === from && !restart) return previous.done;
-      const plan = WATCH[from];
-      if (!plan) return Promise.resolve();
-      const stop = new AbortController();
-      const done = (async () => {
-        if (previous) {
-          previous.stop.abort();
-          await previous.done;
-        }
-        if (stop.signal.aborted) return;
-        setFor(setWaiting, id, plan.waiting);
-        setFor(setNotes, id, '');
-        try {
-          const result = await poll({
-            look: () => advance(id, 'watch'),
-            settled: (order) => !order || order.phase !== from,
-            delay: plan.delay,
-            budgetMs: plan.budgetMs,
-            signal: stop.signal,
-            visibility: pageVisibility,
-          });
-          if (result === 'gave_up') setFor(setNotes, id, stalledText(plan.waiting));
-        } finally {
-          if (watches.current.get(id)?.stop === stop) {
-            watches.current.delete(id);
-            setFor(setWaiting, id, null);
-          }
-        }
-      })();
-      watches.current.set(id, { from, stop, done });
-      return done;
-    },
-    [advance],
-  );
-
-  const stopWatching = async (id: string) => {
-    const current = watches.current.get(id);
-    if (!current) return;
-    watches.current.delete(id);
-    current.stop.abort();
-    setFor(setWaiting, id, null);
-    await current.done;
-  };
+  const expect = useCallback((id: string, from: OrderPhase, what: Waiting) => {
+    const previous = expecting.current.get(id);
+    if (previous) clearTimeout(previous.timer);
+    const timer = setTimeout(() => {
+      if (expecting.current.get(id)?.timer !== timer) return;
+      expecting.current.delete(id);
+      setWaiting((all) => ({ ...all, [id]: null }));
+      setNotes((all) => ({ ...all, [id]: stalledText(what) }));
+    }, STALL_MS[what]);
+    expecting.current.set(id, { from, timer });
+    setWaiting((all) => ({ ...all, [id]: what }));
+    setNotes((all) => ({ ...all, [id]: '' }));
+  }, []);
 
   const send = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -219,7 +202,6 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
 
   /** Stays on "Cancelling..." while payments is briefly busy, and keeps sending the cancel (safe to repeat). */
   const cancelCard = async (id: string, perfloOrderId: string) => {
-    await stopWatching(id);
     setFor(setActions, id, 'cancel');
     setFor(setErrors, id, '');
     setFor(setSlowCancels, id, false);
@@ -265,7 +247,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
               cancelSlow={slowCancels[m.orderId] ?? false}
               perfloOrigin={perfloOrigin}
               onAdvance={(action) => advance(m.orderId, action)}
-              onWatch={(from, restart) => watch(m.orderId, from, restart)}
+              onExpect={(from, what) => expect(m.orderId, from, what)}
               onDiscard={() => void discard(m.orderId)}
               onCancelCard={(perfloOrderId) => void cancelCard(m.orderId, perfloOrderId)}
               onChangeLimits={onChangeLimits}
@@ -320,7 +302,8 @@ interface CardProps {
   cancelSlow: boolean;
   perfloOrigin: string;
   onAdvance: (action: Action) => Promise<OrderView | null>;
-  onWatch: (from: OrderPhase, restart?: boolean) => Promise<void>;
+  /** Show that Tiny is waiting for Perflo's word on this order, until it moves on. */
+  onExpect: (from: OrderPhase, what: Waiting) => void;
   onDiscard: () => void;
   onCancelCard: (perfloOrderId: string) => void;
   onChangeLimits: () => void;
@@ -329,19 +312,18 @@ interface CardProps {
 }
 
 export function OrderCard(props: CardProps) {
-  const { order, action, waiting, note, error, perfloOrigin, onAdvance, onWatch } = props;
+  const { order, action, waiting, note, error, perfloOrigin, onAdvance, onExpect } = props;
   const [frameOpen, setFrameOpen] = useState(false);
   const card = useRef<HTMLElement>(null);
   useFocusWhenClosed(frameOpen, card);
   const amount = formatUsd(order.amountCents);
   const busy = action !== null;
 
-  // A card being made finishes on its own: keep looking while it does. Only when the phase changes:
-  // after a watch gave up, it starts again only when the person asks.
-  const watchLatest = useRef(onWatch);
-  watchLatest.current = onWatch;
+  // A card being made finishes on its own, and Perflo says so: wait for it without asking.
+  const expectLatest = useRef(onExpect);
+  expectLatest.current = onExpect;
   useEffect(() => {
-    if (order.phase === 'issuing') void watchLatest.current('issuing');
+    if (order.phase === 'issuing') expectLatest.current('issuing', 'card');
   }, [order.phase]);
 
   const onFrameEvent = (event: FrameEventPayload) => {
@@ -349,7 +331,7 @@ export function OrderCard(props: CardProps) {
     if (event.type === 'perflo:top_up_completed' && (!event.order_id || event.order_id === order.perfloOrderId)) {
       setFrameOpen(false);
       props.onAccountChanged();
-      void onWatch('payment_required', true);
+      onExpect('payment_required', 'money');
     }
   };
 
@@ -413,8 +395,11 @@ export function OrderCard(props: CardProps) {
             onLinked={async () => {
               props.onLinked();
               props.onAccountChanged();
-              if (order.phase === 'login_required') await onWatch('login_required', true);
-              else await onAdvance('place');
+              if (order.phase === 'login_required') {
+                onExpect('login_required', 'placing');
+                // One look now: the order may already have gone ahead while the frame was closing.
+                await onAdvance('check');
+              } else await onAdvance('place');
             }}
             onExpired={() => void onAdvance('check')}
           />
@@ -473,9 +458,12 @@ export function OrderCard(props: CardProps) {
             <button
               className="secondary"
               disabled={busy || waiting === 'identity'}
-              onClick={() => void onWatch('identity_check_required', true)}
+              onClick={() => {
+                onExpect('identity_check_required', 'identity');
+                void onAdvance('check');
+              }}
             >
-              {waiting === 'identity' ? 'Checking...' : 'I have finished, try again'}
+              {waiting === 'identity' || action === 'check' ? 'Checking...' : 'I have finished, try again'}
             </button>
           </div>
         </>
@@ -485,8 +473,8 @@ export function OrderCard(props: CardProps) {
       body = (
         <>
           {!waiting && <p>{waitingText('card')}</p>}
-          <button className="secondary" disabled={busy} onClick={() => void onWatch('issuing', true)}>
-            Check again
+          <button className="secondary" disabled={busy} onClick={() => void onAdvance('check')}>
+            {action === 'check' ? 'Checking...' : 'Check again'}
           </button>
         </>
       );

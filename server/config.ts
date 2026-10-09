@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { KEY_VERSION_PATTERN, PARTNER_ID_PATTERN, SECRET_PATTERN, type PartnerCredentials } from './signing.js';
 
 /**
@@ -31,7 +32,16 @@ export interface DemoConfig {
    * host forwards.
    */
   publicOrigin: string | null;
+  /**
+   * The secret Perflo signs webhooks with (PERFLO_WEBHOOK_SECRET): shown in Perflo Builder once a
+   * webhook address is saved. Not the partner API secret. In mock mode, a fresh one per run when unset,
+   * which the mock payments service signs with too.
+   */
+  webhookSecret: string;
 }
+
+/** Webhook secrets as Perflo Builder shows them: whsec_ then 32 random bytes, base64url. */
+export const WEBHOOK_SECRET_PATTERN = /^whsec_[A-Za-z0-9_-]{43}$/;
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -87,6 +97,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DemoConfig {
     throw new ConfigError('PARTNER_SECRET must be 43 base64url characters');
   }
 
+  const rawWebhookSecret = env.PERFLO_WEBHOOK_SECRET?.trim();
+  let webhookSecret: string;
+  if (rawWebhookSecret) {
+    // Never echo the value.
+    if (!WEBHOOK_SECRET_PATTERN.test(rawWebhookSecret))
+      throw new ConfigError('PERFLO_WEBHOOK_SECRET must be the whsec_... secret Perflo Builder shows');
+    webhookSecret = rawWebhookSecret;
+  } else if (mode === 'mock') {
+    webhookSecret = `whsec_${randomBytes(32).toString('base64url')}`;
+  } else {
+    throw new ConfigError(
+      'PERFLO_WEBHOOK_SECRET is required in live mode: save the webhook address in Perflo Builder and copy the secret it shows (see README)',
+    );
+  }
+
   return {
     mode,
     perfloApiBase: base.toString().replace(/\/$/, ''),
@@ -95,6 +120,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DemoConfig {
     dataFile: env.DEMO_DATA_FILE?.trim() || 'data/demo-store.json',
     listen,
     publicOrigin: publicOriginFrom(env, listen),
+    webhookSecret,
   };
 }
 

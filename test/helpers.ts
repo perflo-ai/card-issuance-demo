@@ -17,18 +17,23 @@ export const CREDS = {
   secret: 'dGlueS1kZW1vLXNpZ25pbmctdmVjdG9yLXNlY3JldDA',
 };
 export const PARTNER_ORIGIN = 'https://localhost:5174';
+/** The webhook secret tests sign and check with, in the shape Perflo Builder shows. */
+export const WEBHOOK_SECRET = 'whsec_dGlueS1kZW1vLXdlYmhvb2stdGVzdC1zZWNyZXQtMDA';
 /** Where the test browser says it is (Host header and Origin). */
 export const TEST_HOST = 'tiny.test';
 export const TEST_ORIGIN = `https://${TEST_HOST}`;
 
-export async function startMock(slowIssueMs = 50): Promise<{ base: string; close: () => Promise<void> }> {
+export async function startMock(
+  slowIssueMs = 50,
+  webhook?: { url: string; secret: string },
+): Promise<{ base: string; close: () => Promise<void> }> {
   let handler: RequestListener = () => undefined;
   const server = createServer((req, res) => handler(req, res));
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   const address = server.address();
   if (typeof address !== 'object' || address === null) throw new Error('no port');
   const base = `http://127.0.0.1:${address.port}`;
-  handler = createMockPerflo({ ...CREDS, selfOrigin: base, partnerOrigin: PARTNER_ORIGIN, slowIssueMs });
+  handler = createMockPerflo({ ...CREDS, selfOrigin: base, partnerOrigin: PARTNER_ORIGIN, slowIssueMs, ...(webhook ? { webhook } : {}) });
   return { base, close: () => new Promise<void>((done) => server.close(() => done())) };
 }
 
@@ -131,6 +136,7 @@ export function makeDemo(base: string, mode: 'mock' | 'live' = 'mock') {
     dataFile,
     listen: { kind: 'local' },
     publicOrigin: TEST_ORIGIN,
+    webhookSecret: WEBHOOK_SECRET,
   };
   const log = new EventLog();
   const store = new Store(dataFile);
