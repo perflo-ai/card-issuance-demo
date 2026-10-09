@@ -36,9 +36,15 @@ export const CANCEL_BUDGET_MS = 2 * 60_000;
  */
 const TRY_AGAIN: ReadonlySet<number> = new Set([0, 503, 504]);
 
+/**
+ * The longest Retry-After honoured: a longer one would leave the person on "Cancelling..." past the two
+ * minutes, so the wait is cut here and the budget then ends the tries with the calm message.
+ */
+const RETRY_AFTER_MAX_MS = 60_000;
+
 function delayAfter(attempt: number, retryAfterMs: number | null): number {
   const planned = CANCEL_RETRY_DELAYS_MS[Math.min(attempt, CANCEL_RETRY_DELAYS_MS.length - 1)] ?? 20_000;
-  return retryAfterMs === null ? planned : Math.max(planned, retryAfterMs);
+  return retryAfterMs === null ? planned : Math.max(planned, Math.min(retryAfterMs, RETRY_AFTER_MAX_MS));
 }
 
 /**

@@ -60,6 +60,14 @@ describe('cancelling a card while payments is briefly busy', () => {
     expect(sentAt).toEqual([0, 10_000]);
   });
 
+  it('never waits more than a minute for one Retry-After, so the person is not left on "Cancelling..."', async () => {
+    const { send, sentAt } = scripted([new ApiError(503, 'x', 3_600_000), done]);
+    const outcome = cancelUntilDone(send);
+    await vi.runAllTimersAsync();
+    expect((await outcome).kind).toBe('cancelled');
+    expect(sentAt).toEqual([0, 60_000]);
+  });
+
   it('a refusal that will not change (already finished) is shown at once with its own message, never retried', async () => {
     const { send } = scripted([new ApiError(409, 'This order can no longer be cancelled.')]);
     const outcome = cancelUntilDone(send).catch((e: unknown) => e);
