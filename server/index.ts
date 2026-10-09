@@ -25,12 +25,7 @@ function tls(): ServerOptions {
   return { cert: readFileSync(CERT), key: readFileSync(KEY) };
 }
 
-function listen(
-  server: ReturnType<typeof createHttpServer>,
-  port: number,
-  label: string,
-  host = 'localhost',
-): Promise<void> {
+function listen(server: ReturnType<typeof createHttpServer>, port: number, label: string, host = 'localhost'): Promise<void> {
   return new Promise((done, fail) => {
     server.once('error', (error: NodeJS.ErrnoException) =>
       fail(error.code === 'EADDRINUSE' ? new ConfigError(`Port ${port} (${label}) is already in use`) : error),

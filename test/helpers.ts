@@ -65,7 +65,12 @@ export async function signedFetch(
 /** A reveal link read the way a partner must: signed over GET and the link's path, with the person's token. */
 export function revealFetch(url: string, token: string | null, secret = CREDS.secret) {
   const parsed = new URL(url);
-  const headers: Record<string, string> = signatureHeaders({ ...CREDS, secret }, 'GET', `${parsed.pathname}${parsed.search}`, Buffer.alloc(0));
+  const headers: Record<string, string> = signatureHeaders(
+    { ...CREDS, secret },
+    'GET',
+    `${parsed.pathname}${parsed.search}`,
+    Buffer.alloc(0),
+  );
   if (token) headers.Authorization = `Bearer ${token}`;
   return fetch(url, { headers });
 }

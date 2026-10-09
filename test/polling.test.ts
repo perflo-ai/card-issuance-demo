@@ -107,7 +107,14 @@ describe('poll', () => {
   it('stops while hidden when the caller stops it, and leaves no listener behind', async () => {
     const p = page();
     const stop = new AbortController();
-    const end = poll({ look: async () => 1, settled: () => false, delay: () => 10, budgetMs: 60_000, signal: stop.signal, visibility: p.visibility });
+    const end = poll({
+      look: async () => 1,
+      settled: () => false,
+      delay: () => 10,
+      budgetMs: 60_000,
+      signal: stop.signal,
+      visibility: p.visibility,
+    });
     p.hide();
     await vi.advanceTimersByTimeAsync(10);
     expect(p.listeners.size).toBe(1);
@@ -117,7 +124,14 @@ describe('poll', () => {
   });
 
   it('a failing look ends the poll and reaches the caller', async () => {
-    const end = poll({ look: async () => { throw new Error('unreachable'); }, settled: () => false, delay: () => 10, budgetMs: 1000 });
+    const end = poll({
+      look: async () => {
+        throw new Error('unreachable');
+      },
+      settled: () => false,
+      delay: () => 10,
+      budgetMs: 1000,
+    });
     await expect(end).rejects.toThrow('unreachable');
   });
 });

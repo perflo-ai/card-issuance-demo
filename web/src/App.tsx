@@ -27,7 +27,10 @@ export function App() {
   const [signingOut, setSigningOut] = useState(false);
 
   useOnMount(() => {
-    api.config().then(setConfig).catch(() => setFatal('Tiny is not reachable. Is the demo server running?'));
+    api
+      .config()
+      .then(setConfig)
+      .catch(() => setFatal('Tiny is not reachable. Is the demo server running?'));
     api
       .session()
       .then((r) => setMe(r.user))
@@ -47,8 +50,18 @@ export function App() {
     }
   };
 
-  if (fatal) return <main className="center"><p className="error">{fatal}</p></main>;
-  if (!config || !me) return <main className="center"><p className="muted">Loading...</p></main>;
+  if (fatal)
+    return (
+      <main className="center">
+        <p className="error">{fatal}</p>
+      </main>
+    );
+  if (!config || !me)
+    return (
+      <main className="center">
+        <p className="muted">Loading...</p>
+      </main>
+    );
 
   return (
     <div className="app">
@@ -63,11 +76,7 @@ export function App() {
           </div>
         )}
       </header>
-      {me.linked ? (
-        <Workspace config={config} me={me} onMe={setMe} />
-      ) : (
-        <Connect perfloOrigin={config.perfloOrigin} onConnected={setMe} />
-      )}
+      {me.linked ? <Workspace config={config} me={me} onMe={setMe} /> : <Connect perfloOrigin={config.perfloOrigin} onConnected={setMe} />}
     </div>
   );
 }

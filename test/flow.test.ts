@@ -28,7 +28,14 @@ function browser(demo: ReturnType<typeof makeDemo>) {
   const host = 'tiny.test';
   return {
     post: async (path: string, body: unknown = {}) =>
-      keep(await request(app).post(path).set('Host', host).set('Origin', `https://${host}`).set('Cookie', cookie).send(body as object)),
+      keep(
+        await request(app)
+          .post(path)
+          .set('Host', host)
+          .set('Origin', `https://${host}`)
+          .set('Cookie', cookie)
+          .send(body as object),
+      ),
     get: async (path: string) => keep(await request(app).get(path).set('Host', host).set('Cookie', cookie)),
     cookie: () => cookie,
     raw: app,
@@ -57,7 +64,10 @@ async function advance(b: ReturnType<typeof browser>, id: string): Promise<Order
 /** Setup through the frame, then the frame event the browser forwards. */
 async function setUp(b: ReturnType<typeof browser>, frameUrl: string) {
   await finishSetup(mock.base, frameUrl);
-  const event = await b.post('/demo/frame-events', { type: 'perflo:setup_completed', frame_session_id: new URL(frameUrl).searchParams.get('session') });
+  const event = await b.post('/demo/frame-events', {
+    type: 'perflo:setup_completed',
+    frame_session_id: new URL(frameUrl).searchParams.get('session'),
+  });
   expect(event.body).toEqual({ link: 'linked' });
 }
 
@@ -124,7 +134,8 @@ describe('first order, end to end in mock mode', () => {
     const first = await advance(b, draft.id);
     const again = await advance(b, draft.id);
     expect(again.perfloOrderId).toBe(first.perfloOrderId);
-    const posts = demo.log.forUser(demo.store.ordersFor(Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users)[0])[0].demoUserId)
+    const posts = demo.log
+      .forUser(demo.store.ordersFor(Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users)[0])[0].demoUserId)
       .filter((e) => e.summary.startsWith('POST /partner/v2/orders ->'));
     expect(posts).toHaveLength(1);
   });
@@ -232,7 +243,10 @@ describe('other order states through the demo', () => {
       await signUp(b);
       const start = await b.post('/demo/link/start');
       await finishSetup(slow.base, start.body.frameUrl);
-      await b.post('/demo/frame-events', { type: 'perflo:setup_completed', frame_session_id: new URL(start.body.frameUrl).searchParams.get('session') });
+      await b.post('/demo/frame-events', {
+        type: 'perflo:setup_completed',
+        frame_session_id: new URL(start.body.frameUrl).searchParams.get('session'),
+      });
       const link = await b.post('/demo/top-ups', { amount: '200.00' });
       await payInFrame(slow.base, link.body.frameUrl, '200.00');
       const draft = await ask(b, 'book the 150.00 hotel on united.com');
@@ -405,7 +419,14 @@ describe('demo API guards', () => {
     expect((await b.get('/demo/orders')).status).toBe(401);
     expect((await b.post('/demo/link/start')).status).toBe(401);
     expect(
-      (await request(b.raw).post('/demo/session').set('Host', 'tiny.test').set('Origin', 'https://tiny.test').set('Content-Type', 'text/plain').send('x')).status,
+      (
+        await request(b.raw)
+          .post('/demo/session')
+          .set('Host', 'tiny.test')
+          .set('Origin', 'https://tiny.test')
+          .set('Content-Type', 'text/plain')
+          .send('x')
+      ).status,
     ).toBe(415);
     expect((await b.post('/demo/signup', { first_name: 'A', last_name: 'B', email: 'a@example.com' })).status).toBe(404);
     expect((await b.get('/demo/me')).status).toBe(404);

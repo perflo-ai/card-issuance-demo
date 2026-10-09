@@ -367,7 +367,11 @@ export function createMockPerflo(options: MockOptions) {
         return {
           status: 202,
           // null when the link cannot be made (no verified email yet).
-          body: { ...base, status: 'identity_check_required', kyc_url: user.email ? `${options.selfOrigin}/mock/kyc?ref=${user.kycRef}` : null },
+          body: {
+            ...base,
+            status: 'identity_check_required',
+            kyc_url: user.email ? `${options.selfOrigin}/mock/kyc?ref=${user.kycRef}` : null,
+          },
         };
       }
       case 'issuing':
@@ -426,7 +430,8 @@ export function createMockPerflo(options: MockOptions) {
   const bearerUser = (req: Request): { user: MUser; token: string } | { revoked: MUser } => {
     const header = req.get('authorization') ?? '';
     const token = /^Bearer ([A-Za-z0-9_-]{8,200})$/.exec(header)?.[1];
-    if (token === undefined) throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
+    if (token === undefined)
+      throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
     const live = tokens.get(token);
     if (live) return { user: users.get(live) as MUser, token };
     const revoked = revokedTokens.get(token);
@@ -523,9 +528,7 @@ export function createMockPerflo(options: MockOptions) {
     const user = userFromToken(req, req.params.userId);
     const grant = user.grant as Grant;
     const spent = monthSpent(user.userId);
-    const waitingOnId = [...orders.values()].some(
-      (o) => o.userId === user.userId && o.status === 'identity_check_required',
-    );
+    const waitingOnId = [...orders.values()].some((o) => o.userId === user.userId && o.status === 'identity_check_required');
     const open = [...orders.values()].filter((o) => {
       refresh(o);
       return o.userId === user.userId && o.status === 'ready';
@@ -596,10 +599,13 @@ export function createMockPerflo(options: MockOptions) {
       throw new HttpError(400, 'invalid_request', 'Some order details are missing or not valid.');
     }
     const owner = 'revoked' in who ? who.revoked : who.user;
-    if (owner.userId !== body.data.user_id) throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
+    if (owner.userId !== body.data.user_id)
+      throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
 
     const scope = `ptn:${options.partnerId}:${key}`;
-    const bodyHash = createHash('sha256').update((req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.alloc(0)).digest('hex');
+    const bodyHash = createHash('sha256')
+      .update((req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.alloc(0))
+      .digest('hex');
     const stored = idempotency.get(scope);
     if (stored) {
       if (stored.bodyHash !== bodyHash) {

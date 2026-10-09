@@ -36,12 +36,20 @@ const PAYMENTS: Record<PartnerErrorCode, { status: number; message?: string; ope
   user_token_invalid: { status: 409, message: 'Payments need to be set up again. Send your request once more.' },
   user_not_connected: { status: 409 },
   // Tiny itself: wrong partner id, key version or secret, or this server's clock is off by more than 2 minutes.
-  unauthorized: { status: 502, message: TRY_AGAIN, operatorNote: 'payments refused the partner signature: check PARTNER_ID, PARTNER_KEY_VERSION, PARTNER_SECRET and the clock' },
+  unauthorized: {
+    status: 502,
+    message: TRY_AGAIN,
+    operatorNote: 'payments refused the partner signature: check PARTNER_ID, PARTNER_KEY_VERSION, PARTNER_SECRET and the clock',
+  },
   invalid_request: { status: 502, message: TRY_AGAIN, operatorNote: 'payments refused a request Tiny built: a bug in Tiny' },
   unsupported_media_type: { status: 502, message: TRY_AGAIN, operatorNote: 'payments refused the body type: a bug in Tiny' },
   request_too_large: { status: 502, message: TRY_AGAIN, operatorNote: 'payments refused the body size: a bug in Tiny' },
   idempotency_key_required: { status: 502, message: TRY_AGAIN, operatorNote: 'a write was sent without an Idempotency-Key: a bug in Tiny' },
-  idempotency_key_reused: { status: 502, message: TRY_AGAIN, operatorNote: 'an Idempotency-Key was reused for a different body: a bug in Tiny' },
+  idempotency_key_reused: {
+    status: 502,
+    message: TRY_AGAIN,
+    operatorNote: 'an Idempotency-Key was reused for a different body: a bug in Tiny',
+  },
   // Waits and limits: say so, and when to try again.
   rate_limited: { status: 429 },
   code_send_limited: { status: 429 },
@@ -77,11 +85,19 @@ export function toBrowserError(error: unknown): BrowserError {
     if (!known) {
       return { status: 502, message: TRY_AGAIN, operatorNote: `payments answered an undocumented code (HTTP ${error.httpStatus})` };
     }
-    return { status: known.status, message: known.message ?? error.message, ...(known.operatorNote ? { operatorNote: known.operatorNote } : {}) };
+    return {
+      status: known.status,
+      message: known.message ?? error.message,
+      ...(known.operatorNote ? { operatorNote: known.operatorNote } : {}),
+    };
   }
   // express.json(): a body that is not JSON, or too large.
   const parserStatus = (error as { status?: unknown; type?: unknown } | null)?.status;
   if (parserStatus === 413) return { status: 413, message: 'This request is too large.' };
   if (error instanceof SyntaxError || parserStatus === 400) return { status: 400, message: 'The request could not be read.' };
-  return { status: 500, message: 'Something went wrong. Try again.', operatorNote: error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error' };
+  return {
+    status: 500,
+    message: 'Something went wrong. Try again.',
+    operatorNote: error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error',
+  };
 }

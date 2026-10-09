@@ -62,18 +62,28 @@ describe('signature check', () => {
 
 describe('users and logins', () => {
   it('login_required, then approved with the token exactly once', async () => {
-    const created = await signedFetch(mock.base, 'POST', '/partner/v2/users', { body: { external_user_id: 'ext-1', email: 'ada@example.com' } });
+    const created = await signedFetch(mock.base, 'POST', '/partner/v2/users', {
+      body: { external_user_id: 'ext-1', email: 'ada@example.com' },
+    });
     expect(created.status).toBe(202);
     expect(created.json).toMatchObject({ status: 'login_required', login_id: expect.stringMatching(/^lg_/) });
     expect(created.json.login_url).toContain('/partner/v2/frames/setup?session=fs_');
 
     expect((await signedFetch(mock.base, 'GET', `/partner/v2/logins/${created.json.login_id}`)).json).toEqual({ status: 'pending' });
     // The frame knows the email, so the code is already sent: the first step is the code.
-    expect((await frameCall(mock.base, created.json.login_url, 'state')).json).toMatchObject({ purpose: 'setup', step: 'login', email_masked: 'a***@example.com' });
+    expect((await frameCall(mock.base, created.json.login_url, 'state')).json).toMatchObject({
+      purpose: 'setup',
+      step: 'login',
+      email_masked: 'a***@example.com',
+    });
     await finishSetup(mock.base, created.json.login_url);
 
     const first = await signedFetch(mock.base, 'GET', `/partner/v2/logins/${created.json.login_id}`);
-    expect(first.json).toMatchObject({ status: 'approved', user_id: expect.stringMatching(/^usr_/), user_access_token: expect.stringMatching(/^ptk_test_/) });
+    expect(first.json).toMatchObject({
+      status: 'approved',
+      user_id: expect.stringMatching(/^usr_/),
+      user_access_token: expect.stringMatching(/^ptk_test_/),
+    });
     const second = await signedFetch(mock.base, 'GET', `/partner/v2/logins/${created.json.login_id}`);
     expect(second.json).toEqual({ status: 'approved', user_id: first.json.user_id });
   });
@@ -88,18 +98,24 @@ describe('users and logins', () => {
     expect(reissued.json.user_access_token).toMatch(/^ptk_test_/);
     expect(reissued.json.user_access_token).not.toBe(token);
     expect((await signedFetch(mock.base, 'GET', `/partner/v2/users/${userId}`, { token })).status).toBe(401);
-    expect((await signedFetch(mock.base, 'GET', `/partner/v2/users/${userId}`, { token: reissued.json.user_access_token })).status).toBe(200);
+    expect((await signedFetch(mock.base, 'GET', `/partner/v2/users/${userId}`, { token: reissued.json.user_access_token })).status).toBe(
+      200,
+    );
   });
 
   it('never grants access by email alone: a new external id must sign in', async () => {
     await linkedUser('ext-1', 'ada@example.com');
-    const other = await signedFetch(mock.base, 'POST', '/partner/v2/users', { body: { external_user_id: 'ext-2', email: 'ada@example.com' } });
+    const other = await signedFetch(mock.base, 'POST', '/partner/v2/users', {
+      body: { external_user_id: 'ext-2', email: 'ada@example.com' },
+    });
     expect(other.status).toBe(202);
     expect(other.json.status).toBe('login_required');
   });
 
   it('a wrong code is refused in plain words', async () => {
-    const created = await signedFetch(mock.base, 'POST', '/partner/v2/users', { body: { external_user_id: 'ext-1', email: 'ada@example.com' } });
+    const created = await signedFetch(mock.base, 'POST', '/partner/v2/users', {
+      body: { external_user_id: 'ext-1', email: 'ada@example.com' },
+    });
     const wrong = await frameCall(mock.base, created.json.login_url, 'login', { privy_access_token: 'mock-otp:000000' });
     expect(wrong.status).toBe(401);
     expect(wrong.json.error.message).toBe('That code is not right. Check it and try again.');
@@ -151,7 +167,13 @@ describe('orders', () => {
     const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '100.00');
     const placed = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '20.00') });
     expect(placed.status).toBe(201);
-    expect(placed.json).toMatchObject({ status: 'ready', card_id: expect.any(String), reveal_url: expect.any(String), reveal_expires_at: expect.any(String), card_expires_at: expect.any(String) });
+    expect(placed.json).toMatchObject({
+      status: 'ready',
+      card_id: expect.any(String),
+      reveal_url: expect.any(String),
+      reveal_expires_at: expect.any(String),
+      card_expires_at: expect.any(String),
+    });
     // Refused the same way whatever is wrong, and the link stays usable after each refusal.
     const other = await linkedUser('ext-2', 'grace@example.com');
     for (const refused of [
@@ -165,7 +187,10 @@ describe('orders', () => {
     }
     const reveal = await revealFetch(placed.json.reveal_url, token);
     const body = await reveal.json();
-    expect(body).toMatchObject({ success: true, data: { card_number: expect.stringMatching(/^[0-9]{16}$/), cvv: expect.stringMatching(/^[0-9]{3}$/), last4: placed.json.last4 } });
+    expect(body).toMatchObject({
+      success: true,
+      data: { card_number: expect.stringMatching(/^[0-9]{16}$/), cvv: expect.stringMatching(/^[0-9]{3}$/), last4: placed.json.last4 },
+    });
     expect((await revealFetch(placed.json.reveal_url, token)).status).toBe(404);
     const fresh = await signedFetch(mock.base, 'POST', `/partner/v2/orders/${placed.json.order_id}/card-reveal`, { token });
     expect(fresh.status).toBe(201);
@@ -224,13 +249,20 @@ describe('orders', () => {
     const placed = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '20.00') });
     const cancelled = await signedFetch(mock.base, 'POST', `/partner/v2/orders/${placed.json.order_id}/cancel`, { token });
     expect(cancelled.json).toEqual({ status: 'cancelled', amount_returned: centsToApiAmount(quote(2000).loadCents) });
-    expect((await signedFetch(mock.base, 'GET', `/partner/v2/orders/${placed.json.order_id}`)).json).toEqual({ order_id: placed.json.order_id, status: 'cancelled' });
+    expect((await signedFetch(mock.base, 'GET', `/partner/v2/orders/${placed.json.order_id}`)).json).toEqual({
+      order_id: placed.json.order_id,
+      status: 'cancelled',
+    });
     expect((await signedFetch(mock.base, 'POST', `/partner/v2/orders/${placed.json.order_id}/cancel`, { token })).status).toBe(409);
   });
 
   it('a revoked grant gives 202 login_required on orders and 401 elsewhere; login resumes the order', async () => {
     const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '100.00');
-    await fetch(`${mock.base}/mock/control/revoke`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId }) });
+    await fetch(`${mock.base}/mock/control/revoke`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId }),
+    });
     expect((await signedFetch(mock.base, 'GET', `/partner/v2/users/${userId}`, { token })).status).toBe(401);
     const placed = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '20.00') });
     expect(placed.status).toBe(202);
@@ -243,7 +275,11 @@ describe('orders', () => {
 
   it('an unknown token is 401', async () => {
     const { userId } = await linkedUser();
-    const placed = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token: 'ptk_test_unknown_token', idem: 'k', body: order(userId, '1.00') });
+    const placed = await signedFetch(mock.base, 'POST', '/partner/v2/orders', {
+      token: 'ptk_test_unknown_token',
+      idem: 'k',
+      body: order(userId, '1.00'),
+    });
     expect(placed.status).toBe(401);
   });
 
@@ -267,7 +303,9 @@ describe('orders', () => {
 
 describe('frames', () => {
   it('pages allow embedding only by the partner origin and carry no inline script', async () => {
-    const created = await signedFetch(mock.base, 'POST', '/partner/v2/users', { body: { external_user_id: 'ext-1', email: 'ada@example.com' } });
+    const created = await signedFetch(mock.base, 'POST', '/partner/v2/users', {
+      body: { external_user_id: 'ext-1', email: 'ada@example.com' },
+    });
     const page = await fetch(created.json.login_url);
     expect(page.headers.get('content-security-policy')).toContain('frame-ancestors https://localhost:5174');
     const html = await page.text();
@@ -276,7 +314,9 @@ describe('frames', () => {
   });
 
   it('limits must be chosen and per order cannot exceed per month', async () => {
-    const created = await signedFetch(mock.base, 'POST', '/partner/v2/users', { body: { external_user_id: 'ext-1', email: 'ada@example.com' } });
+    const created = await signedFetch(mock.base, 'POST', '/partner/v2/users', {
+      body: { external_user_id: 'ext-1', email: 'ada@example.com' },
+    });
     await frameCall(mock.base, created.json.login_url, 'login', { privy_access_token: 'mock-otp:123456' });
     expect((await frameCall(mock.base, created.json.login_url, 'limits', {})).status).toBe(400);
     expect((await frameCall(mock.base, created.json.login_url, 'limits', { per_order: '2500.00', per_month: '1000.00' })).status).toBe(400);
@@ -317,14 +357,22 @@ describe('replays and frame sessions (bapi final behaviour)', () => {
 
   it('a POST /users replay never carries a token', async () => {
     const { userId } = await linkedUser();
-    const first = await signedFetch(mock.base, 'POST', '/partner/v2/users', { idem: 'u1', body: { external_user_id: 'ext-1', reissue: true } });
+    const first = await signedFetch(mock.base, 'POST', '/partner/v2/users', {
+      idem: 'u1',
+      body: { external_user_id: 'ext-1', reissue: true },
+    });
     expect(first.json.user_access_token).toMatch(/^ptk_test_/);
-    const replay = await signedFetch(mock.base, 'POST', '/partner/v2/users', { idem: 'u1', body: { external_user_id: 'ext-1', reissue: true } });
+    const replay = await signedFetch(mock.base, 'POST', '/partner/v2/users', {
+      idem: 'u1',
+      body: { external_user_id: 'ext-1', reissue: true },
+    });
     expect(replay).toEqual({ status: 200, json: { status: 'approved', user_id: userId } });
   });
 
   it('frame actions take the session in X-Perflo-Frame-Session, not in the path', async () => {
-    const created = await signedFetch(mock.base, 'POST', '/partner/v2/users', { body: { external_user_id: 'ext-1', email: 'ada@example.com' } });
+    const created = await signedFetch(mock.base, 'POST', '/partner/v2/users', {
+      body: { external_user_id: 'ext-1', email: 'ada@example.com' },
+    });
     const session = new URL(created.json.login_url).searchParams.get('session') as string;
     expect(session).toMatch(/^fs_[A-Za-z0-9_-]{43}$/);
     expect((await fetch(`${mock.base}/partner/v2/frames/${session}/state`)).status).not.toBe(200);

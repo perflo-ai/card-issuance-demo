@@ -4,7 +4,13 @@ import { readFrameEvent } from '../web/src/frameEvents.js';
 describe('readFrameEvent (browser side of SPEC 8 postMessage)', () => {
   it('accepts the object payload and keeps only known id fields', () => {
     expect(
-      readFrameEvent({ type: 'perflo:top_up_completed', frame_session_id: 'fs_1', top_up_id: 'tu_1', order_id: 'ord_1', user_access_token: 'x' }),
+      readFrameEvent({
+        type: 'perflo:top_up_completed',
+        frame_session_id: 'fs_1',
+        top_up_id: 'tu_1',
+        order_id: 'ord_1',
+        user_access_token: 'x',
+      }),
     ).toEqual({ type: 'perflo:top_up_completed', frame_session_id: 'fs_1', top_up_id: 'tu_1', order_id: 'ord_1' });
     expect(readFrameEvent({ type: 'perflo:error', frame_session_id: 'fs_1', code: 'frame_expired' })).toEqual({
       type: 'perflo:error',

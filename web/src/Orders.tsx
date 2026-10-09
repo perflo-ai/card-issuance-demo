@@ -18,9 +18,7 @@ interface Props {
 
 /** Orders that were sent to payments, newest first. Drafts never left the chat. */
 function sentOrders(orders: OrderView[]): OrderView[] {
-  return orders
-    .filter((o) => o.phase !== 'draft' && o.phase !== 'discarded')
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return orders.filter((o) => o.phase !== 'draft' && o.phase !== 'discarded').sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: Props) {
@@ -87,11 +85,7 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
                       expMonth={order.checkout?.expMonth}
                       expYear={order.checkout?.expYear}
                     />
-                    <button
-                      className="link"
-                      disabled={cancelling !== null}
-                      onClick={() => void cancelCard(order.perfloOrderId as string)}
-                    >
+                    <button className="link" disabled={cancelling !== null} onClick={() => void cancelCard(order.perfloOrderId as string)}>
                       {cancelling === order.perfloOrderId ? 'Cancelling...' : 'Cancel card'}
                     </button>
                   </>

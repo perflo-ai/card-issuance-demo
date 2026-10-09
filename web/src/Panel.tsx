@@ -262,7 +262,9 @@ export function Panel(props: Props) {
           </label>
           {linked && (
             <>
-              <p className="muted small">Acts as if you turned off Tiny&apos;s access yourself, so the next order asks you to sign in again.</p>
+              <p className="muted small">
+                Acts as if you turned off Tiny&apos;s access yourself, so the next order asks you to sign in again.
+              </p>
               <button className="secondary" disabled={busy !== null} onClick={() => void revoke()}>
                 {busy === 'revoke' ? 'Turning off...' : "Turn off Tiny's access"}
               </button>
@@ -311,8 +313,8 @@ function DeveloperLog() {
     <section className="box log" aria-label="Developer log">
       <h2>Developer log</h2>
       <p className="muted small">
-        What Tiny&apos;s server sent and received, one line per change: a status read again with the same answer is not repeated.
-        Access tokens, card details and link codes are removed.
+        What Tiny&apos;s server sent and received, one line per change: a status read again with the same answer is not repeated. Access
+        tokens, card details and link codes are removed.
       </p>
       {error && <p className="error">{error}</p>}
       <ol>

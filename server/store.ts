@@ -83,9 +83,7 @@ export class Store {
   private data: StoreShape;
 
   constructor(private readonly file: string) {
-    this.data = existsSync(file)
-      ? (JSON.parse(readFileSync(file, 'utf8')) as StoreShape)
-      : { sessions: {}, users: {}, orders: {} };
+    this.data = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as StoreShape) : { sessions: {}, users: {}, orders: {} };
     let changed = false;
     const now = Date.now();
     for (const [sid, record] of Object.entries(this.data.sessions as Record<string, SessionRecord | string>)) {
@@ -259,10 +257,7 @@ export class Store {
   }
 
   orderByPerfloId(demoUserId: string, perfloOrderId: string): DemoOrder | null {
-    return (
-      Object.values(this.data.orders).find((o) => o.demoUserId === demoUserId && o.perfloOrderId === perfloOrderId) ??
-      null
-    );
+    return Object.values(this.data.orders).find((o) => o.demoUserId === demoUserId && o.perfloOrderId === perfloOrderId) ?? null;
   }
 
   ordersFor(demoUserId: string): DemoOrder[] {

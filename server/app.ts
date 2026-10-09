@@ -72,10 +72,15 @@ export function chatReply(text: string): { reply: string; intent?: ReturnType<ty
     if (parsed.problem === 'amount_zero') return { reply: 'The amount needs to be more than $0.00.' };
     if (parsed.problem === 'amount_too_large') return { reply: 'That amount is too large for one order.' };
     if (parsed.missing.includes('amount') && parsed.missing.includes('merchant')) {
-      return { reply: 'Tell me what to buy, how much to spend and on which website. For example: buy me $50 worth of headphones on amazon.' };
+      return {
+        reply: 'Tell me what to buy, how much to spend and on which website. For example: buy me $50 worth of headphones on amazon.',
+      };
     }
     if (parsed.missing.includes('amount')) {
-      return { reply: 'How much should I spend? Send the whole request again with the amount, for example: buy me $50 worth of headphones on amazon.' };
+      return {
+        reply:
+          'How much should I spend? Send the whole request again with the amount, for example: buy me $50 worth of headphones on amazon.',
+      };
     }
     return { reply: 'Which website should I buy from? Send the request again with the website, for example: on amazon.com.' };
   }
@@ -188,7 +193,10 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
 
   app.post('/demo/chat', (req, res) => {
     const user = currentUser(req);
-    const body = z.object({ text: z.string().max(500) }).strict().safeParse(req.body);
+    const body = z
+      .object({ text: z.string().max(500) })
+      .strict()
+      .safeParse(req.body);
     if (!body.success) throw new HttpError(400, 'Message is too long.');
     const { reply, intent } = chatReply(body.data.text);
     if (!intent) return res.json({ reply });
@@ -285,7 +293,10 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
 
   app.post('/demo/top-ups', async (req, res) => {
     const user = currentUser(req);
-    const body = z.object({ amount: z.string().max(20).optional() }).strict().safeParse(req.body);
+    const body = z
+      .object({ amount: z.string().max(20).optional() })
+      .strict()
+      .safeParse(req.body);
     if (!body.success) throw new HttpError(400, 'Enter an amount.');
     let cents: number | undefined;
     if (body.data.amount !== undefined && body.data.amount !== '') {
@@ -356,7 +367,11 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
   app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     const failure = toBrowserError(error);
     if (failure.operatorNote) {
-      logger[failure.status >= 500 ? 'error' : 'warn']('request failed', { request_id: req.requestId, status: failure.status, note: failure.operatorNote });
+      logger[failure.status >= 500 ? 'error' : 'warn']('request failed', {
+        request_id: req.requestId,
+        status: failure.status,
+        note: failure.operatorNote,
+      });
     }
     res.status(failure.status).json({ error: { message: failure.message } });
   });

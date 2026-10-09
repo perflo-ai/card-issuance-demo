@@ -29,9 +29,9 @@ describe('loadConfig: where the demo listens', () => {
   });
 
   it('mock mode stays on this computer: its test payments service lives on localhost', () => {
-    expect(() =>
-      loadConfig({ ...LIVE, DEMO_MODE: 'mock', PERFLO_API_BASE: 'https://localhost:8791', PORT: '8080' }),
-    ).toThrow('Mock mode only runs on this computer. Set DEMO_MODE=live to host the demo.');
+    expect(() => loadConfig({ ...LIVE, DEMO_MODE: 'mock', PERFLO_API_BASE: 'https://localhost:8791', PORT: '8080' })).toThrow(
+      'Mock mode only runs on this computer. Set DEMO_MODE=live to host the demo.',
+    );
   });
 });
 

@@ -1,13 +1,4 @@
-import type {
-  AccountView,
-  CardDetailsView,
-  DemoConfigView,
-  LinkStatus,
-  LogEntry,
-  MeView,
-  Notice,
-  OrderView,
-} from '../../server/views';
+import type { AccountView, CardDetailsView, DemoConfigView, LinkStatus, LogEntry, MeView, Notice, OrderView } from '../../server/views';
 
 export class ApiError extends Error {
   constructor(

@@ -97,7 +97,10 @@ describe('views before Perflo has the order', () => {
   });
 
   it('shows the setup frame while the one-time setup is pending', () => {
-    const pending = user({ perflo: null, pendingLogin: { loginId: 'lg_1', loginUrl: 'https://p.example/setup?session=fs', orderId: null } });
+    const pending = user({
+      perflo: null,
+      pendingLogin: { loginId: 'lg_1', loginUrl: 'https://p.example/setup?session=fs', orderId: null },
+    });
     expect(toView(order({ state: 'placing', perfloOrderId: null }), pending)).toMatchObject({
       phase: 'needs_setup',
       frameUrl: 'https://p.example/setup?session=fs',
@@ -112,9 +115,13 @@ describe('what the server does next', () => {
   });
 
   it('remembers the login for login_required and waits on everything else', () => {
-    expect(nextStep({ order_id: 'o', status: 'login_required', login_id: 'l', login_url: 'https://x.example' }, { checkout: null })).toBe('login');
+    expect(nextStep({ order_id: 'o', status: 'login_required', login_id: 'l', login_url: 'https://x.example' }, { checkout: null })).toBe(
+      'login',
+    );
     expect(nextStep({ order_id: 'o', status: 'issuing' }, { checkout: null })).toBe('none');
-    expect(nextStep({ order_id: 'o', status: 'payment_required', frame_url: 'https://x.example', amount_due: '1.00' }, { checkout: null })).toBe('none');
+    expect(
+      nextStep({ order_id: 'o', status: 'payment_required', frame_url: 'https://x.example', amount_due: '1.00' }, { checkout: null }),
+    ).toBe('none');
   });
 
   it('knows which statuses are final and which to poll', () => {

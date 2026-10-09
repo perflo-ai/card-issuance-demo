@@ -7,7 +7,14 @@ import type { DemoConfig } from './config.js';
 import type { EventLog } from './eventLog.js';
 import { centsToApiAmount } from './money.js';
 import { nextStep, TERMINAL_STATUSES, withoutRevealLink } from './orderState.js';
-import { isUserTokenRefused, PerfloApiError, PerfloUnavailableError, type AccountResponse, type OrderResponse, type PerfloApi } from './perfloApi.js';
+import {
+  isUserTokenRefused,
+  PerfloApiError,
+  PerfloUnavailableError,
+  type AccountResponse,
+  type OrderResponse,
+  type PerfloApi,
+} from './perfloApi.js';
 import { revealCard, RevealError, simulateCheckout, type RevealedCard } from './checkout.js';
 import type { DemoOrder, DemoUser, Store } from './store.js';
 
@@ -160,7 +167,12 @@ export class DemoService {
           if (link.status !== 'linked' || !current.perflo) return { order, user: current, notice: null };
         }
         try {
-          response = await this.api.createOrder(current.id, current.perflo.token, order.idempotencyKey, this.orderBody(order, current.perflo.userId));
+          response = await this.api.createOrder(
+            current.id,
+            current.perflo.token,
+            order.idempotencyKey,
+            this.orderBody(order, current.perflo.userId),
+          );
         } catch (error) {
           if (!isUserTokenRefused(error)) throw error;
           // Our token is not accepted any more: drop it and link again.
@@ -169,7 +181,12 @@ export class DemoService {
           const link = await this.ensureLinked(current);
           current = link.user;
           if (link.status !== 'linked' || !current.perflo) return { order, user: current, notice: null };
-          response = await this.api.createOrder(current.id, current.perflo.token, order.idempotencyKey, this.orderBody(order, current.perflo.userId));
+          response = await this.api.createOrder(
+            current.id,
+            current.perflo.token,
+            order.idempotencyKey,
+            this.orderBody(order, current.perflo.userId),
+          );
         }
         if (response.status === 'identity_check_required' && !response.kyc_url) {
           // A replay (or a link that could not be made yet) carries no ID check link: ask for the order's state.
@@ -245,11 +262,7 @@ export class DemoService {
     return { order, user, notice: null };
   }
 
-  private async checkoutWithCard(
-    user: DemoUser,
-    order: DemoOrder,
-    response: Extract<OrderResponse, { status: 'ready' }>,
-  ): Promise<Notice> {
+  private async checkoutWithCard(user: DemoUser, order: DemoOrder, response: Extract<OrderResponse, { status: 'ready' }>): Promise<Notice> {
     if (!user.perflo || order.perfloOrderId === null) return 'reveal_failed';
     let revealUrl: string;
     if (response.reveal_url && !order.revealUsed) {
@@ -331,7 +344,9 @@ export class DemoService {
       this.log.add(user.id, 'demo', `Card details could not be read (${code})`);
       throw new DemoError(
         'conflict',
-        code === 'still_locked' ? 'The card details are not ready yet. Try again in a moment.' : 'Could not open the card details. Try again.',
+        code === 'still_locked'
+          ? 'The card details are not ready yet. Try again in a moment.'
+          : 'Could not open the card details. Try again.',
       );
     }
   }

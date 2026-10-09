@@ -35,7 +35,9 @@ describe('toBrowserError: every failure reaches the browser in plain words with 
       status: 429,
       message: 'Too many requests. Wait a moment and try again.',
     });
-    expect(toBrowserError(new PerfloApiError(409, 'card_not_open', 'This card is not open, so there is nothing to show.')).status).toBe(409);
+    expect(toBrowserError(new PerfloApiError(409, 'card_not_open', 'This card is not open, so there is nothing to show.')).status).toBe(
+      409,
+    );
     expect(toBrowserError(new PerfloApiError(401, 'user_token_invalid', 'x')).message).toBe(
       'Payments need to be set up again. Send your request once more.',
     );
@@ -63,7 +65,10 @@ describe('PerfloApi retries only reads, and only when told to try again', () => 
       const next = answers.shift();
       if (next === undefined) throw new Error('unscripted');
       if (next === 'down') throw new TypeError('fetch failed');
-      return new Response(JSON.stringify(next.body ?? {}), { status: next.status, headers: { 'Content-Type': 'application/json', ...next.headers } });
+      return new Response(JSON.stringify(next.body ?? {}), {
+        status: next.status,
+        headers: { 'Content-Type': 'application/json', ...next.headers },
+      });
     };
     return { api: new PerfloApi('https://perflo.test', CREDS, new EventLog(), fake), calls };
   }
@@ -102,7 +107,12 @@ describe('PerfloApi retries only reads, and only when told to try again', () => 
     await expect(api.cancelOrder('u1', 'ord_1', 'ptk_test_token_value')).rejects.toBeInstanceOf(PerfloUnavailableError);
     const busy = scripted([{ status: 503 }]);
     await expect(
-      busy.api.createOrder('u1', 'ptk_test_token_value', 'idem-1', { user_id: 'usr_1', merchant: { name: 'A', domain: 'a.com' }, amount: '1.00', currency: 'USD' }),
+      busy.api.createOrder('u1', 'ptk_test_token_value', 'idem-1', {
+        user_id: 'usr_1',
+        merchant: { name: 'A', domain: 'a.com' },
+        amount: '1.00',
+        currency: 'USD',
+      }),
     ).rejects.toBeInstanceOf(PerfloUnavailableError);
     expect([...calls, ...busy.calls]).toEqual(['POST /partner/v2/orders/ord_1/cancel', 'POST /partner/v2/orders']);
   });

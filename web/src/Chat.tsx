@@ -245,24 +245,24 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
           }
           const order = orders[m.orderId];
           return order && order.phase !== 'discarded' ? (
-              <OrderCard
-                key={m.id}
-                order={order}
-                seen={seen[m.orderId] ?? []}
-                notice={notices[m.orderId] ?? null}
-                action={actions[m.orderId] ?? null}
-                waiting={waiting[m.orderId] ?? null}
-                note={notes[m.orderId] ?? ''}
-                error={errors[m.orderId] ?? ''}
-                perfloOrigin={perfloOrigin}
-                onAdvance={(action) => advance(m.orderId, action)}
-                onWatch={(from, restart) => watch(m.orderId, from, restart)}
-                onDiscard={() => void discard(m.orderId)}
-                onCancelCard={(perfloOrderId) => void cancelCard(m.orderId, perfloOrderId)}
-                onChangeLimits={onChangeLimits}
-                onAccountChanged={onAccountChanged}
-              />
-            ) : null;
+            <OrderCard
+              key={m.id}
+              order={order}
+              seen={seen[m.orderId] ?? []}
+              notice={notices[m.orderId] ?? null}
+              action={actions[m.orderId] ?? null}
+              waiting={waiting[m.orderId] ?? null}
+              note={notes[m.orderId] ?? ''}
+              error={errors[m.orderId] ?? ''}
+              perfloOrigin={perfloOrigin}
+              onAdvance={(action) => advance(m.orderId, action)}
+              onWatch={(from, restart) => watch(m.orderId, from, restart)}
+              onDiscard={() => void discard(m.orderId)}
+              onCancelCard={(perfloOrderId) => void cancelCard(m.orderId, perfloOrderId)}
+              onChangeLimits={onChangeLimits}
+              onAccountChanged={onAccountChanged}
+            />
+          ) : null;
         })}
         <div ref={end} />
       </div>
@@ -279,7 +279,17 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
           maxLength={500}
         />
         <button type="submit" aria-label={sending ? 'Sending' : 'Send'} disabled={sending || !text.trim()}>
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 18 18"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
             <path d="M9 14V4M4.5 8.5 9 4l4.5 4.5" />
           </svg>
         </button>
@@ -356,7 +366,9 @@ export function OrderCard(props: CardProps) {
     case 'draft':
       body = (
         <>
-          <p>Pay {amount} at {order.domain}?</p>
+          <p>
+            Pay {amount} at {order.domain}?
+          </p>
           <div className="row">
             <button className="primary" disabled={busy} onClick={() => void onAdvance('place')}>
               {action === 'place' ? 'Placing your order...' : 'Yes, go ahead'}
@@ -410,9 +422,7 @@ export function OrderCard(props: CardProps) {
     case 'payment_required':
       body = (
         <>
-          <p>
-            Your balance does not cover this yet. Add {money(order.amountDue ?? '0.00')} and I will place the order right away.
-          </p>
+          <p>Your balance does not cover this yet. Add {money(order.amountDue ?? '0.00')} and I will place the order right away.</p>
           {frameOpen && order.frameUrl ? (
             <PerfloFrame src={order.frameUrl} title="Add money" perfloOrigin={perfloOrigin} onEvent={onFrameEvent} />
           ) : (
@@ -439,8 +449,8 @@ export function OrderCard(props: CardProps) {
               </a>
             ) : (
               <p className="muted small">
-                There is no check link right now. If you have already finished it, your order goes ahead as soon as the
-                result is confirmed, usually within a minute.
+                There is no check link right now. If you have already finished it, your order goes ahead as soon as the result is confirmed,
+                usually within a minute.
               </p>
             )}
             <button
@@ -513,9 +523,7 @@ export function OrderCard(props: CardProps) {
           </p>
           <p className="muted small">
             {order.checkout ? `One-time card .... ${order.checkout.last4} is now closed. ` : ''}
-            {order.amountReturned && order.amountReturned !== '0.00'
-              ? `${money(order.amountReturned)} went back to your balance.`
-              : ''}
+            {order.amountReturned && order.amountReturned !== '0.00' ? `${money(order.amountReturned)} went back to your balance.` : ''}
           </p>
         </>
       );

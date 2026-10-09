@@ -58,9 +58,7 @@ export const accountResponse = z.object({
     remaining_this_month: money,
   }),
   identity_check: z.object({ required_above: amount, status: identityStatus }),
-  open_cards: z.array(
-    z.object({ order_id: z.string(), last4: z.string(), card_limit: amount, expires_at: z.string() }),
-  ),
+  open_cards: z.array(z.object({ order_id: z.string(), last4: z.string(), card_limit: amount, expires_at: z.string() })),
 });
 export type AccountResponse = z.infer<typeof accountResponse>;
 
@@ -291,7 +289,10 @@ export class PerfloApi {
     }
     // A read is often repeated while a status is watched: name the status it answered, and log a
     // repeat of the same answer only once.
-    const answered = method === 'GET' && typeof (json as { status?: unknown } | null)?.status === 'string' ? ` ${(json as { status: string }).status}` : '';
+    const answered =
+      method === 'GET' && typeof (json as { status?: unknown } | null)?.status === 'string'
+        ? ` ${(json as { status: string }).status}`
+        : '';
     this.log.add(
       demoUserId,
       'api',

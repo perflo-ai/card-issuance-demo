@@ -168,14 +168,14 @@ listens on that port over plain HTTP on every interface; without it, it runs on
 
 ## Scripts
 
-| Command | What it does |
-|---|---|
-| `npm run dev` | Server with Vite in middleware mode on https://localhost:5174 (plus the mock in mock mode) |
-| `npm test` | vitest: signing, intent parsing, order states, redaction, frame events, the mock, end-to-end flows |
-| `npm run typecheck` | strict TypeScript for server, web and tests |
-| `npm run build` | compiles the server to `dist/server` and the web app to `dist/web` |
-| `npm start` | runs the build (`NODE_ENV=production`) |
-| `npm run cert` | creates `certs/localhost.pem` and `certs/localhost-key.pem` |
+| Command             | What it does                                                                                       |
+| ------------------- | -------------------------------------------------------------------------------------------------- |
+| `npm run dev`       | Server with Vite in middleware mode on https://localhost:5174 (plus the mock in mock mode)         |
+| `npm test`          | vitest: signing, intent parsing, order states, redaction, frame events, the mock, end-to-end flows |
+| `npm run typecheck` | strict TypeScript for server, web and tests                                                        |
+| `npm run build`     | compiles the server to `dist/server` and the web app to `dist/web`                                 |
+| `npm start`         | runs the build (`NODE_ENV=production`)                                                             |
+| `npm run cert`      | creates `certs/localhost.pem` and `certs/localhost-key.pem`                                        |
 
 ## Layout
 

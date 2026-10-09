@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { EventLog } from '../server/eventLog.js';
 
 describe('event log: one line per change, not one per look', () => {
-  it('drops a collapsible entry that repeats the same person\'s previous entry', () => {
+  it("drops a collapsible entry that repeats the same person's previous entry", () => {
     const log = new EventLog();
     log.add('u1', 'api', 'GET /orders/o1 -> 200 issuing', { response: { status: 'issuing' } }, { collapse: true });
     log.add('u1', 'api', 'GET /orders/o1 -> 200 issuing', { response: { status: 'issuing' } }, { collapse: true });

@@ -23,7 +23,10 @@ const sessionOf = (res: request.Response) => {
 };
 
 function app(demo = makeDemo(mock.base), production = false) {
-  return { demo, app: createDemoApp({ config: demo.config, store: demo.store, service: demo.service, log: demo.log, logger: demo.logger, production }) };
+  return {
+    demo,
+    app: createDemoApp({ config: demo.config, store: demo.store, service: demo.service, log: demo.log, logger: demo.logger, production }),
+  };
 }
 
 async function startSession(target: ReturnType<typeof app>['app']): Promise<string> {
@@ -59,7 +62,12 @@ describe('cross-site requests (CSRF and login CSRF)', () => {
     const cookie = await startSession(target);
     const usersBefore = Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users).length;
     for (const path of STATE_CHANGING) {
-      const foreign = await request(target).post(path).set('Host', HOST).set('Origin', 'https://evil.example').set('Cookie', cookie).send({});
+      const foreign = await request(target)
+        .post(path)
+        .set('Host', HOST)
+        .set('Origin', 'https://evil.example')
+        .set('Cookie', cookie)
+        .send({});
       expect(foreign.status, path).toBe(403);
       expect(foreign.headers['set-cookie'], path).toBeUndefined();
       const none = await request(target).post(path).set('Host', HOST).set('Cookie', cookie).send({});
@@ -140,8 +148,9 @@ describe('a setup link links only the session that started it', () => {
     const aliceFrame = aliceStart.body.frameUrl as string;
     await finishSetup(mock.base, aliceFrame);
     // Mallory replays Alice's frame event, ids and all, on her own session.
-    const aliceLoginId = Object.values(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users as Record<string, { id: string; pendingLogin: { loginId: string } | null }>)
-      .find((u) => u.pendingLogin !== null)?.pendingLogin?.loginId as string;
+    const aliceLoginId = Object.values(
+      JSON.parse(readFileSync(demo.dataFile, 'utf8')).users as Record<string, { id: string; pendingLogin: { loginId: string } | null }>,
+    ).find((u) => u.pendingLogin !== null)?.pendingLogin?.loginId as string;
     const replay = await post(target, '/demo/frame-events', mallory, {
       type: 'perflo:setup_completed',
       frame_session_id: new URL(aliceFrame).searchParams.get('session') as string,
@@ -265,7 +274,14 @@ describe('operability', () => {
     const cookie = await startSession(target);
     await request(target).get('/demo/events?after=0').set('Host', HOST).set('Cookie', cookie);
     const lines = demo.serverLog.map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(lines[0]).toMatchObject({ level: 'info', message: 'request', method: 'GET', path: '/healthz', status: 200, request_id: 'req_abcdef12' });
+    expect(lines[0]).toMatchObject({
+      level: 'info',
+      message: 'request',
+      method: 'GET',
+      path: '/healthz',
+      status: 200,
+      request_id: 'req_abcdef12',
+    });
     expect(lines.some((l) => l.path === '/demo/events')).toBe(true);
     await request(target).post('/demo/session').set('Host', HOST).set('Origin', 'https://evil.example').send({});
     expect(JSON.parse(demo.serverLog[demo.serverLog.length - 1])).toMatchObject({ path: '/demo/session', status: 403 });
@@ -280,7 +296,11 @@ describe('operability', () => {
     const target = createDemoApp({ config: demo.config, store: demo.store, service: demo.service, log: demo.log, logger: demo.logger });
     const ok = await request(target).post('/demo/session').set('Host', 'tiny.example').set('Origin', 'https://tiny.example').send({});
     expect(ok.status).toBe(200);
-    const other = await request(target).post('/demo/session').set('Host', 'tiny.example').set('Origin', 'https://tiny.example.evil.test').send({});
+    const other = await request(target)
+      .post('/demo/session')
+      .set('Host', 'tiny.example')
+      .set('Origin', 'https://tiny.example.evil.test')
+      .send({});
     expect(other.status).toBe(403);
   });
 });

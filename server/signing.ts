@@ -34,13 +34,7 @@ export interface PartnerCredentials {
   secret: string;
 }
 
-export function canonicalRequestString(
-  keyVersion: string,
-  method: string,
-  path: string,
-  timestamp: string,
-  rawBody: Buffer,
-): string {
+export function canonicalRequestString(keyVersion: string, method: string, path: string, timestamp: string, rawBody: Buffer): string {
   const bodyHash = createHash('sha256').update(rawBody).digest('hex');
   return `${keyVersion}\n${method.toUpperCase()}\n${path}\n${timestamp}\n${bodyHash}`;
 }
@@ -84,12 +78,7 @@ export function signaturesMatch(provided: string, expected: string): boolean {
 }
 
 export type VerifyFailure =
-  | 'header_missing'
-  | 'header_malformed'
-  | 'timestamp_outside_window'
-  | 'partner_unknown'
-  | 'key_version_unknown'
-  | 'mac_invalid';
+  'header_missing' | 'header_malformed' | 'timestamp_outside_window' | 'partner_unknown' | 'key_version_unknown' | 'mac_invalid';
 
 /**
  * Verification as bapi does it. Used by the mock server only; the demo never
@@ -108,12 +97,7 @@ export function verifySignature(
   const keyVersion = headers[HEADER_KEY_VERSION.toLowerCase()];
   const timestamp = headers[HEADER_TIMESTAMP.toLowerCase()];
   const signature = headers[HEADER_SIGNATURE.toLowerCase()];
-  if (
-    typeof id !== 'string' ||
-    typeof keyVersion !== 'string' ||
-    typeof timestamp !== 'string' ||
-    typeof signature !== 'string'
-  ) {
+  if (typeof id !== 'string' || typeof keyVersion !== 'string' || typeof timestamp !== 'string' || typeof signature !== 'string') {
     return { ok: false, reason: 'header_missing' };
   }
   if (

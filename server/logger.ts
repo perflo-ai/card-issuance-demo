@@ -20,8 +20,10 @@ export interface Logger {
 }
 
 export function createLogger(write: (line: string) => void = (line) => process.stdout.write(`${line}\n`)): Logger {
-  const at = (level: Level) => (message: string, fields: Record<string, unknown> = {}) =>
-    write(JSON.stringify({ time: new Date().toISOString(), level, message, ...(redact(fields) as Record<string, unknown>) }));
+  const at =
+    (level: Level) =>
+    (message: string, fields: Record<string, unknown> = {}) =>
+      write(JSON.stringify({ time: new Date().toISOString(), level, message, ...(redact(fields) as Record<string, unknown>) }));
   return { info: at('info'), warn: at('warn'), error: at('error') };
 }
 
