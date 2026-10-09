@@ -284,15 +284,16 @@ export function createMockPerflo(options: MockOptions) {
   }
 
   /**
-   * A card reaches its 12 hours: every order still open on it expires with its money back, and a paid
-   * order on a reused card gets back what its charge left on the card.
+   * A card reaches its 12 hours: each order on it gets back what charges left of its own money. An
+   * open order expires, or completes if a charge was put against it; a paid order on a reused card
+   * gets its leftover now (on a one-time card it got it when it was paid).
    */
   function closeCard(card: MCard): void {
     card.closed = true;
     for (const o of orders.values()) {
       if (o.card !== card || !(o.status === 'ready' || (o.status === 'completed' && card.reusable))) continue;
-      const back = o.status === 'ready' ? o.loadCents : Math.max(0, o.loadCents - o.usedCents);
-      if (o.status === 'ready') o.status = 'expired';
+      const back = Math.max(0, o.loadCents - o.usedCents);
+      if (o.status === 'ready') o.status = o.usedCents > 0 ? 'completed' : 'expired';
       o.returnedCents = back;
       (users.get(o.userId) as MUser).balanceCents += back;
     }
@@ -814,6 +815,10 @@ export function createMockPerflo(options: MockOptions) {
     const user = userFromToken(req, order.userId);
     refresh(order);
     let returned = 0;
+    if ((order.status === 'ready' || order.status === 'issuing') && order.usedCents > 0) {
+      // On a reused card a charge was put against this order: it is spent, not cancellable.
+      throw new HttpError(409, 'order_not_cancellable', 'This order can no longer be cancelled.');
+    }
     if (order.status === 'ready' || order.status === 'issuing') {
       returned = order.loadCents;
       // A one-time card closes with its order; a reused card stays open for the person's other orders.
@@ -1059,30 +1064,43 @@ export function createMockPerflo(options: MockOptions) {
       .object({ card_number: z.string(), cvv: z.string(), exp_month: z.string(), exp_year: z.string(), amount: amountString })
       .safeParse(req.body);
     if (!body.success) return res.status(400).json({ approved: false, reason: 'form_incomplete' });
-    // A reused card serves several orders: a charge pays the oldest one still open (orders are kept oldest first).
     const onCard = [...orders.values()].filter((o) => o.card?.number === body.data.card_number);
     for (const o of onCard) refresh(o);
-    const order = onCard.find((o) => o.status === 'ready');
-    if (!order) return res.status(402).json({ approved: false, reason: 'declined' });
-    const card = order.card as MCard;
+    // Orders are kept oldest first.
+    const open = onCard.filter((o) => o.status === 'ready');
+    const card = open[0]?.card;
     const charge = apiAmountToCents(body.data.amount);
-    if (
-      card.cvv !== body.data.cvv ||
-      card.expMonth !== body.data.exp_month ||
-      card.expYear !== body.data.exp_year ||
-      charge > order.amountCents
-    ) {
-      return res.status(402).json({ approved: false, reason: 'declined' });
+    const used = Math.ceil((charge * 1033) / 1000) + 25;
+    const decline = () => res.status(402).json({ approved: false, reason: 'declined' });
+    if (!card || card.cvv !== body.data.cvv || card.expMonth !== body.data.exp_month || card.expYear !== body.data.exp_year) {
+      return decline();
     }
-    order.status = 'completed';
-    order.spentCents = charge;
-    order.usedCents = Math.ceil((charge * 1033) / 1000) + 25;
-    // First spend closes a one-time card and the leftover goes back to the balance. On a reused card the
-    // money stays on the card until it closes at its 12 hours (closeCard).
     if (!card.reusable) {
+      // First spend closes a one-time card and the leftover goes back to the balance.
+      const order = open[0] as MOrder;
+      if (charge > order.amountCents) return decline();
       card.closed = true;
-      order.returnedCents = Math.max(0, order.loadCents - order.usedCents);
+      order.status = 'completed';
+      order.spentCents = charge;
+      order.usedCents = used;
+      order.returnedCents = Math.max(0, order.loadCents - used);
       (users.get(order.userId) as MUser).balanceCents += order.returnedCents;
+      return res.json({ approved: true });
+    }
+    // A reused card holds the money of all its open orders, and a charge may use any of it. It pays the
+    // oldest open order no charge was put against yet, and its cost is put against the open orders oldest
+    // first, each up to the money it put on the card. The money stays on the card until it closes (closeCard).
+    if (used > open.reduce((sum, o) => sum + o.loadCents - o.usedCents, 0)) return decline();
+    const paid = open.find((o) => o.usedCents === 0);
+    let left = used;
+    for (const o of open) {
+      const take = Math.min(left, o.loadCents - o.usedCents);
+      o.usedCents += take;
+      left -= take;
+    }
+    if (paid) {
+      paid.status = 'completed';
+      paid.spentCents = charge;
     }
     res.json({ approved: true });
   });

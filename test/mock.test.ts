@@ -472,6 +472,56 @@ describe('reuse mode (a partner whose cards serve every order for their 12 hours
   });
 });
 
+describe('reuse mode: a charge larger than the oldest open order', () => {
+  beforeEach(async () => {
+    await mock.close();
+    mock = await startMock(50, undefined, true);
+  });
+
+  it('may use the money of every open order on the card, oldest first, and the order it reached is not cancellable', async () => {
+    const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '200.00');
+    const first = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '20.00') });
+    const second = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k2', body: order(userId, '50.00') });
+    const card = ((await (await revealFetch(second.json.reveal_url, token)).json()) as { data: Record<string, string> }).data;
+    const pay = (amount: string) =>
+      fetch(`${mock.base}/mock-merchant/checkout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ card_number: card.card_number, cvv: card.cvv, exp_month: card.exp_month, exp_year: card.exp_year, amount }),
+      });
+    // More than both orders put on the card together.
+    expect((await pay('71.00')).status).toBe(402);
+    expect((await pay('50.00')).status).toBe(200);
+    expect((await signedFetch(mock.base, 'GET', `/partner/v2/orders/${first.json.order_id}`)).json).toMatchObject({
+      status: 'completed',
+      amount_spent: '50.00',
+    });
+    expect((await signedFetch(mock.base, 'GET', `/partner/v2/orders/${second.json.order_id}`)).json.status).toBe('ready');
+    expect((await signedFetch(mock.base, 'POST', `/partner/v2/orders/${second.json.order_id}/cancel`, { token })).status).toBe(409);
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 12 * 60 * 60_000 + 1000);
+      // At the close, what the charge left of both orders' money comes back, and the order it reached completes.
+      const used = Math.ceil((5000 * 1033) / 1000) + 25;
+      const left = quote(2000).loadCents + quote(5000).loadCents - used;
+      const returned = await Promise.all(
+        [first, second].map(
+          async (o) =>
+            (await signedFetch(mock.base, 'GET', `/partner/v2/orders/${o.json.order_id}`)).json as {
+              status: string;
+              amount_returned: string;
+            },
+        ),
+      );
+      expect(returned.map((o) => o.status)).toEqual(['completed', 'completed']);
+      expect(returned.reduce((sum, o) => sum + apiAmountToCents(o.amount_returned), 0)).toBe(left);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('one-time mode (the default)', () => {
   it('every order gets its own card', async () => {
     const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '100.00');
