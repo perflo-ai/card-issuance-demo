@@ -23,7 +23,7 @@ const sessionOf = (res: request.Response) => {
 };
 
 function app(demo = makeDemo(mock.base), production = false) {
-  return { demo, app: createDemoApp({ config: demo.config, store: demo.store, service: demo.service, log: demo.log, production }) };
+  return { demo, app: createDemoApp({ config: demo.config, store: demo.store, service: demo.service, log: demo.log, logger: demo.logger, production }) };
 }
 
 async function startSession(target: ReturnType<typeof app>['app']): Promise<string> {
@@ -249,5 +249,38 @@ describe('rate limit', () => {
     }
     expect(codes.slice(0, 20).every((c) => c === 200)).toBe(true);
     expect(codes.slice(20)).toEqual([429, 429]);
+  });
+});
+
+describe('operability', () => {
+  it('answers the health check without a session, and logs one redacted line per request with its id', async () => {
+    const { app: target, demo } = app();
+    const health = await request(target).get('/healthz').set('X-Request-Id', 'req_abcdef12');
+    expect(health.status).toBe(200);
+    expect(health.body).toEqual({ status: 'ok' });
+    expect(health.headers['x-request-id']).toBe('req_abcdef12');
+    const forged = await request(target).get('/healthz').set('X-Request-Id', 'bad id with spaces; and {json}');
+    expect(forged.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+
+    const cookie = await startSession(target);
+    await request(target).get('/demo/events?after=0').set('Host', HOST).set('Cookie', cookie);
+    const lines = demo.serverLog.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines[0]).toMatchObject({ level: 'info', message: 'request', method: 'GET', path: '/healthz', status: 200, request_id: 'req_abcdef12' });
+    expect(lines.some((l) => l.path === '/demo/events')).toBe(true);
+    await request(target).post('/demo/session').set('Host', HOST).set('Origin', 'https://evil.example').send({});
+    expect(JSON.parse(demo.serverLog[demo.serverLog.length - 1])).toMatchObject({ path: '/demo/session', status: 403 });
+    const all = demo.serverLog.join('\n');
+    expect(all).not.toContain('after=');
+    expect(all).not.toContain(cookie.split('=')[1]);
+  });
+
+  it('without DEMO_PUBLIC_ORIGIN, a POST must come from the host it was sent to', async () => {
+    const demo = makeDemo(mock.base);
+    demo.config.publicOrigin = null;
+    const target = createDemoApp({ config: demo.config, store: demo.store, service: demo.service, log: demo.log, logger: demo.logger });
+    const ok = await request(target).post('/demo/session').set('Host', 'tiny.example').set('Origin', 'https://tiny.example').send({});
+    expect(ok.status).toBe(200);
+    const other = await request(target).post('/demo/session').set('Host', 'tiny.example').set('Origin', 'https://tiny.example.evil.test').send({});
+    expect(other.status).toBe(403);
   });
 });

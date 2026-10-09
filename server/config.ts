@@ -25,6 +25,12 @@ export interface DemoConfig {
   credentials: PartnerCredentials;
   dataFile: string;
   listen: DemoListen;
+  /**
+   * The address people open the demo at, when hosted (DEMO_PUBLIC_ORIGIN). Every state-changing
+   * request must come from it. Without it, the request's Origin must match the Host header the
+   * host forwards.
+   */
+  publicOrigin: string | null;
 }
 
 export class ConfigError extends Error {
@@ -88,7 +94,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DemoConfig {
     credentials: { partnerId, keyVersion, secret },
     dataFile: env.DEMO_DATA_FILE?.trim() || 'data/demo-store.json',
     listen,
+    publicOrigin: publicOriginFrom(env, listen),
   };
+}
+
+function publicOriginFrom(env: NodeJS.ProcessEnv, listen: DemoListen): string | null {
+  const raw = env.DEMO_PUBLIC_ORIGIN?.trim();
+  if (!raw) return listen.kind === 'local' ? DEMO_ORIGIN : null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new ConfigError('DEMO_PUBLIC_ORIGIN must be an address such as https://tiny-demo.up.railway.app');
+  }
+  if (url.protocol !== 'https:' || url.origin !== raw.replace(/\/$/, '')) {
+    throw new ConfigError('DEMO_PUBLIC_ORIGIN must be https and only the origin, such as https://tiny-demo.up.railway.app');
+  }
+  return url.origin;
 }
 
 function listenFrom(env: NodeJS.ProcessEnv): DemoListen {

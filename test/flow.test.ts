@@ -17,7 +17,7 @@ afterEach(async () => {
 
 /** A browser: the session cookie is Secure, so it is carried by hand over the test's plain HTTP. */
 function browser(demo: ReturnType<typeof makeDemo>) {
-  const app = createDemoApp({ config: demo.config, store: demo.store, service: demo.service, log: demo.log });
+  const app = createDemoApp({ config: demo.config, store: demo.store, service: demo.service, log: demo.log, logger: demo.logger });
   let cookie = '';
   const keep = (res: request.Response) => {
     const set = res.headers['set-cookie'] as unknown as string[] | undefined;

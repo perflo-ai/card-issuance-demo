@@ -28,7 +28,7 @@ function scripted(routes: Record<string, Array<{ status: number; body: unknown }
 }
 
 function setup(fake: typeof fetch, linked = true) {
-  const config: DemoConfig = { mode: 'live', perfloApiBase: BASE, perfloOrigin: BASE, credentials: CREDS, dataFile: join(mkdtempSync(join(tmpdir(), 'tiny-replay-')), 's.json'), listen: { kind: 'local' } };
+  const config: DemoConfig = { mode: 'live', perfloApiBase: BASE, perfloOrigin: BASE, credentials: CREDS, dataFile: join(mkdtempSync(join(tmpdir(), 'tiny-replay-')), 's.json'), listen: { kind: 'local' }, publicOrigin: null };
   const log = new EventLog();
   const store = new Store(config.dataFile);
   const service = new DemoService(store, new PerfloApi(BASE, CREDS, log, fake), log, config, fake);

@@ -58,20 +58,26 @@ export function securityHeaders({ perfloOrigin, production, hosted }: HeaderOpti
  * Refuses a state-changing request that did not come from Tiny's own page.
  * Browsers send Origin on every POST; a form or script on another site carries
  * that site's origin. Together with SameSite cookies and JSON-only bodies this
- * is the CSRF defence. `trustProxy`: the host forwards the public host name.
+ * is the CSRF defence. With `publicOrigin` the Origin must be exactly that;
+ * without it, its host must match the Host header (the forwarded one behind a
+ * trusted proxy).
  */
-export function sameOriginOnly(trustProxy: boolean): RequestHandler {
+export function sameOriginOnly({ publicOrigin, trustProxy }: { publicOrigin: string | null; trustProxy: boolean }): RequestHandler {
   return (req, res, next) => {
     if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
     const origin = req.get('origin');
-    const host = (trustProxy && req.get('x-forwarded-host')?.split(',')[0]?.trim()) || req.get('host');
-    let sameHost = false;
-    try {
-      sameHost = origin !== undefined && host !== undefined && new URL(origin).host === host;
-    } catch {
-      sameHost = false;
+    let allowed = false;
+    if (publicOrigin !== null) {
+      allowed = origin === publicOrigin;
+    } else {
+      const host = (trustProxy && req.get('x-forwarded-host')?.split(',')[0]?.trim()) || req.get('host');
+      try {
+        allowed = origin !== undefined && host !== undefined && new URL(origin).host === host;
+      } catch {
+        allowed = false;
+      }
     }
-    if (!sameHost) {
+    if (!allowed) {
       res.status(403).json({ error: { message: 'This request did not come from Tiny. Reload the page and try again.' } });
       return;
     }

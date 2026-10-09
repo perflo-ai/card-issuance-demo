@@ -13,6 +13,7 @@ import { formatUsd, parseDecimalToCents } from './money.js';
 import { toView } from './orderState.js';
 import { rateLimit, sameOriginOnly, securityHeaders } from './security.js';
 import { HttpError, toBrowserError } from './errors.js';
+import { requestLog, type Logger } from './logger.js';
 import type { DemoService } from './service.js';
 import { SESSION_TTL_MS, type DemoUser, type Store } from './store.js';
 import { FRAME_EVENT_TYPES, type CardDetailsView, type MeView } from './views.js';
@@ -51,6 +52,8 @@ export interface DemoAppDeps {
   store: Store;
   service: DemoService;
   log: EventLog;
+  /** The operator's log (stdout). */
+  logger: Logger;
   fetchImpl?: typeof fetch;
   /** The built web app is served by this process (strict content security policy). */
   production?: boolean;
@@ -81,13 +84,19 @@ export function chatReply(text: string): { reply: string; intent?: ReturnType<ty
   };
 }
 
-export function createDemoApp({ config, store, service, log, fetchImpl = fetch, production = false }: DemoAppDeps) {
+export function createDemoApp({ config, store, service, log, logger, fetchImpl = fetch, production = false }: DemoAppDeps) {
   const hosted = config.listen.kind === 'hosted';
   const app = express();
   app.disable('x-powered-by');
   // A host's proxy sits in front: the client address and the public host name come from its headers.
   if (hosted) app.set('trust proxy', 1);
+  app.use(requestLog(logger));
   app.use(securityHeaders({ perfloOrigin: config.perfloOrigin, production, hosted }));
+
+  // For the host's health check: no session, no rate limit, nothing about anyone.
+  app.get('/healthz', (_req, res) => {
+    res.set('Cache-Control', 'no-store').json({ status: 'ok' });
+  });
 
   // Generous for one person's page (it reads a few times a minute while an order is moving), tight for a script.
   app.use('/demo', rateLimit({ windowMs: 60_000, max: 300 }));
@@ -101,7 +110,7 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch, 
    * another site cannot send ours), the session cookie is SameSite=Strict, and a POST must carry a
    * JSON body, which a cross-site form cannot send.
    */
-  app.use('/demo', sameOriginOnly(hosted));
+  app.use('/demo', sameOriginOnly({ publicOrigin: config.publicOrigin, trustProxy: hosted }));
   app.use('/demo', express.json({ limit: '16kb' }));
   app.use('/demo', (req, res, next) => {
     // req.is() is null for a request with no body and false for a body of another type: both are refused.
@@ -341,9 +350,11 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch, 
 
   app.use('/demo', (_req, _res, next) => next(new HttpError(404, 'Not found.')));
 
-  app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     const failure = toBrowserError(error);
-    if (failure.operatorNote) console.error(`[demo] ${failure.status}: ${failure.operatorNote}`);
+    if (failure.operatorNote) {
+      logger[failure.status >= 500 ? 'error' : 'warn']('request failed', { request_id: req.requestId, status: failure.status, note: failure.operatorNote });
+    }
     res.status(failure.status).json({ error: { message: failure.message } });
   });
 

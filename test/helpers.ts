@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DemoConfig } from '../server/config.js';
 import { EventLog } from '../server/eventLog.js';
+import { createLogger } from '../server/logger.js';
 import { createMockPerflo } from '../server/mock/mockPerflo.js';
 import { PerfloApi } from '../server/perfloApi.js';
 import { DemoService } from '../server/service.js';
@@ -16,6 +17,9 @@ export const CREDS = {
   secret: 'dGlueS1kZW1vLXNpZ25pbmctdmVjdG9yLXNlY3JldDA',
 };
 export const PARTNER_ORIGIN = 'https://localhost:5174';
+/** Where the test browser says it is (Host header and Origin). */
+export const TEST_HOST = 'tiny.test';
+export const TEST_ORIGIN = `https://${TEST_HOST}`;
 
 export async function startMock(slowIssueMs = 50): Promise<{ base: string; close: () => Promise<void> }> {
   let handler: RequestListener = () => undefined;
@@ -101,12 +105,16 @@ export function makeDemo(base: string, mode: 'mock' | 'live' = 'mock') {
     credentials: CREDS,
     dataFile,
     listen: { kind: 'local' },
+    publicOrigin: TEST_ORIGIN,
   };
   const log = new EventLog();
   const store = new Store(dataFile);
   const api = new PerfloApi(base, CREDS, log);
   const service = new DemoService(store, api, log, config);
-  return { config, log, store, api, service, dataFile };
+  // The operator's log, kept in memory so tests can read it (and nothing is printed).
+  const serverLog: string[] = [];
+  const logger = createLogger((line) => serverLog.push(line));
+  return { config, log, logger, serverLog, store, api, service, dataFile };
 }
 
 export const wait = (ms: number) => new Promise((done) => setTimeout(done, ms));

@@ -6,12 +6,16 @@ import express from 'express';
 import { createDemoApp } from './app.js';
 import { ConfigError, DEMO_ORIGIN, DEMO_PORT, loadConfig } from './config.js';
 import { EventLog } from './eventLog.js';
+import { createLogger } from './logger.js';
 import { createMockPerflo } from './mock/mockPerflo.js';
 import { PerfloApi } from './perfloApi.js';
 import { DemoService } from './service.js';
 import { Store } from './store.js';
 
 const CERT = resolve('certs/localhost.pem');
+/** On SIGTERM, how long requests already on their way get to finish (a POST /orders can wait up to 90 s). */
+const SHUTDOWN_GRACE_MS = 25_000;
+const logger = createLogger();
 const KEY = resolve('certs/localhost-key.pem');
 
 function tls(): ServerOptions {
@@ -45,7 +49,8 @@ async function main(): Promise<void> {
   const store = new Store(config.dataFile);
   const api = new PerfloApi(config.perfloApiBase, config.credentials, log);
   const service = new DemoService(store, api, log, config);
-  const app = createDemoApp({ config, store, service, log, production: process.env.NODE_ENV === 'production' });
+  const app = createDemoApp({ config, store, service, log, logger, production: process.env.NODE_ENV === 'production' });
+  const servers: Array<ReturnType<typeof createHttpServer>> = [];
 
   if (config.mode === 'mock') {
     const certificate = tls();
@@ -60,7 +65,8 @@ async function main(): Promise<void> {
     const mockServer = base.protocol === 'https:' ? createHttpsServer(certificate, mock) : createHttpServer(mock);
     const port = Number(base.port || (base.protocol === 'https:' ? 443 : 80));
     await listen(mockServer, port, 'mock payments service');
-    console.log(`[mock] test payments service on ${base.origin}`);
+    servers.push(mockServer);
+    logger.info('mock payments service listening', { origin: base.origin });
   }
 
   // A host terminates HTTPS in front of the demo; here it needs the local certificate.
@@ -80,14 +86,54 @@ async function main(): Promise<void> {
   }
   if (config.listen.kind === 'hosted') {
     await listen(server, config.listen.port, 'demo', '0.0.0.0');
-    console.log(`[demo] Tiny on port ${config.listen.port} (${config.mode} mode, payments at ${config.perfloOrigin})`);
   } else {
     await listen(server, DEMO_PORT, 'demo');
-    console.log(`[demo] Tiny on ${DEMO_ORIGIN} (${config.mode} mode, payments at ${config.perfloOrigin})`);
   }
+  servers.unshift(server);
+  logger.info('Tiny listening', {
+    at: config.listen.kind === 'hosted' ? `port ${config.listen.port}` : DEMO_ORIGIN,
+    mode: config.mode,
+    payments: config.perfloOrigin,
+  });
+  stopOnSignal(servers);
+}
+
+/**
+ * Graceful stop for a host's redeploy: stop taking new connections, let
+ * requests already running finish (a placed order is never cut off midway by
+ * choice), then exit. A second signal, or the grace period running out, exits
+ * at once. The store writes synchronously, so nothing is left half written.
+ */
+function stopOnSignal(servers: Array<ReturnType<typeof createHttpServer>>): void {
+  let stopping = false;
+  const stop = (signal: string) => {
+    if (stopping) process.exit(1);
+    stopping = true;
+    logger.info('stopping', { signal });
+    const force = setTimeout(() => {
+      logger.warn('stopped before every request finished', { grace_ms: SHUTDOWN_GRACE_MS });
+      process.exit(1);
+    }, SHUTDOWN_GRACE_MS);
+    force.unref();
+    let open = servers.length;
+    for (const server of servers) {
+      server.close(() => {
+        if (--open === 0) {
+          logger.info('stopped');
+          process.exit(0);
+        }
+      });
+      server.closeIdleConnections();
+    }
+  };
+  process.on('SIGTERM', () => stop('SIGTERM'));
+  process.on('SIGINT', () => stop('SIGINT'));
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof ConfigError ? `[demo] ${error.message}` : error instanceof Error ? `[demo] ${error.name}: ${error.message}` : '[demo] failed to start');
+  // A ConfigError is written for the operator; anything else is shown by name and message only.
+  logger.error('failed to start', {
+    reason: error instanceof ConfigError ? error.message : error instanceof Error ? `${error.name}: ${error.message}` : 'unknown',
+  });
   process.exit(1);
 });
