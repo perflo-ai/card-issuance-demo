@@ -50,6 +50,14 @@ export async function signedFetch(
   return { status: response.status, json: await response.json().catch(() => null) };
 }
 
+/** A reveal link read the way a partner must: signed over GET and the link's path, with the person's token. */
+export function revealFetch(url: string, token: string | null, secret = CREDS.secret) {
+  const parsed = new URL(url);
+  const headers: Record<string, string> = signatureHeaders({ ...CREDS, secret }, 'GET', `${parsed.pathname}${parsed.search}`, Buffer.alloc(0));
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return fetch(url, { headers });
+}
+
 export const sessionOf = (url: string) => new URL(url).searchParams.get('session') as string;
 
 export async function frameCall(base: string, frameUrl: string, action: string, body?: unknown) {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { quote } from '../server/mock/mockPerflo.js';
 import { centsToApiAmount } from '../server/money.js';
-import { finishSetup, frameCall, payInFrame, signedFetch, startMock, wait } from './helpers.js';
+import { finishSetup, frameCall, payInFrame, revealFetch, signedFetch, startMock, wait } from './helpers.js';
 
 let mock: { base: string; close: () => Promise<void> };
 beforeEach(async () => {
@@ -152,13 +152,24 @@ describe('orders', () => {
     const placed = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '20.00') });
     expect(placed.status).toBe(201);
     expect(placed.json).toMatchObject({ status: 'ready', card_id: expect.any(String), reveal_url: expect.any(String), reveal_expires_at: expect.any(String), card_expires_at: expect.any(String) });
-    const reveal = await fetch(placed.json.reveal_url);
+    // Refused the same way whatever is wrong, and the link stays usable after each refusal.
+    const other = await linkedUser('ext-2', 'grace@example.com');
+    for (const refused of [
+      await fetch(placed.json.reveal_url),
+      await revealFetch(placed.json.reveal_url, null),
+      await revealFetch(placed.json.reveal_url, other.token),
+      await revealFetch(placed.json.reveal_url, token, 'B'.repeat(43)),
+    ]) {
+      expect(refused.status).toBe(404);
+      expect(await refused.json()).toEqual({ success: false, error: 'This link has expired or was already used.' });
+    }
+    const reveal = await revealFetch(placed.json.reveal_url, token);
     const body = await reveal.json();
     expect(body).toMatchObject({ success: true, data: { card_number: expect.stringMatching(/^[0-9]{16}$/), cvv: expect.stringMatching(/^[0-9]{3}$/), last4: placed.json.last4 } });
-    expect((await fetch(placed.json.reveal_url)).status).toBe(404);
+    expect((await revealFetch(placed.json.reveal_url, token)).status).toBe(404);
     const fresh = await signedFetch(mock.base, 'POST', `/partner/v2/orders/${placed.json.order_id}/card-reveal`, { token });
     expect(fresh.status).toBe(201);
-    expect((await fetch(fresh.json.reveal_url)).status).toBe(200);
+    expect((await revealFetch(fresh.json.reveal_url, token)).status).toBe(200);
   });
 
   it('issuing, then ready on GET', async () => {
@@ -239,7 +250,7 @@ describe('orders', () => {
   it('the mock merchant spends the card once and the order completes with the leftover returned', async () => {
     const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '100.00');
     const placed = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '20.00') });
-    const card = ((await (await fetch(placed.json.reveal_url)).json()) as { data: Record<string, string> }).data;
+    const card = ((await (await revealFetch(placed.json.reveal_url, token)).json()) as { data: Record<string, string> }).data;
     const pay = (amount: string) =>
       fetch(`${mock.base}/mock-merchant/checkout`, {
         method: 'POST',

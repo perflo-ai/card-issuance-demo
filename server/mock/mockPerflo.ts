@@ -10,7 +10,8 @@
  *   POST /mock-merchant/checkout     a shop that charges a one-time card (demo checkout, mock mode)
  *   GET|POST /mock/kyc               an identity check page (kyc_url)
  *   POST /mock/control/revoke        simulates the person turning off Tiny's access
- *   GET  /mock-relay/partner-cards/:cardId/sensitive   the reveal link (Evervault already "decrypted")
+ *   GET  /mock-relay/partner-cards/:cardId/sensitive   the reveal link (already decrypted), signed and with
+ *                                                     the person's Bearer token, as the real one requires
  */
 
 import { createHash, randomBytes, randomInt } from 'node:crypto';
@@ -861,16 +862,25 @@ export function createMockPerflo(options: MockOptions) {
     res.json({ status: 'succeeded' });
   });
 
+  /**
+   * The reveal link, as bapi #345 and ms-card #94 check it: the partner signature over GET and the
+   * link's path (no query), and the Bearer token of the person whose card it is. Every refusal is the
+   * same 404 and leaves the link usable; only a successful read uses it up.
+   */
   app.get('/mock-relay/partner-cards/:cardId/sensitive', (req, res) => {
-    const token = typeof req.query.t === 'string' ? req.query.t : '';
-    const entry = reveals.get(token);
+    const refuse = () => res.status(404).json({ success: false, error: 'This link has expired or was already used.' });
+    const t = typeof req.query.t === 'string' ? req.query.t : '';
+    const entry = reveals.get(t);
     const order = entry ? orders.get(entry.orderId) : undefined;
-    if (!entry || entry.consumed || entry.expiresAt < Date.now() || !order || order.card?.cardId !== req.params.cardId) {
-      return res.status(404).json({ success: false, error: 'Not found' });
-    }
-    entry.consumed = true;
+    if (!entry || entry.consumed || entry.expiresAt < Date.now() || !order || order.card?.cardId !== req.params.cardId) return refuse();
+    const signature = verifySignature(req.headers, 'GET', req.originalUrl, Buffer.alloc(0), (partnerId) =>
+      partnerId === options.partnerId ? { [options.keyVersion]: options.secret } : null,
+    );
+    const bearer = /^Bearer ([A-Za-z0-9_-]{8,200})$/.exec(req.get('authorization') ?? '');
+    if (!signature.ok || !bearer || tokens.get(bearer[1]) !== order.userId) return refuse();
     refresh(order);
-    if (order.status !== 'ready') return res.status(404).json({ success: false, error: 'Not found' });
+    if (order.status !== 'ready') return refuse();
+    entry.consumed = true;
     const card = order.card as MCard;
     const user = users.get(order.userId) as MUser;
     res.set('Cache-Control', 'no-store').json({

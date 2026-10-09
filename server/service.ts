@@ -261,7 +261,7 @@ export class DemoService {
     this.store.updateOrder(order, (o) => (o.revealUsed = true));
 
     try {
-      const card = await revealCard(revealUrl, this.fetchImpl);
+      const card = await revealCard(revealUrl, { credentials: this.config.credentials, userToken: user.perflo.token }, this.fetchImpl);
       this.log.add(user.id, 'demo', `Card details read for checkout (card ending ${card.last4})`);
       const summary = await simulateCheckout(
         card,
@@ -323,7 +323,7 @@ export class DemoService {
       throw error;
     }
     try {
-      const card = await revealCard(revealUrl, this.fetchImpl);
+      const card = await revealCard(revealUrl, { credentials: this.config.credentials, userToken: user.perflo.token }, this.fetchImpl);
       this.log.add(user.id, 'demo', `Card details shown to the person (card ending ${card.last4})`);
       return card;
     } catch (error) {

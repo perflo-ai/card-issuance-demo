@@ -1,9 +1,11 @@
 /**
  * Reading a one-time card and using it at checkout.
  *
- * The reveal link is a plain GET (no partner headers, no Bearer: the single-use
- * `t` value is the credential) answering the ms-card sensitive-details envelope,
- * decrypted by Evervault on the way out (SPEC 4 clarification). The full card
+ * The reveal link is a GET of `reveal_url` exactly as given, signed like every
+ * partner call (the same canonical string, with the path of the link and no
+ * query) and carrying that person's access token, answering the card
+ * sensitive-details envelope (perflo-backend-api #345 and ms-card-issuance #94).
+ * The single-use `t` value alone is no longer enough to read a card. The full card
  * exists only in local variables of these functions: it is never stored,
  * logged or put in an error message. It reaches the browser only through
  * POST /demo/orders/:id/card-details, when the person asks to see an open card.
@@ -12,6 +14,16 @@
 import { z } from 'zod';
 import type { CheckoutSummary, OrderIntent } from './store.js';
 import { centsToApiAmount } from './money.js';
+import { signatureHeaders, type PartnerCredentials } from './signing.js';
+
+const REVEAL_TIMEOUT_MS = 20_000;
+/**
+ * A 503 means payments could not check the request right now and nothing was
+ * spent: the link is still good. It says when to look again (Retry-After: 5);
+ * one more try after that, never sooner, never longer than this.
+ */
+const REVEAL_RETRY_MAX_WAIT_MS = 10_000;
+const REVEAL_RETRY_DEFAULT_WAIT_MS = 5_000;
 
 const revealEnvelope = z.object({
   success: z.literal(true),
@@ -41,16 +53,33 @@ export class RevealError extends Error {
   }
 }
 
-export async function revealCard(revealUrl: string, fetchImpl: typeof fetch = fetch): Promise<RevealedCard> {
-  let response: Response;
-  try {
-    response = await fetchImpl(revealUrl, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(20_000),
-    });
-  } catch {
-    throw new RevealError('unavailable');
+export interface RevealAuth {
+  credentials: PartnerCredentials;
+  /** The access token of the person whose card this is. Sent only to the reveal link; never logged. */
+  userToken: string;
+}
+
+/**
+ * The one place a card is read. Every way a card reaches Tiny (checkout, and
+ * "Show card details") goes through here, so the reveal rules live once.
+ *
+ * Any refusal (bad or missing signature, wrong token, used or expired link) is
+ * the same 404, and a refused link stays usable until it expires. Nothing about
+ * the request (token, signature, link) is logged here or by the callers.
+ */
+export async function revealCard(
+  revealUrl: string,
+  auth: RevealAuth,
+  fetchImpl: typeof fetch = fetch,
+  pause: (ms: number) => Promise<void> = (ms) => new Promise((done) => setTimeout(done, ms)),
+): Promise<RevealedCard> {
+  let response = await sendReveal(revealUrl, auth, fetchImpl);
+  if (response.status === 503) {
+    const after = response.headers.get('retry-after');
+    const seconds = after !== null && /^[0-9]{1,3}$/.test(after) ? Number(after) * 1000 : REVEAL_RETRY_DEFAULT_WAIT_MS;
+    await pause(Math.min(REVEAL_RETRY_MAX_WAIT_MS, seconds));
+    // Signed again: the timestamp must be within 120 s of payments' clock when it is sent.
+    response = await sendReveal(revealUrl, auth, fetchImpl);
   }
   if (response.status === 404) throw new RevealError('used_or_expired');
   if (!response.ok) throw new RevealError('unavailable');
@@ -81,6 +110,24 @@ export async function revealCard(revealUrl: string, fetchImpl: typeof fetch = fe
     holderName: d.holder_name ?? '',
     last4: number.slice(-4),
   };
+}
+
+/** One signed GET of the link as given. The signed path is the link's path without its ?t= query. */
+async function sendReveal(revealUrl: string, auth: RevealAuth, fetchImpl: typeof fetch): Promise<Response> {
+  const url = new URL(revealUrl);
+  try {
+    return await fetchImpl(revealUrl, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        ...signatureHeaders(auth.credentials, 'GET', `${url.pathname}${url.search}`, Buffer.alloc(0)),
+        Authorization: `Bearer ${auth.userToken}`,
+      },
+      signal: AbortSignal.timeout(REVEAL_TIMEOUT_MS),
+    });
+  } catch {
+    throw new RevealError('unavailable');
+  }
 }
 
 /**
