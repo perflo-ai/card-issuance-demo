@@ -4,6 +4,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** How long the server asked us to wait before trying again (Retry-After), when it said. */
+    readonly retryAfterMs: number | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -45,7 +47,12 @@ async function send<T>(method: 'GET' | 'POST', path: string, body?: unknown): Pr
   }
   const json = (await response.json().catch(() => null)) as (T & { error?: { message?: string } }) | null;
   if (!response.ok) {
-    throw new ApiError(response.status, json?.error?.message ?? 'Something went wrong. Try again.');
+    const retryAfter = response.headers.get('retry-after');
+    throw new ApiError(
+      response.status,
+      json?.error?.message ?? 'Something went wrong. Try again.',
+      retryAfter !== null && /^[0-9]{1,4}$/.test(retryAfter) ? Number(retryAfter) * 1000 : null,
+    );
   }
   return json as T;
 }

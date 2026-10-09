@@ -163,6 +163,12 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
   order resumes on its own), `identity_check_required` (opens in a new tab, then try again), `issuing`
   (looks again after 2 seconds, then a little longer each time up to 10 seconds, for up to five minutes),
   `declined`, `completed`, `cancelled`, `expired`, `failed`.
+- **Cancel card**: `POST /orders/{id}/cancel` is safe to send again (a cancelled order answers what was
+  recorded). While it answers 503 (payments busy, for example the card issuer briefly busy while it closes
+  the card), or no answer comes in time, the page stays on "Cancelling..." and sends it again after 3, 6, 12,
+  then every 20 seconds (longer if `Retry-After` asks), for about two minutes, then says calmly that it is
+  taking longer and offers "Check again". The log shows a repeated refusal once. Any other refusal (the
+  order already finished) is shown as it is. Logic in `web/src/cancel.ts`.
 - **Replays**: Perflo never replays a token or a link. A `POST /users` replay has no token, so a reissue is
   asked with a new Idempotency-Key. A `card-reveal` replay (201 with only a message) is asked again with a new
   key, and a ready replay without `reveal_url` goes through `/card-reveal`. An identity check answer without

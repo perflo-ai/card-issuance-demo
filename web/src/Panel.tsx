@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { api, onRequestSettled } from './api';
-import { useFocusWhenClosed, useOnMount, useWhenVisible } from './browser';
-import { identityText, money, when } from './copy';
+import { pageVisibility, useFocusWhenClosed, useOnMount, useWhenVisible } from './browser';
+import { cancelUntilDone } from './cancel';
+import { CANCEL_SLOW_TEXT, identityText, money, when } from './copy';
 import { Orders } from './Orders';
 import { PerfloFrame } from './PerfloFrame';
 import { singleFlight } from './polling';
@@ -38,6 +39,8 @@ export function Panel(props: Props) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<Busy>(null);
   const [savingStop, setSavingStop] = useState(false);
+  /** The card whose cancel has not gone through yet after Tiny kept trying. */
+  const [slowCancel, setSlowCancel] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('payments');
   const paymentsBox = useRef<HTMLElement>(null);
   useFocusWhenClosed(frame !== null, paymentsBox);
@@ -103,11 +106,13 @@ export function Panel(props: Props) {
 
   const cancelCard = async (perfloOrderId: string) => {
     setError('');
+    setSlowCancel(null);
     setBusy({ cancel: perfloOrderId });
     try {
-      const result = await api.cancelCard(perfloOrderId);
+      const outcome = await cancelUntilDone(() => api.cancelCard(perfloOrderId), { visibility: pageVisibility });
       // The chat and the Orders tab show the same order: one update reaches both.
-      if (result.order) props.onOrder(result.order);
+      if (outcome.kind === 'slow') setSlowCancel(perfloOrderId);
+      else if (outcome.cancelled.order) props.onOrder(outcome.cancelled.order);
       else onAccountChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
@@ -244,8 +249,13 @@ export function Panel(props: Props) {
                         <span className="muted small"> · until {when(card.expires_at)}</span>
                       </span>
                       <button className="link" disabled={busy !== null} onClick={() => void cancelCard(card.order_id)}>
-                        {cancellingCard === card.order_id ? 'Cancelling...' : 'Cancel card'}
+                        {cancellingCard === card.order_id ? 'Cancelling...' : slowCancel === card.order_id ? 'Check again' : 'Cancel card'}
                       </button>
+                      {slowCancel === card.order_id && cancellingCard === null && (
+                        <p className="muted small" role="status">
+                          {CANCEL_SLOW_TEXT}
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ul>

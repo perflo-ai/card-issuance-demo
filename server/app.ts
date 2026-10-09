@@ -350,6 +350,7 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
         note: failure.operatorNote,
       });
     }
+    if (failure.retryAfterSeconds !== undefined) res.set('Retry-After', String(failure.retryAfterSeconds));
     res.status(failure.status).json({ error: { message: failure.message } });
   });
 

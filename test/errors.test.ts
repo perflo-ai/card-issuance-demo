@@ -70,7 +70,8 @@ describe('PerfloApi retries only reads, and only when told to try again', () => 
         headers: { 'Content-Type': 'application/json', ...next.headers },
       });
     };
-    return { api: new PerfloApi('https://perflo.test', CREDS, new EventLog(), fake), calls };
+    const log = new EventLog();
+    return { api: new PerfloApi('https://perflo.test', CREDS, log, fake), calls, log };
   }
   const issuing = { status: 200, body: { order_id: 'ord_1', status: 'issuing' } };
 
@@ -115,5 +116,28 @@ describe('PerfloApi retries only reads, and only when told to try again', () => 
       }),
     ).rejects.toBeInstanceOf(PerfloUnavailableError);
     expect([...calls, ...busy.calls]).toEqual(['POST /partner/v2/orders/ord_1/cancel', 'POST /partner/v2/orders']);
+  });
+
+  it('a busy cancel is not sent again here, keeps Retry-After for the browser, and logs a repeated refusal once', async () => {
+    const unavailable = {
+      status: 503,
+      body: { error: { code: 'service_unavailable', message: 'This is not available right now. Try again in a moment.' } },
+      headers: { 'Retry-After': '7' },
+    };
+    const { api, calls, log } = scripted([
+      unavailable,
+      unavailable,
+      { status: 200, body: { status: 'cancelled', amount_returned: '5.42' } },
+    ]);
+    const refused = await api.cancelOrder('u1', 'ord_1', 'ptk_test_token_value').catch((e: unknown) => e);
+    expect(refused).toMatchObject({ httpStatus: 503, code: 'service_unavailable', retryAfterSeconds: 7 });
+    expect(toBrowserError(refused)).toMatchObject({ status: 503, retryAfterSeconds: 7 });
+    await expect(api.cancelOrder('u1', 'ord_1', 'ptk_test_token_value')).rejects.toBeInstanceOf(PerfloApiError);
+    expect(await api.cancelOrder('u1', 'ord_1', 'ptk_test_token_value')).toEqual({ status: 'cancelled', amount_returned: '5.42' });
+    expect(calls).toHaveLength(3);
+    expect(log.forUser('u1').map((e) => e.summary)).toEqual([
+      'POST /partner/v2/orders/ord_1/cancel -> 503',
+      'POST /partner/v2/orders/ord_1/cancel -> 200',
+    ]);
   });
 });

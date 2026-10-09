@@ -26,6 +26,8 @@ export interface BrowserError {
   message: string;
   /** For the server log only: why this happened, when the operator has something to fix. */
   operatorNote?: string;
+  /** Payments' own Retry-After, passed on so the browser waits as long as it was asked to. */
+  retryAfterSeconds?: number;
 }
 
 const TRY_AGAIN = 'Payments could not do that right now. Try again in a few minutes.';
@@ -89,6 +91,7 @@ export function toBrowserError(error: unknown): BrowserError {
       status: known.status,
       message: known.message ?? error.message,
       ...(known.operatorNote ? { operatorNote: known.operatorNote } : {}),
+      ...(error.retryAfterSeconds !== null ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
     };
   }
   // express.json(): a body that is not JSON, or too large.

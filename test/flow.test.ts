@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDemoApp } from '../server/app.js';
 import { quote } from '../server/mock/mockPerflo.js';
 import { centsToApiAmount } from '../server/money.js';
+import { PerfloApiError } from '../server/perfloApi.js';
 import type { MeView, OrderView } from '../server/views.js';
 import { finishSetup, makeDemo, payInFrame, startMock, wait } from './helpers.js';
 
@@ -313,6 +314,25 @@ describe('other order states through the demo', () => {
     const cancelled = await b.post(`/demo/cards/${ready.perfloOrderId}/cancel`);
     const load = centsToApiAmount(quote(2000).loadCents);
     expect(cancelled.body).toMatchObject({ amountReturned: load, order: { phase: 'cancelled', amountReturned: load } });
+  });
+
+  it('a cancel refused while payments is busy reaches the browser as 503 with its Retry-After, sent once', async () => {
+    const demo = makeDemo(mock.base);
+    const b = browser(demo);
+    await linkedWithMoney(b, '100.00');
+    expect((await b.post('/demo/mock/stop-at-checkout', { on: true })).status).toBe(200);
+    const ready = await advance(b, (await ask(b, 'buy me $20 worth of books on amazon')).id);
+    const cancel = vi
+      .spyOn(demo.api, 'cancelOrder')
+      .mockRejectedValueOnce(new PerfloApiError(503, 'service_unavailable', 'This is not available right now. Try again in a moment.', 7));
+    const refused = await b.post(`/demo/cards/${ready.perfloOrderId}/cancel`);
+    expect(refused.status).toBe(503);
+    expect(refused.headers['retry-after']).toBe('7');
+    expect(refused.body).toEqual({ error: { message: 'This is not available right now. Try again in a moment.' } });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    // Sent again by the browser, the cancel goes through.
+    const again = await b.post(`/demo/cards/${ready.perfloOrderId}/cancel`);
+    expect(again.body).toMatchObject({ order: { phase: 'cancelled' } });
   });
 
   it('shows an open card on request: read fresh each time, never stored or logged, only to its owner', async () => {

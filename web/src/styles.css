@@ -385,6 +385,10 @@ button:disabled {
   align-items: center;
   flex-wrap: wrap;
 }
+.cards li p {
+  flex-basis: 100%;
+  margin: 0;
+}
 .panel-frame {
   margin-top: 12px;
 }
