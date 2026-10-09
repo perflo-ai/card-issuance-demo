@@ -32,6 +32,14 @@ input {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
+.setup {
+  display: grid;
+  gap: 10px;
+}
+/* Places focus is moved to (after a frame closes) but that are not controls themselves. */
+[tabindex='-1']:focus {
+  outline: none;
+}
 .visually-hidden {
   position: absolute;
   width: 1px;

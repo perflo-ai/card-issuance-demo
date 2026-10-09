@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type FrameEventPayload } from './api';
-import { pageVisibility } from './browser';
+import { pageVisibility, useFocusWhenClosed } from './browser';
 import { SETUP_STEPS, stalledText, waitingText } from './copy';
 import { PerfloFrame } from './PerfloFrame';
 import { backoff, poll, sleep } from './polling';
@@ -34,6 +34,8 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
   const [problem, setProblem] = useState<'' | 'expired' | 'slow'>('');
   const [error, setError] = useState('');
   const stop = useRef<AbortController | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  useFocusWhenClosed(frameUrl !== null, box);
 
   useEffect(() => () => stop.current?.abort(), []);
 
@@ -127,7 +129,7 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
   }));
 
   return (
-    <>
+    <div className="setup" ref={box} tabIndex={-1}>
       <StepList items={items} active={finishing} />
       {frameUrl ? (
         <PerfloFrame src={frameUrl} title="Set up payments" perfloOrigin={perfloOrigin} onEvent={onFrameEvent} />
@@ -174,6 +176,6 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
           {error}
         </p>
       )}
-    </>
+    </div>
   );
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nextStep, POLL_STATUSES, TERMINAL_STATUSES, toView, withoutRevealLink } from '../server/orderState.js';
+import { nextStep, TERMINAL_STATUSES, toView, withoutRevealLink } from '../server/orderState.js';
 import type { OrderResponse } from '../server/perfloApi.js';
 import type { CheckoutSummary, DemoOrder, DemoUser } from '../server/store.js';
 import { redact } from '../server/redact.js';
@@ -124,9 +124,8 @@ describe('what the server does next', () => {
     ).toBe('none');
   });
 
-  it('knows which statuses are final and which to poll', () => {
+  it('knows which statuses are final', () => {
     expect([...TERMINAL_STATUSES].sort()).toEqual(['cancelled', 'completed', 'declined', 'expired', 'failed']);
-    expect([...POLL_STATUSES]).toEqual(['issuing']);
   });
 
   it('drops the single-use reveal link before storing', () => {

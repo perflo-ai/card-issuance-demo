@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { api, onRequestSettled } from './api';
-import { useOnMount, useWhenVisible } from './browser';
+import { useFocusWhenClosed, useOnMount, useWhenVisible } from './browser';
 import { identityText, money, when } from './copy';
 import { Orders } from './Orders';
 import { PerfloFrame } from './PerfloFrame';
@@ -25,7 +25,8 @@ interface Props {
 }
 
 type OpenFrame = { kind: 'limits' | 'top_up'; url: string } | null;
-type Tab = 'payments' | 'orders';
+const TABS = ['payments', 'orders'] as const;
+type Tab = (typeof TABS)[number];
 /** What the payments box is doing right now; one thing at a time. */
 type Busy = 'top_up' | 'limits' | 'revoke' | { cancel: string } | null;
 
@@ -38,6 +39,8 @@ export function Panel(props: Props) {
   const [busy, setBusy] = useState<Busy>(null);
   const [savingStop, setSavingStop] = useState(false);
   const [tab, setTab] = useState<Tab>('payments');
+  const paymentsBox = useRef<HTMLElement>(null);
+  useFocusWhenClosed(frame !== null, paymentsBox);
 
   /**
    * The balance is read when it can have changed: on opening, after an order changes phase or a
@@ -138,18 +141,38 @@ export function Panel(props: Props) {
     }
   };
 
+  const onTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    const at = TABS.indexOf(tab);
+    const next =
+      event.key === 'ArrowRight'
+        ? TABS[(at + 1) % TABS.length]
+        : event.key === 'ArrowLeft'
+          ? TABS[(at - 1 + TABS.length) % TABS.length]
+          : event.key === 'Home'
+            ? TABS[0]
+            : event.key === 'End'
+              ? TABS[TABS.length - 1]
+              : undefined;
+    if (!next) return;
+    event.preventDefault();
+    setTab(next);
+    document.getElementById(`tab-${next}`)?.focus();
+  };
+
   const cancellingCard = typeof busy === 'object' && busy !== null ? busy.cancel : null;
 
   return (
     <aside className="panel" aria-label="Payments and orders">
-      <div className="tabs" role="tablist" aria-label="Payments and orders">
-        {(['payments', 'orders'] as const).map((t) => (
+      {/* The tabs pattern: one tab in the Tab order, arrow keys (and Home, End) move between them. */}
+      <div className="tabs" role="tablist" aria-label="Payments and orders" onKeyDown={onTabKey}>
+        {TABS.map((t) => (
           <button
             key={t}
             role="tab"
             id={`tab-${t}`}
             aria-selected={tab === t}
             aria-controls={`tabpanel-${t}`}
+            tabIndex={tab === t ? 0 : -1}
             className={tab === t ? 'tab active' : 'tab'}
             onClick={() => setTab(t)}
           >
@@ -170,7 +193,15 @@ export function Panel(props: Props) {
         </div>
       )}
 
-      <section className="box" role="tabpanel" id="tabpanel-payments" aria-labelledby="tab-payments" hidden={tab !== 'payments'}>
+      <section
+        ref={paymentsBox}
+        tabIndex={-1}
+        className="box"
+        role="tabpanel"
+        id="tabpanel-payments"
+        aria-labelledby="tab-payments"
+        hidden={tab !== 'payments'}
+      >
         <h2>Payments</h2>
         {linked === null && <p className="muted">Loading...</p>}
         {linked === false && (
@@ -316,7 +347,11 @@ function DeveloperLog() {
         What Tiny&apos;s server sent and received, one line per change: a status read again with the same answer is not repeated. Access
         tokens, card details and link codes are removed.
       </p>
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
       <ol>
         {[...entries].reverse().map((entry) => (
           <li key={entry.id}>

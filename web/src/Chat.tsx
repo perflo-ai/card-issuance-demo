@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type SubmitEvent, type ReactNode } from 'react';
 import { api, type FrameEventPayload } from './api';
-import { pageVisibility } from './browser';
+import { pageVisibility, useFocusWhenClosed, useOnMount } from './browser';
 import { CardDetails } from './CardDetails';
 import { declineFallback, declineHint, money, stalledText, stepLabel, waitingText, when, type Waiting } from './copy';
 import { PerfloFrame } from './PerfloFrame';
@@ -25,6 +25,8 @@ interface ChatProps {
   onOrder: (order: OrderView) => void;
   onAccountChanged: () => void;
   onChangeLimits: () => void;
+  /** Just connected: put the cursor in the message box, the next thing to use. */
+  focusComposer?: boolean;
 }
 
 let nextId = 0;
@@ -51,7 +53,7 @@ interface Watch {
   done: Promise<void>;
 }
 
-export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountChanged, onChangeLimits }: ChatProps) {
+export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountChanged, onChangeLimits, focusComposer = false }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [notices, setNotices] = useState<Record<string, Notice>>({});
   const [actions, setActions] = useState<Record<string, Action | null>>({});
@@ -64,6 +66,10 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
   const inflight = useRef(new Map<string, Promise<OrderView | null>>());
   const watches = useRef(new Map<string, Watch>());
   const seeded = useRef(false);
+  const composer = useRef<HTMLInputElement>(null);
+  useOnMount(() => {
+    if (focusComposer) composer.current?.focus();
+  });
 
   // The orders already made appear in the chat once, when the list first arrives.
   useEffect(() => {
@@ -271,6 +277,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
           Message Tiny
         </label>
         <input
+          ref={composer}
           id="msg"
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -318,6 +325,8 @@ interface CardProps {
 export function OrderCard(props: CardProps) {
   const { order, action, waiting, note, error, perfloOrigin, onAdvance, onWatch } = props;
   const [frameOpen, setFrameOpen] = useState(false);
+  const card = useRef<HTMLElement>(null);
+  useFocusWhenClosed(frameOpen, card);
   const amount = formatUsd(order.amountCents);
   const busy = action !== null;
 
@@ -504,8 +513,16 @@ export function OrderCard(props: CardProps) {
           {order.perfloOrderId && order.cardLast4 && (
             <CardDetails perfloOrderId={order.perfloOrderId} last4={order.cardLast4} cardLimit={order.cardLimit} />
           )}
-          {props.notice === 'card_locked' && <p className="error">The card details could not be opened. Try again in a moment.</p>}
-          {props.notice === 'reveal_failed' && <p className="error">I could not open the card details. Try again.</p>}
+          {props.notice === 'card_locked' && (
+            <p className="error" role="alert">
+              The card details could not be opened. Try again in a moment.
+            </p>
+          )}
+          {props.notice === 'reveal_failed' && (
+            <p className="error" role="alert">
+              I could not open the card details. Try again.
+            </p>
+          )}
           <div className="row">
             <button className="primary" disabled={busy} onClick={() => void onAdvance('pay')}>
               {action === 'pay' ? `Paying at ${order.domain}...` : 'Use the card'}
@@ -563,7 +580,12 @@ export function OrderCard(props: CardProps) {
   }
 
   return (
-    <article className={`order-card ${SETTLED.has(order.phase) ? 'settled' : ''}`} aria-busy={busy || waiting !== null}>
+    <article
+      ref={card}
+      tabIndex={-1}
+      className={`order-card ${SETTLED.has(order.phase) ? 'settled' : ''}`}
+      aria-busy={busy || waiting !== null}
+    >
       {header}
       {steps && <StepList items={steps} active={busy || waiting !== null} />}
       {body}

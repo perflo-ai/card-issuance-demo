@@ -25,6 +25,7 @@ export function App() {
   const [me, setMe] = useState<MeView | null>(null);
   const [fatal, setFatal] = useState('');
   const [signingOut, setSigningOut] = useState(false);
+  const [justConnected, setJustConnected] = useState(false);
 
   useOnMount(() => {
     api
@@ -53,7 +54,9 @@ export function App() {
   if (fatal)
     return (
       <main className="center">
-        <p className="error">{fatal}</p>
+        <p className="error" role="alert">
+          {fatal}
+        </p>
       </main>
     );
   if (!config || !me)
@@ -76,7 +79,17 @@ export function App() {
           </div>
         )}
       </header>
-      {me.linked ? <Workspace config={config} me={me} onMe={setMe} /> : <Connect perfloOrigin={config.perfloOrigin} onConnected={setMe} />}
+      {me.linked ? (
+        <Workspace config={config} me={me} onMe={setMe} focusComposer={justConnected} />
+      ) : (
+        <Connect
+          perfloOrigin={config.perfloOrigin}
+          onConnected={(connected) => {
+            setJustConnected(true);
+            setMe(connected);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -130,7 +143,18 @@ function Connect({ perfloOrigin, onConnected }: { perfloOrigin: string; onConnec
  * and the Orders tab read the same list, so an order is never fetched twice
  * to show it in two places.
  */
-function Workspace({ config, me, onMe }: { config: DemoConfigView; me: MeView; onMe: (me: MeView) => void }) {
+function Workspace({
+  config,
+  me,
+  onMe,
+  focusComposer,
+}: {
+  config: DemoConfigView;
+  me: MeView;
+  onMe: (me: MeView) => void;
+  /** Just connected: the chat puts the cursor in the message box. */
+  focusComposer: boolean;
+}) {
   const [orders, setOrders] = useState<Record<string, OrderView>>({});
   const [seen, setSeen] = useState<Record<string, StepKey[]>>({});
   const [loaded, setLoaded] = useState(false);
@@ -201,6 +225,7 @@ function Workspace({ config, me, onMe }: { config: DemoConfigView; me: MeView; o
         onOrder={putOrder}
         onAccountChanged={accountChanged}
         onChangeLimits={() => setLimitsRequest((n) => n + 1)}
+        focusComposer={focusComposer}
       />
       <Panel
         perfloOrigin={config.perfloOrigin}
