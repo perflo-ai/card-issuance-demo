@@ -7,7 +7,14 @@ import type { DemoConfig } from './config.js';
 import type { EventLog } from './eventLog.js';
 import { centsToApiAmount } from './money.js';
 import { nextStep, TERMINAL_STATUSES, withoutRevealLink } from './orderState.js';
-import { PerfloApiError, type AccountResponse, type OrderResponse, type PerfloApi } from './perfloApi.js';
+import {
+  isUserTokenRefused,
+  PerfloApiError,
+  PerfloUnavailableError,
+  type AccountResponse,
+  type OrderResponse,
+  type PerfloApi,
+} from './perfloApi.js';
 import { revealCard, RevealError, simulateCheckout, type RevealedCard } from './checkout.js';
 import type { DemoOrder, DemoUser, Store } from './store.js';
 
@@ -64,19 +71,18 @@ export class DemoService {
         return this.storeToken(user, again.user_id, again.user_access_token);
       }
       if (again.status === 'login_required') {
-        throw new PerfloApiError(409, 'login_required', 'This person needs to set up payments again.');
+        throw new DemoError('conflict', 'Payments need to be set up again. Send your request once more.');
       }
     }
-    throw new PerfloApiError(502, 'reissue_without_token', 'Payments did not return access for this person');
+    throw new PerfloUnavailableError('Payments did not return access for this person');
   }
 
+  /**
+   * Tiny knows nobody's name or email: the person types and proves their email
+   * in Perflo's sign-in frame. So only Tiny's own id is sent.
+   */
   private userBody(user: DemoUser) {
-    return {
-      external_user_id: user.id,
-      email: user.email,
-      first_name: user.firstName,
-      last_name: user.lastName,
-    };
+    return { external_user_id: user.id };
   }
 
   /** Makes sure we hold an access token for this person, or starts the one-time setup. */
@@ -161,16 +167,26 @@ export class DemoService {
           if (link.status !== 'linked' || !current.perflo) return { order, user: current, notice: null };
         }
         try {
-          response = await this.api.createOrder(current.id, current.perflo.token, order.idempotencyKey, this.orderBody(order, current.perflo.userId));
+          response = await this.api.createOrder(
+            current.id,
+            current.perflo.token,
+            order.idempotencyKey,
+            this.orderBody(order, current.perflo.userId),
+          );
         } catch (error) {
-          if (!(error instanceof PerfloApiError) || error.httpStatus !== 401) throw error;
+          if (!isUserTokenRefused(error)) throw error;
           // Our token is not accepted any more: drop it and link again.
           this.log.add(current.id, 'demo', 'Access token refused: setting up access again');
           current = this.store.updateUser(current.id, (u) => (u.perflo = null));
           const link = await this.ensureLinked(current);
           current = link.user;
           if (link.status !== 'linked' || !current.perflo) return { order, user: current, notice: null };
-          response = await this.api.createOrder(current.id, current.perflo.token, order.idempotencyKey, this.orderBody(order, current.perflo.userId));
+          response = await this.api.createOrder(
+            current.id,
+            current.perflo.token,
+            order.idempotencyKey,
+            this.orderBody(order, current.perflo.userId),
+          );
         }
         if (response.status === 'identity_check_required' && !response.kyc_url) {
           // A replay (or a link that could not be made yet) carries no ID check link: ask for the order's state.
@@ -246,11 +262,7 @@ export class DemoService {
     return { order, user, notice: null };
   }
 
-  private async checkoutWithCard(
-    user: DemoUser,
-    order: DemoOrder,
-    response: Extract<OrderResponse, { status: 'ready' }>,
-  ): Promise<Notice> {
+  private async checkoutWithCard(user: DemoUser, order: DemoOrder, response: Extract<OrderResponse, { status: 'ready' }>): Promise<Notice> {
     if (!user.perflo || order.perfloOrderId === null) return 'reveal_failed';
     let revealUrl: string;
     if (response.reveal_url && !order.revealUsed) {
@@ -262,7 +274,7 @@ export class DemoService {
     this.store.updateOrder(order, (o) => (o.revealUsed = true));
 
     try {
-      const card = await revealCard(revealUrl, this.fetchImpl);
+      const card = await revealCard(revealUrl, { credentials: this.config.credentials, userToken: user.perflo.token }, this.fetchImpl);
       this.log.add(user.id, 'demo', `Card details read for checkout (card ending ${card.last4})`);
       const summary = await simulateCheckout(
         card,
@@ -324,7 +336,7 @@ export class DemoService {
       throw error;
     }
     try {
-      const card = await revealCard(revealUrl, this.fetchImpl);
+      const card = await revealCard(revealUrl, { credentials: this.config.credentials, userToken: user.perflo.token }, this.fetchImpl);
       this.log.add(user.id, 'demo', `Card details shown to the person (card ending ${card.last4})`);
       return card;
     } catch (error) {
@@ -332,7 +344,9 @@ export class DemoService {
       this.log.add(user.id, 'demo', `Card details could not be read (${code})`);
       throw new DemoError(
         'conflict',
-        code === 'still_locked' ? 'The card details are not ready yet. Try again in a moment.' : 'Could not open the card details. Try again.',
+        code === 'still_locked'
+          ? 'The card details are not ready yet. Try again in a moment.'
+          : 'Could not open the card details. Try again.',
       );
     }
   }
@@ -343,7 +357,7 @@ export class DemoService {
     try {
       return await this.api.getAccount(user.id, user.perflo.userId, user.perflo.token);
     } catch (error) {
-      if (error instanceof PerfloApiError && error.httpStatus === 401) {
+      if (isUserTokenRefused(error)) {
         this.store.updateUser(user.id, (u) => (u.perflo = null));
         return null;
       }

@@ -29,8 +29,25 @@ describe('loadConfig: where the demo listens', () => {
   });
 
   it('mock mode stays on this computer: its test payments service lives on localhost', () => {
-    expect(() =>
-      loadConfig({ ...LIVE, DEMO_MODE: 'mock', PERFLO_API_BASE: 'https://localhost:8791', PORT: '8080' }),
-    ).toThrow('Mock mode only runs on this computer. Set DEMO_MODE=live to host the demo.');
+    expect(() => loadConfig({ ...LIVE, DEMO_MODE: 'mock', PERFLO_API_BASE: 'https://localhost:8791', PORT: '8080' })).toThrow(
+      'Mock mode only runs on this computer. Set DEMO_MODE=live to host the demo.',
+    );
+  });
+});
+
+describe('loadConfig: the address state-changing requests must come from', () => {
+  it('is https://localhost:5174 on this computer', () => {
+    expect(loadConfig({ ...LIVE }).publicOrigin).toBe('https://localhost:5174');
+  });
+
+  it('is DEMO_PUBLIC_ORIGIN when hosted, or the forwarded host without it', () => {
+    expect(loadConfig({ ...LIVE, PORT: '8080', DEMO_PUBLIC_ORIGIN: 'https://tiny-demo.up.railway.app' }).publicOrigin).toBe(
+      'https://tiny-demo.up.railway.app',
+    );
+    expect(loadConfig({ ...LIVE, PORT: '8080' }).publicOrigin).toBeNull();
+  });
+
+  it.each(['http://tiny.example', 'https://tiny.example/app', 'tiny.example'])('refuses DEMO_PUBLIC_ORIGIN=%s', (origin) => {
+    expect(() => loadConfig({ ...LIVE, PORT: '8080', DEMO_PUBLIC_ORIGIN: origin })).toThrow(ConfigError);
   });
 });

@@ -1,11 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import {
-  canonicalRequestString,
-  signatureHeaders,
-  signCanonicalString,
-  verifySignature,
-} from '../server/signing.js';
+import { canonicalRequestString, signatureHeaders, signCanonicalString, verifySignature } from '../server/signing.js';
 
 // Vectors computed independently in Python (hmac + hashlib), following
 // perflo-backend-api src/partner/partnerSignature.ts lines 121-135.
@@ -17,9 +12,7 @@ describe('canonical string and signature', () => {
   it('matches the POST vector', () => {
     const body = Buffer.from('{"user_id":"usr_1","amount":"412.80"}', 'utf8');
     const canonical = canonicalRequestString('v1', 'post', '/partner/v2/orders', '1760000000', body);
-    expect(canonical).toBe(
-      'v1\nPOST\n/partner/v2/orders\n1760000000\n188118a583ed09127915ed3824c40e660ecb75fa305feac03b8f68cb325fd5c8',
-    );
+    expect(canonical).toBe('v1\nPOST\n/partner/v2/orders\n1760000000\n188118a583ed09127915ed3824c40e660ecb75fa305feac03b8f68cb325fd5c8');
     expect(signCanonicalString(SECRET, canonical)).toBe('oEhT5lgP2_A5mLIPX_q-Ntm4okOeRZDqIpgtMDEv_z4');
   });
 
@@ -95,7 +88,13 @@ describe('verification (as bapi does it, used by the mock)', () => {
   it('a GET signed by the client verifies with an empty captured body', () => {
     const headers = Object.fromEntries(
       Object.entries(
-        signatureHeaders({ partnerId: PARTNER_ID, keyVersion: 'v1', secret: SECRET }, 'GET', '/partner/v2/logins/lg_1', Buffer.alloc(0), now),
+        signatureHeaders(
+          { partnerId: PARTNER_ID, keyVersion: 'v1', secret: SECRET },
+          'GET',
+          '/partner/v2/logins/lg_1',
+          Buffer.alloc(0),
+          now,
+        ),
       ).map(([k, v]) => [k.toLowerCase(), v]),
     );
     expect(verifySignature(headers, 'GET', '/partner/v2/logins/lg_1', Buffer.alloc(0), lookup, now).ok).toBe(true);

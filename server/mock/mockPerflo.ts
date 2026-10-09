@@ -10,7 +10,8 @@
  *   POST /mock-merchant/checkout     a shop that charges a one-time card (demo checkout, mock mode)
  *   GET|POST /mock/kyc               an identity check page (kyc_url)
  *   POST /mock/control/revoke        simulates the person turning off Tiny's access
- *   GET  /mock-relay/partner-cards/:cardId/sensitive   the reveal link (Evervault already "decrypted")
+ *   GET  /mock-relay/partner-cards/:cardId/sensitive   the reveal link (already decrypted), signed and with
+ *                                                     the person's Bearer token, as the real one requires
  */
 
 import { createHash, randomBytes, randomInt } from 'node:crypto';
@@ -366,7 +367,11 @@ export function createMockPerflo(options: MockOptions) {
         return {
           status: 202,
           // null when the link cannot be made (no verified email yet).
-          body: { ...base, status: 'identity_check_required', kyc_url: user.email ? `${options.selfOrigin}/mock/kyc?ref=${user.kycRef}` : null },
+          body: {
+            ...base,
+            status: 'identity_check_required',
+            kyc_url: user.email ? `${options.selfOrigin}/mock/kyc?ref=${user.kycRef}` : null,
+          },
         };
       }
       case 'issuing':
@@ -415,25 +420,29 @@ export function createMockPerflo(options: MockOptions) {
     const result = verifySignature(req.headers, req.method, req.originalUrl, rawBody, (partnerId) =>
       partnerId === options.partnerId ? { [options.keyVersion]: options.secret } : null,
     );
-    if (!result.ok) return next(new HttpError(401, 'unauthorized', 'Request could not be verified.'));
+    if (!result.ok) {
+      next(new HttpError(401, 'unauthorized', 'We could not confirm who sent this request.'));
+      return;
+    }
     next();
   };
 
   const bearerUser = (req: Request): { user: MUser; token: string } | { revoked: MUser } => {
     const header = req.get('authorization') ?? '';
-    const match = /^Bearer ([A-Za-z0-9_-]{8,200})$/.exec(header);
-    if (!match) throw new HttpError(401, 'unauthorized', 'This person needs to set up payments again.');
-    const live = tokens.get(match[1]);
-    if (live) return { user: users.get(live) as MUser, token: match[1] };
-    const revoked = revokedTokens.get(match[1]);
+    const token = /^Bearer ([A-Za-z0-9_-]{8,200})$/.exec(header)?.[1];
+    if (token === undefined)
+      throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
+    const live = tokens.get(token);
+    if (live) return { user: users.get(live) as MUser, token };
+    const revoked = revokedTokens.get(token);
     if (revoked) return { revoked: users.get(revoked) as MUser };
-    throw new HttpError(401, 'unauthorized', 'This person needs to set up payments again.');
+    throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
   };
 
   const userFromToken = (req: Request, userId: string): MUser => {
     const who = bearerUser(req);
     if ('revoked' in who || who.user.userId !== userId) {
-      throw new HttpError(401, 'unauthorized', 'This person needs to set up payments again.');
+      throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
     }
     return who.user;
   };
@@ -471,9 +480,11 @@ export function createMockPerflo(options: MockOptions) {
     if (user && user.grant && user.token) {
       if (reissue) {
         const token = mintToken(user);
-        return send(200, { status: 'approved', user_id: user.userId, user_access_token: token });
+        send(200, { status: 'approved', user_id: user.userId, user_access_token: token });
+        return;
       }
-      return send(200, { status: 'approved', user_id: user.userId });
+      send(200, { status: 'approved', user_id: user.userId });
+      return;
     }
     if (!user) {
       user = {
@@ -517,9 +528,7 @@ export function createMockPerflo(options: MockOptions) {
     const user = userFromToken(req, req.params.userId);
     const grant = user.grant as Grant;
     const spent = monthSpent(user.userId);
-    const waitingOnId = [...orders.values()].some(
-      (o) => o.userId === user.userId && o.status === 'identity_check_required',
-    );
+    const waitingOnId = [...orders.values()].some((o) => o.userId === user.userId && o.status === 'identity_check_required');
     const open = [...orders.values()].filter((o) => {
       refresh(o);
       return o.userId === user.userId && o.status === 'ready';
@@ -590,14 +599,17 @@ export function createMockPerflo(options: MockOptions) {
       throw new HttpError(400, 'invalid_request', 'Some order details are missing or not valid.');
     }
     const owner = 'revoked' in who ? who.revoked : who.user;
-    if (owner.userId !== body.data.user_id) throw new HttpError(401, 'unauthorized', 'This person needs to set up payments again.');
+    if (owner.userId !== body.data.user_id)
+      throw new HttpError(401, 'user_token_invalid', 'This person needs to connect again before you can act for them.');
 
     const scope = `ptn:${options.partnerId}:${key}`;
-    const bodyHash = createHash('sha256').update((req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.alloc(0)).digest('hex');
+    const bodyHash = createHash('sha256')
+      .update((req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.alloc(0))
+      .digest('hex');
     const stored = idempotency.get(scope);
     if (stored) {
       if (stored.bodyHash !== bodyHash) {
-        throw new HttpError(409, 'idempotency_conflict', 'This order key was already used for a different order.');
+        throw new HttpError(409, 'idempotency_key_reused', 'This key was already used for a different request. Use a new key.');
       }
       return res.status(stored.status).json(stored.body);
     }
@@ -664,7 +676,7 @@ export function createMockPerflo(options: MockOptions) {
     if (order.status === 'ready' || order.status === 'issuing') {
       returned = (order.card as MCard).loadCents;
     } else if (!['awaiting_login', 'awaiting_payment', 'identity_check_required'].includes(order.status)) {
-      throw new HttpError(409, 'not_cancellable', 'This order is already finished.');
+      throw new HttpError(409, 'order_not_cancellable', 'This order can no longer be cancelled.');
     }
     user.balanceCents += returned;
     order.status = 'cancelled';
@@ -677,7 +689,7 @@ export function createMockPerflo(options: MockOptions) {
   const liveFrame = (req: Request): MFrame => {
     const sessionId = req.get('x-perflo-frame-session') ?? '';
     const frame = /^fs_[A-Za-z0-9_-]{43}$/.test(sessionId) ? frames.get(sessionId) : undefined;
-    if (!frame) throw new HttpError(404, 'frame_not_found', 'This link is not valid.');
+    if (!frame) throw new HttpError(404, 'not_found', 'This link is not valid.');
     if (frame.expiresAt < Date.now()) throw new HttpError(410, 'frame_expired', 'This link has expired. Go back and ask for a new one.');
     return frame;
   };
@@ -728,7 +740,7 @@ export function createMockPerflo(options: MockOptions) {
 
   framesRouter.post('/session/login', (req, res) => {
     const frame = liveFrame(req);
-    if (frame.purpose !== 'setup' || frame.step !== 'login') throw new HttpError(409, 'wrong_step', 'This step is already done.');
+    if (frame.purpose !== 'setup' || frame.step !== 'login') throw new HttpError(409, 'frame_step_invalid', 'This step is already done.');
     const body = z.object({ privy_access_token: z.string().max(400) }).safeParse(req.body);
     // Mock sign-in token: "mock-otp:<email>:<code>". The real frame sends a Privy access token.
     // "mock-otp:<code>" when Perflo already knows the email, "mock-otp:<email>:<code>" when the frame asked for it.
@@ -736,7 +748,7 @@ export function createMockPerflo(options: MockOptions) {
     const user = users.get(frame.userId) as MUser;
     const email = user.email ?? match?.[1] ?? null;
     if (!match || match[2] !== MOCK_CODE || !email) {
-      throw new HttpError(401, 'code_invalid', 'That code is not right. Check it and try again.');
+      throw new HttpError(401, 'sign_in_failed', 'That code is not right. Check it and try again.');
     }
     user.email = email;
     frame.loggedIn = true;
@@ -748,7 +760,7 @@ export function createMockPerflo(options: MockOptions) {
 
   framesRouter.post('/session/limits', (req, res) => {
     const frame = liveFrame(req);
-    if (frame.step !== 'limits') throw new HttpError(409, 'wrong_step', 'This step is already done.');
+    if (frame.step !== 'limits') throw new HttpError(409, 'frame_step_invalid', 'This step is already done.');
     const body = limitsBody.safeParse(req.body);
     if (!body.success) throw new HttpError(400, 'limits_invalid', 'Choose an amount per order and per month.');
     const perOrder = apiAmountToCents(body.data.per_order);
@@ -776,7 +788,7 @@ export function createMockPerflo(options: MockOptions) {
 
   framesRouter.post('/session/top-up', (req, res) => {
     const frame = liveFrame(req);
-    if (frame.step !== 'top_up') throw new HttpError(409, 'wrong_step', 'This step is already done.');
+    if (frame.step !== 'top_up') throw new HttpError(409, 'frame_step_invalid', 'This step is already done.');
     const body = z.object({ amount: amountString }).safeParse(req.body);
     const cents = body.success ? apiAmountToCents(body.data.amount) : 0;
     if (cents <= 0 || cents > MAX_TOP_UP_CENTS) throw new HttpError(400, 'amount_invalid', 'Enter an amount between $0.01 and $10,000.00.');
@@ -812,7 +824,7 @@ export function createMockPerflo(options: MockOptions) {
     } else {
       const user = users.get(frame.userId) as MUser;
       if (frame.purpose !== 'setup' || !user.grant || !user.token) {
-        throw new HttpError(409, 'wrong_step', 'Setup is not finished yet.');
+        throw new HttpError(409, 'frame_step_invalid', 'Setup is not finished yet.');
       }
       frame.step = 'done';
     }
@@ -861,17 +873,26 @@ export function createMockPerflo(options: MockOptions) {
     res.json({ status: 'succeeded' });
   });
 
+  /**
+   * The reveal link, as bapi #345 and ms-card #94 check it: the partner signature over GET and the
+   * link's path (no query), and the Bearer token of the person whose card it is. Every refusal is the
+   * same 404 and leaves the link usable; only a successful read uses it up.
+   */
   app.get('/mock-relay/partner-cards/:cardId/sensitive', (req, res) => {
-    const token = typeof req.query.t === 'string' ? req.query.t : '';
-    const entry = reveals.get(token);
+    const refuse = () => res.status(404).json({ success: false, error: 'This link has expired or was already used.' });
+    const t = typeof req.query.t === 'string' ? req.query.t : '';
+    const entry = reveals.get(t);
     const order = entry ? orders.get(entry.orderId) : undefined;
-    if (!entry || entry.consumed || entry.expiresAt < Date.now() || !order || order.card?.cardId !== req.params.cardId) {
-      return res.status(404).json({ success: false, error: 'Not found' });
-    }
-    entry.consumed = true;
+    if (!entry || entry.consumed || entry.expiresAt < Date.now() || !order || order.card?.cardId !== req.params.cardId) return refuse();
+    const signature = verifySignature(req.headers, 'GET', req.originalUrl, Buffer.alloc(0), (partnerId) =>
+      partnerId === options.partnerId ? { [options.keyVersion]: options.secret } : null,
+    );
+    const bearer = /^Bearer ([A-Za-z0-9_-]{8,200})$/.exec(req.get('authorization') ?? '')?.[1];
+    if (!signature.ok || bearer === undefined || tokens.get(bearer) !== order.userId) return refuse();
     refresh(order);
-    if (order.status !== 'ready') return res.status(404).json({ success: false, error: 'Not found' });
-    const card = order.card as MCard;
+    if (order.status !== 'ready') return refuse();
+    entry.consumed = true;
+    const card = order.card;
     const user = users.get(order.userId) as MUser;
     res.set('Cache-Control', 'no-store').json({
       success: true,
@@ -926,7 +947,7 @@ export function createMockPerflo(options: MockOptions) {
   });
 
   app.post('/mock/kyc', (req, res) => {
-    const ref = typeof req.body?.ref === 'string' ? req.body.ref : '';
+    const ref = z.object({ ref: z.string().max(100) }).safeParse(req.body).data?.ref ?? '';
     const user = [...users.values()].find((u) => u.kycRef === ref);
     res.set('Content-Security-Policy', "default-src 'self'; form-action 'self'").type('html');
     if (!user) return res.status(404).send(kycPage('missing', ''));

@@ -116,10 +116,8 @@ export interface DemoConfigView {
   perfloOrigin: string;
 }
 
+/** The browser's Tiny account. Anonymous: no name or email is ever asked for or shown. */
 export interface MeView {
-  firstName: string;
-  lastName: string;
-  email: string;
   linked: boolean;
   /** Mock mode test control. */
   stopAtCheckout: boolean;

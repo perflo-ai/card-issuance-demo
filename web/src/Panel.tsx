@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
-import { api } from './api';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { api, onRequestSettled } from './api';
+import { useFocusWhenClosed, useOnMount, useWhenVisible } from './browser';
 import { identityText, money, when } from './copy';
 import { Orders } from './Orders';
 import { PerfloFrame } from './PerfloFrame';
-import type { AccountView, LogEntry, MeView } from '../../server/views';
+import { singleFlight } from './polling';
+import type { AccountView, LogEntry, MeView, OrderView } from '../../server/views';
 
 interface Props {
   perfloOrigin: string;
@@ -13,49 +15,70 @@ interface Props {
   /** Bumped when the chat asks to change limits. */
   limitsRequest: number;
   onAccountChanged: () => void;
+  /** The person's orders, shared with the chat; null until the first list arrives. */
+  orders: OrderView[] | null;
+  ordersError: string;
+  onRefreshOrders: () => Promise<void>;
+  onOrder: (order: OrderView) => void;
   me: MeView;
   onMe: (me: MeView) => void;
 }
 
 type OpenFrame = { kind: 'limits' | 'top_up'; url: string } | null;
-type Tab = 'payments' | 'orders';
+const TABS = ['payments', 'orders'] as const;
+type Tab = (typeof TABS)[number];
+/** What the payments box is doing right now; one thing at a time. */
+type Busy = 'top_up' | 'limits' | 'revoke' | { cancel: string } | null;
 
-export function Panel({ perfloOrigin, mode, refreshKey, limitsRequest, onAccountChanged, me, onMe }: Props) {
+export function Panel(props: Props) {
+  const { perfloOrigin, mode, refreshKey, limitsRequest, onAccountChanged, me, onMe } = props;
   const [account, setAccount] = useState<AccountView | null>(null);
   const [linked, setLinked] = useState<boolean | null>(null);
   const [frame, setFrame] = useState<OpenFrame>(null);
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<Busy>(null);
+  const [savingStop, setSavingStop] = useState(false);
   const [tab, setTab] = useState<Tab>('payments');
+  const paymentsBox = useRef<HTMLElement>(null);
+  useFocusWhenClosed(frame !== null, paymentsBox);
 
-  useEffect(() => {
-    let live = true;
-    const load = () =>
-      api
-        .account()
-        .then((result) => {
-          if (!live) return;
+  /**
+   * The balance is read when it can have changed: on opening, after an order changes phase or a
+   * card is cancelled, after money or limits are saved in a frame, and when the page comes back
+   * into view. There is nothing to wait for in between, so there is no timer. A read asked for
+   * while one is on its way runs once more after it, never at the same time.
+   */
+  const loadAccount = useMemo(
+    () =>
+      singleFlight(async () => {
+        try {
+          const result = await api.account();
           setLinked(result.linked);
           setAccount(result.linked ? result.account : null);
-        })
-        .catch((e: unknown) => live && setError(e instanceof Error ? e.message : 'Could not load your balance.'));
-    void load();
-    const timer = setInterval(load, 10_000);
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
-  }, [refreshKey]);
+          setError('');
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'Could not load your balance.');
+        }
+      }),
+    [],
+  );
+  const loadedFor = useRef<number | null>(null);
+  useEffect(() => {
+    if (loadedFor.current === refreshKey) return;
+    loadedFor.current = refreshKey;
+    void loadAccount();
+  }, [refreshKey, loadAccount]);
+  useWhenVisible(() => void loadAccount());
 
   const openLimits = async () => {
     setError('');
-    setBusy(true);
+    setBusy('limits');
     try {
       setFrame({ kind: 'limits', url: (await api.limitsLink()).frameUrl });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong.');
+      setError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -68,49 +91,88 @@ export function Panel({ perfloOrigin, mode, refreshKey, limitsRequest, onAccount
 
   const openTopUp = async () => {
     setError('');
-    setBusy(true);
+    setBusy('top_up');
     try {
       setFrame({ kind: 'top_up', url: (await api.topUp()).frameUrl });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong.');
+      setError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
-  const cancelCard = async (orderId: string) => {
+  const cancelCard = async (perfloOrderId: string) => {
     setError('');
-    setBusy(true);
+    setBusy({ cancel: perfloOrderId });
     try {
-      await api.cancelCard(orderId);
-      onAccountChanged();
+      const result = await api.cancelCard(perfloOrderId);
+      // The chat and the Orders tab show the same order: one update reaches both.
+      if (result.order) props.onOrder(result.order);
+      else onAccountChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong.');
+      setError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
   const revoke = async () => {
     setError('');
+    setBusy('revoke');
     try {
       await api.mockRevoke();
       onAccountChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong.');
+      setError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
+    } finally {
+      setBusy(null);
     }
   };
 
+  const setStopAtCheckout = async (on: boolean) => {
+    setError('');
+    setSavingStop(true);
+    try {
+      onMe((await api.mockStopAtCheckout(on)).user);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
+    } finally {
+      setSavingStop(false);
+    }
+  };
+
+  const onTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    const at = TABS.indexOf(tab);
+    const next =
+      event.key === 'ArrowRight'
+        ? TABS[(at + 1) % TABS.length]
+        : event.key === 'ArrowLeft'
+          ? TABS[(at - 1 + TABS.length) % TABS.length]
+          : event.key === 'Home'
+            ? TABS[0]
+            : event.key === 'End'
+              ? TABS[TABS.length - 1]
+              : undefined;
+    if (!next) return;
+    event.preventDefault();
+    setTab(next);
+    document.getElementById(`tab-${next}`)?.focus();
+  };
+
+  const cancellingCard = typeof busy === 'object' && busy !== null ? busy.cancel : null;
+
   return (
     <aside className="panel" aria-label="Payments and orders">
-      <div className="tabs" role="tablist" aria-label="Payments and orders">
-        {(['payments', 'orders'] as const).map((t) => (
+      {/* The tabs pattern: one tab in the Tab order, arrow keys (and Home, End) move between them. */}
+      <div className="tabs" role="tablist" aria-label="Payments and orders" onKeyDown={onTabKey}>
+        {TABS.map((t) => (
           <button
             key={t}
             role="tab"
             id={`tab-${t}`}
             aria-selected={tab === t}
             aria-controls={`tabpanel-${t}`}
+            tabIndex={tab === t ? 0 : -1}
             className={tab === t ? 'tab active' : 'tab'}
             onClick={() => setTab(t)}
           >
@@ -121,11 +183,25 @@ export function Panel({ perfloOrigin, mode, refreshKey, limitsRequest, onAccount
 
       {tab === 'orders' && (
         <div role="tabpanel" id="tabpanel-orders" aria-labelledby="tab-orders">
-          <Orders refreshKey={refreshKey} onAccountChanged={onAccountChanged} />
+          <Orders
+            orders={props.orders}
+            error={props.ordersError}
+            onRefresh={props.onRefreshOrders}
+            onOrder={props.onOrder}
+            onAccountChanged={onAccountChanged}
+          />
         </div>
       )}
 
-      <section className="box" role="tabpanel" id="tabpanel-payments" aria-labelledby="tab-payments" hidden={tab !== 'payments'}>
+      <section
+        ref={paymentsBox}
+        tabIndex={-1}
+        className="box"
+        role="tabpanel"
+        id="tabpanel-payments"
+        aria-labelledby="tab-payments"
+        hidden={tab !== 'payments'}
+      >
         <h2>Payments</h2>
         {linked === null && <p className="muted">Loading...</p>}
         {linked === false && (
@@ -150,11 +226,11 @@ export function Panel({ perfloOrigin, mode, refreshKey, limitsRequest, onAccount
               <dd>{identityText(account.identity_check.status, account.identity_check.required_above)}</dd>
             </dl>
             <div className="row">
-              <button className="secondary" disabled={busy} onClick={() => void openTopUp()}>
-                Add money
+              <button className="secondary" disabled={busy !== null} onClick={() => void openTopUp()}>
+                {busy === 'top_up' ? 'Opening...' : 'Add money'}
               </button>
-              <button className="secondary" disabled={busy} onClick={() => void openLimits()}>
-                Change limits
+              <button className="secondary" disabled={busy !== null} onClick={() => void openLimits()}>
+                {busy === 'limits' ? 'Opening...' : 'Change limits'}
               </button>
             </div>
             {account.open_cards.length > 0 && (
@@ -167,8 +243,8 @@ export function Panel({ perfloOrigin, mode, refreshKey, limitsRequest, onAccount
                         .... {card.last4} · up to {money(card.card_limit)}
                         <span className="muted small"> · until {when(card.expires_at)}</span>
                       </span>
-                      <button className="link" disabled={busy} onClick={() => void cancelCard(card.order_id)}>
-                        Cancel card
+                      <button className="link" disabled={busy !== null} onClick={() => void cancelCard(card.order_id)}>
+                        {cancellingCard === card.order_id ? 'Cancelling...' : 'Cancel card'}
                       </button>
                     </li>
                   ))}
@@ -210,20 +286,18 @@ export function Panel({ perfloOrigin, mode, refreshKey, limitsRequest, onAccount
             <input
               type="checkbox"
               checked={me.stopAtCheckout}
-              onChange={(e) => {
-                api
-                  .mockStopAtCheckout(e.target.checked)
-                  .then((r) => onMe(r.user))
-                  .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Something went wrong.'));
-              }}
+              disabled={savingStop}
+              onChange={(e) => void setStopAtCheckout(e.target.checked)}
             />
             Stop at the checkout page without buying, so the card stays open and can be cancelled
           </label>
           {linked && (
             <>
-              <p className="muted small">Acts as if you turned off Tiny&apos;s access yourself, so the next order asks you to sign in again.</p>
-              <button className="secondary" onClick={() => void revoke()}>
-                Turn off Tiny&apos;s access
+              <p className="muted small">
+                Acts as if you turned off Tiny&apos;s access yourself, so the next order asks you to sign in again.
+              </p>
+              <button className="secondary" disabled={busy !== null} onClick={() => void revoke()}>
+                {busy === 'revoke' ? 'Turning off...' : "Turn off Tiny's access"}
               </button>
             </>
           )}
@@ -235,33 +309,49 @@ export function Panel({ perfloOrigin, mode, refreshKey, limitsRequest, onAccount
   );
 }
 
+/**
+ * Every line here is written while Tiny's server answers one of this page's
+ * requests, so the log reads new lines when such a request finishes (and when
+ * the page comes back into view), never on a timer: nothing new can appear
+ * while the page is quiet.
+ */
 function DeveloperLog() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
+  const [error, setError] = useState('');
   const last = useRef(0);
 
-  useEffect(() => {
-    let live = true;
-    const load = () =>
-      api
-        .events(last.current)
-        .then(({ events }) => {
-          if (!live || events.length === 0) return;
-          last.current = events[events.length - 1].id;
+  const load = useMemo(
+    () =>
+      singleFlight(async () => {
+        try {
+          const { events } = await api.events(last.current);
+          setError('');
+          const newest = events.at(-1);
+          if (!newest) return;
+          last.current = newest.id;
           setEntries((all) => [...all, ...events].slice(-200));
-        })
-        .catch(() => undefined);
-    void load();
-    const timer = setInterval(load, 2500);
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
-  }, []);
+        } catch {
+          setError('The log could not be read. It catches up after your next action.');
+        }
+      }),
+    [],
+  );
+  useOnMount(() => void load());
+  useEffect(() => onRequestSettled(() => void load()), [load]);
+  useWhenVisible(() => void load());
 
   return (
     <section className="box log" aria-label="Developer log">
       <h2>Developer log</h2>
-      <p className="muted small">What Tiny&apos;s server sent and received. Access tokens, card details and link codes are removed.</p>
+      <p className="muted small">
+        What Tiny&apos;s server sent and received, one line per change: a status read again with the same answer is not repeated. Access
+        tokens, card details and link codes are removed.
+      </p>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
       <ol>
         {[...entries].reverse().map((entry) => (
           <li key={entry.id}>

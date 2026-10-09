@@ -11,16 +11,7 @@ import type { OrderView } from './views.js';
 export type { OrderPhase, OrderView } from './views.js';
 
 /** Statuses after which nothing more will happen to the order. */
-export const TERMINAL_STATUSES: ReadonlySet<OrderResponse['status']> = new Set([
-  'declined',
-  'completed',
-  'cancelled',
-  'expired',
-  'failed',
-]);
-
-/** Statuses where the order moves on by itself and we should look again shortly. */
-export const POLL_STATUSES: ReadonlySet<OrderResponse['status']> = new Set(['issuing']);
+export const TERMINAL_STATUSES: ReadonlySet<OrderResponse['status']> = new Set(['declined', 'completed', 'cancelled', 'expired', 'failed']);
 
 export type NextStep = 'reveal' | 'login' | 'none';
 

@@ -5,6 +5,7 @@
 
 import type { DeclineReason, IdentityStatus, OrderPhase } from '../../server/views';
 import { apiAmountToCents, formatUsd } from '../../server/money';
+import type { StepKey } from './progress';
 
 /** "412.80" from the API -> "$412.80". */
 export function money(amount: string): string {
@@ -104,3 +105,57 @@ export function phaseLabel(phase: OrderPhase): string {
       return 'Not completed';
   }
 }
+
+/** What Tiny is waiting on while it keeps looking at an order. */
+export type Waiting = 'setup' | 'placing' | 'identity' | 'money' | 'card';
+
+/** The line shown while Tiny is waiting on something, in the words of the step. */
+export function waitingText(waiting: Waiting): string {
+  switch (waiting) {
+    case 'setup':
+      return 'Finishing setup...';
+    case 'placing':
+      return 'Placing your order...';
+    case 'identity':
+      return 'Waiting for your identity check result...';
+    case 'money':
+      return 'Waiting for your money to arrive...';
+    case 'card':
+      return 'Getting your one-time card ready...';
+  }
+}
+
+/** Said when Tiny stopped looking without an answer, with what to do next. */
+export function stalledText(waiting: Waiting): string {
+  switch (waiting) {
+    case 'setup':
+      return 'Setup is taking longer than usual.';
+    case 'placing':
+      return 'Your order is taking longer than usual. Check again in a minute.';
+    case 'identity':
+      return 'The result has not come through yet. Try again in a minute.';
+    case 'money':
+      return 'Your money has not arrived yet. If you added it, check again in a minute.';
+    case 'card':
+      return 'Your card is taking longer than usual to get ready. Check again in a minute.';
+  }
+}
+
+/** One line per step of an order, for the order's step list. */
+export function stepLabel(step: StepKey, domain: string): string {
+  switch (step) {
+    case 'setup':
+      return 'Set up payments';
+    case 'identity':
+      return 'Identity check';
+    case 'money':
+      return 'Add money';
+    case 'card':
+      return 'Get your one-time card ready';
+    case 'pay':
+      return `Pay at ${domain}`;
+  }
+}
+
+/** The steps inside the setup frame, in the order the frame asks for them. */
+export const SETUP_STEPS = ['Verify it is you', 'Allow Tiny to pay for you', 'Add money if needed'] as const;

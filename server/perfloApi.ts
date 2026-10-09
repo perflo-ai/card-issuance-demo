@@ -13,6 +13,18 @@ import type { EventLog } from './eventLog.js';
 import type { AccountView, DeclineReason as DeclineReasonView, IdentityStatus as IdentityStatusView } from './views.js';
 
 const amount = z.string().regex(/^(0|[1-9][0-9]{0,8})\.[0-9]{2}$/);
+/**
+ * A link Perflo hands out, which the browser opens or embeds: https only (http
+ * only on this computer, for the mock). Anything else, such as a javascript:
+ * link, is a broken answer and is refused at the door.
+ */
+const link = z
+  .string()
+  .url()
+  .refine((value) => {
+    const url = new URL(value);
+    return url.protocol === 'https:' || (url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1'));
+  });
 const money = z.object({ amount, currency: z.literal('USD') });
 
 export const usersResponse = z.discriminatedUnion('status', [
@@ -20,7 +32,7 @@ export const usersResponse = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('login_required'),
     login_id: z.string().min(1),
-    login_url: z.string().url(),
+    login_url: link,
     expires_at: z.string(),
   }),
 ]);
@@ -46,13 +58,11 @@ export const accountResponse = z.object({
     remaining_this_month: money,
   }),
   identity_check: z.object({ required_above: amount, status: identityStatus }),
-  open_cards: z.array(
-    z.object({ order_id: z.string(), last4: z.string(), card_limit: amount, expires_at: z.string() }),
-  ),
+  open_cards: z.array(z.object({ order_id: z.string(), last4: z.string(), card_limit: amount, expires_at: z.string() })),
 });
 export type AccountResponse = z.infer<typeof accountResponse>;
 
-export const frameLinkResponse = z.object({ frame_url: z.string().url(), expires_at: z.string() });
+export const frameLinkResponse = z.object({ frame_url: link, expires_at: z.string() });
 export const topUpResponse = frameLinkResponse.extend({ top_up_id: z.string(), amount: amount.nullable().optional() });
 export type TopUpResponse = z.infer<typeof topUpResponse>;
 
@@ -67,17 +77,17 @@ export const orderResponse = z.discriminatedUnion('status', [
     last4: z.string().regex(/^[0-9]{4}$/),
     card_limit: amount,
     // Present only on the response that first hands the card out (SPEC 4 clarification).
-    reveal_url: z.string().url().optional(),
+    reveal_url: link.optional(),
     reveal_expires_at: z.string().optional(),
     card_expires_at: z.string(),
   }),
-  z.object({ order_id: z.string(), status: z.literal('payment_required'), frame_url: z.string().url(), amount_due: amount }),
-  z.object({ order_id: z.string(), status: z.literal('login_required'), login_id: z.string(), login_url: z.string().url() }),
+  z.object({ order_id: z.string(), status: z.literal('payment_required'), frame_url: link, amount_due: amount }),
+  z.object({ order_id: z.string(), status: z.literal('login_required'), login_id: z.string(), login_url: link }),
   z.object({
     order_id: z.string(),
     status: z.literal('identity_check_required'),
     // null when the link cannot be made right now; absent on an idempotent replay of POST /orders.
-    kyc_url: z.string().url().nullable().optional(),
+    kyc_url: link.nullable().optional(),
     message: z.string().optional(),
   }),
   z.object({ order_id: z.string(), status: z.literal('issuing') }),
@@ -89,12 +99,47 @@ export const orderResponse = z.discriminatedUnion('status', [
 ]);
 export type OrderResponse = z.infer<typeof orderResponse>;
 
-export const revealLinkResponse = z.object({ reveal_url: z.string().url(), reveal_expires_at: z.string() });
+export const revealLinkResponse = z.object({ reveal_url: link, reveal_expires_at: z.string() });
 /** bapi never stores reveal links, so an idempotent replay of card-reveal answers 201 with only a message. */
 const revealOrReplay = z.union([revealLinkResponse, z.object({ message: z.string() })]);
 export const cancelResponse = z.object({ status: z.literal('cancelled'), amount_returned: amount });
 
 const errorEnvelope = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
+
+/** Every refusal code the Partner API v2 documents (perflo-backend-api src/partnerV2/errors.ts). */
+export const PARTNER_ERROR_CODES = [
+  'invalid_request',
+  'unsupported_media_type',
+  'request_too_large',
+  'unauthorized',
+  'user_token_invalid',
+  'not_found',
+  'rate_limited',
+  'code_send_limited',
+  'conflict',
+  'card_not_open',
+  'order_not_cancellable',
+  'order_in_progress',
+  'user_not_connected',
+  'idempotency_key_reused',
+  'idempotency_in_progress',
+  'idempotency_key_required',
+  'frame_expired',
+  'frame_step_invalid',
+  'sign_in_failed',
+  'wrong_person',
+  'email_missing',
+  'limits_invalid',
+  'amount_invalid',
+  'service_unavailable',
+  'internal_error',
+] as const;
+export type PartnerErrorCode = (typeof PARTNER_ERROR_CODES)[number];
+
+/** True when payments refused this person's access token (not Tiny's own signature). */
+export function isUserTokenRefused(error: unknown): boolean {
+  return error instanceof PerfloApiError && error.code === 'user_token_invalid';
+}
 
 export class PerfloApiError extends Error {
   constructor(
@@ -109,7 +154,11 @@ export class PerfloApiError extends Error {
 
 /** The service could not be reached or answered with something outside the contract. */
 export class PerfloUnavailableError extends Error {
-  constructor(message: string) {
+  /** `retryable`: nothing was answered (no connection or a timeout), so a read may be sent again. */
+  constructor(
+    message: string,
+    readonly retryable = false,
+  ) {
     super(message);
     this.name = 'PerfloUnavailableError';
   }
@@ -147,6 +196,25 @@ const ORDER_TIMEOUT_MS = 90_000;
  */
 const CANCEL_TIMEOUT_MS = 90_000;
 
+/**
+ * Reads (GET) are retried when the answer says "try again": the service could not be reached, or
+ * answered 429, 502, 503 or 504. Writes are never retried here: an order is retried by reading it
+ * (its Idempotency-Key makes a second POST safe, but a read is all a retry needs), and every other
+ * write is one the person asked for and can ask for again.
+ */
+const READ_ATTEMPTS = 3;
+const RETRY_STATUSES: ReadonlySet<number> = new Set([429, 502, 503, 504]);
+const RETRY_BASE_MS = 500;
+const RETRY_MAX_WAIT_MS = 5_000;
+
+const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+
+/** Retry-After in seconds when payments sent one, else a doubling wait; never more than RETRY_MAX_WAIT_MS. */
+function retryWait(attempt: number, retryAfter: string | null): number {
+  const seconds = retryAfter !== null && /^[0-9]{1,4}$/.test(retryAfter) ? Number(retryAfter) : null;
+  return Math.min(RETRY_MAX_WAIT_MS, seconds !== null ? seconds * 1000 : RETRY_BASE_MS * 2 ** attempt);
+}
+
 export class PerfloApi {
   constructor(
     private readonly base: string,
@@ -161,6 +229,27 @@ export class PerfloApi {
     route: string,
     options: RequestOptions = {},
   ): Promise<{ status: number; json: unknown }> {
+    const attempts = method === 'GET' ? READ_ATTEMPTS : 1;
+    for (let attempt = 0; ; attempt++) {
+      const last = attempt === attempts - 1;
+      try {
+        const result = await this.send(demoUserId, method, route, options);
+        if (last || !RETRY_STATUSES.has(result.status)) return result;
+        await pause(retryWait(attempt, result.retryAfter));
+      } catch (error) {
+        if (last || !(error instanceof PerfloUnavailableError) || !error.retryable) throw error;
+        await pause(retryWait(attempt, null));
+      }
+    }
+  }
+
+  /** One signed request, logged (redacted). Signed fresh each time, so a retry carries a current timestamp. */
+  private async send(
+    demoUserId: string | null,
+    method: 'GET' | 'POST',
+    route: string,
+    options: RequestOptions,
+  ): Promise<{ status: number; json: unknown; retryAfter: string | null }> {
     const url = new URL(this.base + route);
     // Built once, hashed once, sent as is: the signature covers these exact bytes.
     const rawBody = options.body === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(options.body), 'utf8');
@@ -183,7 +272,7 @@ export class PerfloApi {
     } catch (error) {
       const reason = error instanceof Error && error.name === 'TimeoutError' ? 'timed out' : 'could not connect';
       this.log.add(demoUserId, 'api', `${method} ${url.pathname} ${reason}`, { request: options.body });
-      throw new PerfloUnavailableError(`Payments service ${reason}`);
+      throw new PerfloUnavailableError(`Payments service ${reason}`, true);
     }
 
     const text = await response.text();
@@ -198,11 +287,20 @@ export class PerfloApi {
         throw new PerfloUnavailableError('Payments service sent an unreadable answer');
       }
     }
-    this.log.add(demoUserId, 'api', `${method} ${url.pathname} -> ${response.status}`, {
-      request: options.body,
-      response: json,
-    });
-    return { status: response.status, json };
+    // A read is often repeated while a status is watched: name the status it answered, and log a
+    // repeat of the same answer only once.
+    const answered =
+      method === 'GET' && typeof (json as { status?: unknown } | null)?.status === 'string'
+        ? ` ${(json as { status: string }).status}`
+        : '';
+    this.log.add(
+      demoUserId,
+      'api',
+      `${method} ${url.pathname} -> ${response.status}${answered}`,
+      { request: options.body, response: json },
+      { collapse: method === 'GET' },
+    );
+    return { status: response.status, json, retryAfter: response.headers.get('retry-after') };
   }
 
   private parse<T>(schema: z.ZodType<T>, status: number, json: unknown, okStatuses: number[]): T {
@@ -223,7 +321,7 @@ export class PerfloApi {
 
   async createUser(
     demoUserId: string,
-    body: { external_user_id: string; email?: string; first_name?: string; last_name?: string; reissue?: boolean },
+    body: { external_user_id: string; reissue?: boolean },
     idempotencyKey?: string,
   ): Promise<UsersResponse> {
     const r = await this.request(demoUserId, 'POST', '/partner/v2/users', { body, ...(idempotencyKey ? { idempotencyKey } : {}) });
@@ -295,11 +393,11 @@ export class PerfloApi {
   }
 }
 
-// The browser-facing copies in views.ts must stay identical to these contract shapes.
+// The browser-facing copies in views.ts must stay identical to these contract shapes: a difference fails the typecheck.
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
-const contractChecks: [Same<AccountResponse, AccountView>, Same<DeclineReason, DeclineReasonView>, Same<IdentityStatus, IdentityStatusView>] = [
-  true,
-  true,
-  true,
+type Assert<T extends true> = T;
+export type ContractChecks = [
+  Assert<Same<AccountResponse, AccountView>>,
+  Assert<Same<DeclineReason, DeclineReasonView>>,
+  Assert<Same<IdentityStatus, IdentityStatusView>>,
 ];
-void contractChecks;

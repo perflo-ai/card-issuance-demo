@@ -11,13 +11,22 @@ import type { EventLog } from './eventLog.js';
 import { parseOrderMessage } from './intent.js';
 import { formatUsd, parseDecimalToCents } from './money.js';
 import { toView } from './orderState.js';
-import { PerfloApiError, PerfloUnavailableError } from './perfloApi.js';
-import { DemoError, type DemoService } from './service.js';
-import type { DemoUser, Store } from './store.js';
-import { FRAME_EVENT_TYPES, type CardDetailsView } from './views.js';
+import { rateLimit, sameOriginOnly, securityHeaders } from './security.js';
+import { HttpError, toBrowserError } from './errors.js';
+import { requestLog, type Logger } from './logger.js';
+import type { DemoService } from './service.js';
+import { SESSION_TTL_MS, type DemoUser, type Store } from './store.js';
+import { FRAME_EVENT_TYPES, type CardDetailsView, type MeView } from './views.js';
 
 const SESSION_COOKIE = 'tiny_session';
+/** The test control talks to the mock on this computer; it never needs long. */
+const MOCK_CONTROL_TIMEOUT_MS = 5_000;
 
+/** Ids as Tiny makes them (order ids are uuids) and as Perflo sends them (opaque, url-safe). */
+const demoOrderId = z.string().uuid();
+const perfloOrderId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+const noBody = z.object({}).strict();
+const eventsQuery = z.object({ after: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0) });
 
 const frameEvent = z.object({
   type: z.enum(FRAME_EVENT_TYPES),
@@ -27,21 +36,6 @@ const frameEvent = z.object({
   order_id: z.string().max(200).optional(),
   code: z.string().max(100).optional(),
 });
-
-const signupBody = z.object({
-  first_name: z.string().trim().min(1).max(100),
-  last_name: z.string().trim().min(1).max(100),
-  email: z.string().trim().toLowerCase().email().max(320),
-});
-
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
 
 function sessionId(req: Request): string | undefined {
   const header = req.headers.cookie;
@@ -58,7 +52,11 @@ export interface DemoAppDeps {
   store: Store;
   service: DemoService;
   log: EventLog;
+  /** The operator's log (stdout). */
+  logger: Logger;
   fetchImpl?: typeof fetch;
+  /** The built web app is served by this process (strict content security policy). */
+  production?: boolean;
 }
 
 export function chatReply(text: string): { reply: string; intent?: ReturnType<typeof parseOrderMessage> & { kind: 'order' } } {
@@ -74,10 +72,15 @@ export function chatReply(text: string): { reply: string; intent?: ReturnType<ty
     if (parsed.problem === 'amount_zero') return { reply: 'The amount needs to be more than $0.00.' };
     if (parsed.problem === 'amount_too_large') return { reply: 'That amount is too large for one order.' };
     if (parsed.missing.includes('amount') && parsed.missing.includes('merchant')) {
-      return { reply: 'Tell me what to buy, how much to spend and on which website. For example: buy me $50 worth of headphones on amazon.' };
+      return {
+        reply: 'Tell me what to buy, how much to spend and on which website. For example: buy me $50 worth of headphones on amazon.',
+      };
     }
     if (parsed.missing.includes('amount')) {
-      return { reply: 'How much should I spend? Send the whole request again with the amount, for example: buy me $50 worth of headphones on amazon.' };
+      return {
+        reply:
+          'How much should I spend? Send the whole request again with the amount, for example: buy me $50 worth of headphones on amazon.',
+      };
     }
     return { reply: 'Which website should I buy from? Send the request again with the website, for example: on amazon.com.' };
   }
@@ -86,17 +89,68 @@ export function chatReply(text: string): { reply: string; intent?: ReturnType<ty
   };
 }
 
-export function createDemoApp({ config, store, service, log, fetchImpl = fetch }: DemoAppDeps) {
+export function createDemoApp({ config, store, service, log, logger, fetchImpl = fetch, production = false }: DemoAppDeps) {
+  const hosted = config.listen.kind === 'hosted';
   const app = express();
   app.disable('x-powered-by');
-  app.use('/demo', express.json({ limit: '16kb' }));
+  // A host's proxy sits in front: the client address and the public host name come from its headers.
+  if (hosted) app.set('trust proxy', 1);
+  app.use(requestLog(logger));
+  app.use(securityHeaders({ perfloOrigin: config.perfloOrigin, production, hosted }));
 
-  // Cookie sessions plus JSON-only POSTs: a cross-site form cannot send application/json without a preflight.
-  app.use('/demo', (req, _res, next) => {
-    // req.is() is null for a bodyless request and false for a body of another type.
-    if (req.method === 'POST' && req.is('application/json') === false) return next(new HttpError(415, 'Send JSON.'));
+  // For the host's health check: no session, no rate limit, nothing about anyone.
+  app.get('/healthz', (_req, res) => {
+    res.set('Cache-Control', 'no-store').json({ status: 'ok' });
+  });
+
+  // Generous for one person's page (it reads a few times a minute while an order is moving), tight for a script.
+  app.use('/demo', rateLimit({ windowMs: 60_000, max: 300 }));
+  // Each new browser makes an account in the store: few per address.
+  app.use(
+    '/demo/session',
+    rateLimit({ windowMs: 10 * 60_000, max: 20, counts: (req) => req.method === 'POST' && !store.userForSession(sessionId(req)) }),
+  );
+  /**
+   * CSRF. Every state-changing route refuses a request whose Origin is not Tiny's own (a page on
+   * another site cannot send ours), the session cookie is SameSite=Strict, and a POST must carry a
+   * JSON body, which a cross-site form cannot send.
+   */
+  app.use('/demo', sameOriginOnly({ publicOrigin: config.publicOrigin, trustProxy: hosted }));
+  app.use('/demo', express.json({ limit: '16kb' }));
+  app.use('/demo', (req, res, next) => {
+    // req.is() is null for a request with no body and false for a body of another type: both are refused.
+    if (req.method === 'POST' && !req.is('application/json')) {
+      next(new HttpError(415, 'Send JSON.'));
+      return;
+    }
+    // Balances, orders and card details are this person's alone: never kept by a browser or proxy cache.
+    res.set('Cache-Control', 'no-store');
     next();
   });
+
+  /**
+   * SameSite=Strict: the cookie is only ever needed on the page's own requests to this origin, so no
+   * request started from another site (not even a link a person follows) carries it. Secure always:
+   * locally the demo is https, and a host serves it over https in front.
+   */
+  const setSession = (res: Response, sid: string) =>
+    res.cookie(SESSION_COOKIE, sid, { httpOnly: true, secure: true, sameSite: 'strict', path: '/', maxAge: SESSION_TTL_MS });
+
+  /** When this request linked the account to Perflo, the browser gets a new session id (see Store.rotateSession). */
+  const rotateIfLinked = (req: Request, res: Response, user: DemoUser, wasLinked: boolean) => {
+    if (wasLinked || store.user(user.id).perflo === null) return;
+    const sid = sessionId(req);
+    const fresh = sid ? store.rotateSession(sid) : null;
+    if (fresh) setSession(res, fresh);
+  };
+
+  const parse = <T>(schema: z.ZodType<T>, value: unknown, error: HttpError): T => {
+    const result = schema.safeParse(value);
+    if (!result.success) throw error;
+    return result.data;
+  };
+  const notFound = new HttpError(404, 'That order was not found.');
+  const unreadable = new HttpError(400, 'The request could not be read.');
 
   const currentUser = (req: Request): DemoUser => {
     const user = store.userForSession(sessionId(req));
@@ -104,10 +158,7 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
     return user;
   };
 
-  const meView = (user: DemoUser) => ({
-    firstName: user.firstName,
-    lastName: user.lastName,
-    email: user.email,
+  const meView = (user: DemoUser): MeView => ({
     linked: user.perflo !== null,
     stopAtCheckout: user.testStopAtCheckout === true,
   });
@@ -116,20 +167,24 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
     res.json({ mode: config.mode, perfloOrigin: config.perfloOrigin });
   });
 
-  app.post('/demo/signup', (req, res) => {
-    const body = signupBody.safeParse(req.body);
-    if (!body.success) throw new HttpError(400, 'Enter your first name, last name and a valid email.');
-    const { user, sessionId: sid } = store.createUser(body.data.first_name, body.data.last_name, body.data.email);
-    log.add(user.id, 'demo', 'Signed in to Tiny');
-    res.cookie(SESSION_COOKIE, sid, { httpOnly: true, secure: true, sameSite: 'lax', path: '/' });
+  /**
+   * The browser's Tiny account: the one its session cookie names, or a new
+   * anonymous one (no name, no email) on a first visit. Nothing personal is
+   * asked for; the person proves their email to Perflo in the sign-in frame.
+   */
+  app.post('/demo/session', (req, res) => {
+    parse(noBody, req.body, unreadable);
+    // Only ever this browser's own cookie, or a new account: no id is accepted from the request.
+    const existing = store.userForSession(sessionId(req));
+    if (existing) return res.json({ user: meView(existing) });
+    const { user, sessionId: sid } = store.createUser();
+    log.add(user.id, 'demo', 'New visit to Tiny');
+    setSession(res, sid);
     res.json({ user: meView(user) });
   });
 
-  app.get('/demo/me', (req, res) => {
-    res.json({ user: meView(currentUser(req)) });
-  });
-
   app.post('/demo/logout', (req, res) => {
+    parse(noBody, req.body, unreadable);
     const sid = sessionId(req);
     if (sid) store.endSession(sid);
     res.clearCookie(SESSION_COOKIE, { path: '/' });
@@ -138,7 +193,10 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
 
   app.post('/demo/chat', (req, res) => {
     const user = currentUser(req);
-    const body = z.object({ text: z.string().max(500) }).safeParse(req.body);
+    const body = z
+      .object({ text: z.string().max(500) })
+      .strict()
+      .safeParse(req.body);
     if (!body.success) throw new HttpError(400, 'Message is too long.');
     const { reply, intent } = chatReply(body.data.text);
     if (!intent) return res.json({ reply });
@@ -156,7 +214,8 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
 
   app.post('/demo/orders/:id/discard', (req, res) => {
     const user = currentUser(req);
-    const order = store.order(user.id, req.params.id);
+    parse(noBody, req.body, unreadable);
+    const order = store.order(user.id, parse(demoOrderId, req.params.id, notFound));
     if (!order) throw new HttpError(404, 'That order was not found.');
     if (order.state !== 'draft') throw new HttpError(409, 'That order was already sent.');
     store.updateOrder(order, (o) => (o.state = 'discarded'));
@@ -165,7 +224,10 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
 
   app.post('/demo/orders/:id/advance', async (req, res) => {
     const user = currentUser(req);
-    const result = await service.advanceOrder(user, req.params.id);
+    parse(noBody, req.body, unreadable);
+    const wasLinked = user.perflo !== null;
+    const result = await service.advanceOrder(user, parse(demoOrderId, req.params.id, notFound));
+    rotateIfLinked(req, res, user, wasLinked);
     res.json({ order: toView(result.order, result.user), notice: result.notice, linked: result.user.perflo !== null });
   });
 
@@ -175,15 +237,45 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
     if (!event.success) throw new HttpError(400, 'Unknown frame event.');
     log.add(user.id, 'frame', event.data.type, event.data);
     if (event.data.type === 'perflo:login_completed' || event.data.type === 'perflo:setup_completed') {
+      // The event only says "look now". Which login is looked at comes from this session's own
+      // record (the one its link/start or order made), never from ids in the event.
+      const wasLinked = user.perflo !== null;
       const { status } = await service.refreshLogin(user);
+      rotateIfLinked(req, res, user, wasLinked);
       return res.json({ link: status });
     }
     res.json({});
   });
 
+  /** Connect: the setup frame to show, or `linked` when Perflo already gave this person's access back. */
+  app.post('/demo/link/start', async (req, res) => {
+    parse(noBody, req.body, unreadable);
+    let current = currentUser(req);
+    const wasLinked = current.perflo !== null;
+    if (current.pendingLogin) {
+      // A setup link from an earlier visit may have expired: look first, so the frame never opens on a dead link.
+      const looked = await service.refreshLogin(current);
+      if (looked.status === 'linked') {
+        rotateIfLinked(req, res, current, wasLinked);
+        return res.json({ link: 'linked' });
+      }
+      current = looked.user;
+    }
+    const { user, status } = await service.ensureLinked(current);
+    rotateIfLinked(req, res, user, wasLinked);
+    // The setup link goes only to the browser of the session that asked for it, and only in this body.
+    if (status === 'login_required' && user.pendingLogin) {
+      return res.json({ link: status, frameUrl: user.pendingLogin.loginUrl });
+    }
+    res.json({ link: status });
+  });
+
   app.post('/demo/link/refresh', async (req, res) => {
     const user = currentUser(req);
+    parse(noBody, req.body, unreadable);
+    const wasLinked = user.perflo !== null;
     const { status } = await service.refreshLogin(user);
+    rotateIfLinked(req, res, user, wasLinked);
     res.json({ link: status });
   });
 
@@ -195,12 +287,16 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
 
   app.post('/demo/limits-link', async (req, res) => {
     const user = currentUser(req);
+    parse(noBody, req.body, unreadable);
     res.json({ frameUrl: await service.limitsLink(user) });
   });
 
   app.post('/demo/top-ups', async (req, res) => {
     const user = currentUser(req);
-    const body = z.object({ amount: z.string().max(20).optional() }).safeParse(req.body);
+    const body = z
+      .object({ amount: z.string().max(20).optional() })
+      .strict()
+      .safeParse(req.body);
     if (!body.success) throw new HttpError(400, 'Enter an amount.');
     let cents: number | undefined;
     if (body.data.amount !== undefined && body.data.amount !== '') {
@@ -213,15 +309,16 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
 
   app.post('/demo/orders/:perfloOrderId/card-details', async (req, res) => {
     const user = currentUser(req);
-    const card = await service.cardDetails(user, req.params.perfloOrderId);
-    res.set('Cache-Control', 'no-store');
+    parse(noBody, req.body, unreadable);
+    const card = await service.cardDetails(user, parse(perfloOrderId, req.params.perfloOrderId, notFound));
     const view: CardDetailsView = card;
     res.json({ card: view });
   });
 
   app.post('/demo/cards/:orderId/cancel', async (req, res) => {
     const user = currentUser(req);
-    const result = await service.cancelCard(user, req.params.orderId);
+    parse(noBody, req.body, unreadable);
+    const result = await service.cancelCard(user, parse(perfloOrderId, req.params.orderId, notFound));
     res.json({
       amountReturned: result.amountReturned,
       ...(result.order ? { order: toView(result.order, store.user(user.id)) } : {}),
@@ -230,20 +327,27 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
 
   app.get('/demo/events', (req, res) => {
     const user = currentUser(req);
-    const after = Number(req.query.after ?? 0);
-    res.json({ events: log.forUser(user.id, Number.isSafeInteger(after) ? after : 0) });
+    const { after } = parse(eventsQuery, req.query, unreadable);
+    res.json({ events: log.forUser(user.id, after) });
   });
 
   // Mock mode only: simulates the person turning off Tiny's access, so login_required can be shown.
   app.post('/demo/mock/revoke-access', async (req, res) => {
     if (config.mode !== 'mock') throw new HttpError(404, 'Not found.');
     const user = currentUser(req);
+    parse(noBody, req.body, unreadable);
     if (!user.perflo) throw new HttpError(409, 'Payments are not set up yet.');
-    const response = await fetchImpl(`${config.perfloOrigin}/mock/control/revoke`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: user.perflo.userId }),
-    });
+    let response: globalThis.Response;
+    try {
+      response = await fetchImpl(`${config.perfloOrigin}/mock/control/revoke`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: user.perflo.userId }),
+        signal: AbortSignal.timeout(MOCK_CONTROL_TIMEOUT_MS),
+      });
+    } catch {
+      throw new HttpError(502, 'The test service did not answer. Try again.');
+    }
     if (!response.ok) throw new HttpError(502, 'The test service did not accept that.');
     log.add(user.id, 'demo', 'Test control: access turned off on the payments side');
     res.json({ ok: true });
@@ -252,7 +356,7 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
   app.post('/demo/mock/stop-at-checkout', (req, res) => {
     if (config.mode !== 'mock') throw new HttpError(404, 'Not found.');
     const user = currentUser(req);
-    const body = z.object({ on: z.boolean() }).safeParse(req.body);
+    const body = z.object({ on: z.boolean() }).strict().safeParse(req.body);
     if (!body.success) throw new HttpError(400, 'Send on: true or false.');
     const updated = store.updateUser(user.id, (u) => (u.testStopAtCheckout = body.data.on));
     res.json({ user: meView(updated) });
@@ -260,28 +364,16 @@ export function createDemoApp({ config, store, service, log, fetchImpl = fetch }
 
   app.use('/demo', (_req, _res, next) => next(new HttpError(404, 'Not found.')));
 
-  app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    if (error instanceof HttpError) return res.status(error.status).json({ error: { message: error.message } });
-    if (error instanceof DemoError) {
-      const status = error.code === 'not_found' ? 404 : error.code === 'bad_request' ? 400 : 409;
-      return res.status(status).json({ error: { message: error.message } });
+  app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
+    const failure = toBrowserError(error);
+    if (failure.operatorNote) {
+      logger[failure.status >= 500 ? 'error' : 'warn']('request failed', {
+        request_id: req.requestId,
+        status: failure.status,
+        note: failure.operatorNote,
+      });
     }
-    if (error instanceof PerfloUnavailableError) {
-      return res.status(503).json({ error: { message: 'Payments are not reachable right now. Try again in a moment.' } });
-    }
-    if (error instanceof PerfloApiError) {
-      // Perflo's messages are written for people (SPEC 4); anything else gets a generic line.
-      const message =
-        error.httpStatus === 401
-          ? 'Payments need to be set up again. Send your request once more.'
-          : error.code === 'unknown'
-            ? 'Payments could not do that right now. Try again.'
-            : error.message;
-      return res.status(error.httpStatus >= 500 ? 502 : 409).json({ error: { message } });
-    }
-    if (error instanceof SyntaxError) return res.status(400).json({ error: { message: 'The request could not be read.' } });
-    console.error('[demo] unexpected error:', error instanceof Error ? `${error.name}: ${error.message}` : 'unknown');
-    res.status(500).json({ error: { message: 'Something went wrong. Try again.' } });
+    res.status(failure.status).json({ error: { message: failure.message } });
   });
 
   return app;

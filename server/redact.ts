@@ -19,6 +19,8 @@ const DROP_KEYS = new Set([
   'privy_access_token',
   'x-partner-signature',
   'token',
+  // The frame's session id is the capability its own actions use: never kept in the log.
+  'frame_session_id',
 ]);
 
 const URL_KEY = /_url$/;

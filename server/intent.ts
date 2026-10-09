@@ -41,7 +41,8 @@ const ORDER_WORDS = /\b(buy|book|order|pay|get|purchase|reserve|grab|pick up|che
 function findAmount(text: string): { cents: number | null; raw: string | null; invalid: boolean } {
   for (const pattern of [DOLLAR_AMOUNT, WORD_DOLLARS, BARE_DECIMAL]) {
     const match = pattern.exec(text);
-    if (match) {
+    // Each pattern has one capture group: the number.
+    if (match?.[1] !== undefined) {
       const cents = parseDecimalToCents(match[1]);
       return { cents, raw: match[0], invalid: cents === null };
     }
@@ -51,9 +52,9 @@ function findAmount(text: string): { cents: number | null; raw: string | null; i
 
 function findMerchant(text: string): { name: string; domain: string; raw: string } | null {
   const domain = DOMAIN_PATTERN.exec(text);
-  if (domain) {
+  if (domain?.[1] !== undefined) {
     const host = domain[1].toLowerCase().replace(/^www\./, '');
-    const label = host.split('.')[0];
+    const label = host.split('.')[0] ?? host;
     const known = Object.values(KNOWN_MERCHANTS).find((m) => m.domain === host);
     return { name: known?.name ?? label.charAt(0).toUpperCase() + label.slice(1), domain: host, raw: domain[0] };
   }
@@ -61,7 +62,8 @@ function findMerchant(text: string): { name: string; domain: string; raw: string
   // Longest names first so "best buy" wins over a shorter overlap.
   for (const key of Object.keys(KNOWN_MERCHANTS).sort((a, b) => b.length - a.length)) {
     const match = new RegExp(`\\b${key}\\b`, 'i').exec(lower);
-    if (match) return { ...KNOWN_MERCHANTS[key], raw: text.slice(match.index, match.index + key.length) };
+    const merchant = KNOWN_MERCHANTS[key];
+    if (match && merchant) return { ...merchant, raw: text.slice(match.index, match.index + key.length) };
   }
   return null;
 }
