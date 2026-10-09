@@ -13,6 +13,18 @@ import type { EventLog } from './eventLog.js';
 import type { AccountView, DeclineReason as DeclineReasonView, IdentityStatus as IdentityStatusView } from './views.js';
 
 const amount = z.string().regex(/^(0|[1-9][0-9]{0,8})\.[0-9]{2}$/);
+/**
+ * A link Perflo hands out, which the browser opens or embeds: https only (http
+ * only on this computer, for the mock). Anything else, such as a javascript:
+ * link, is a broken answer and is refused at the door.
+ */
+const link = z
+  .string()
+  .url()
+  .refine((value) => {
+    const url = new URL(value);
+    return url.protocol === 'https:' || (url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1'));
+  });
 const money = z.object({ amount, currency: z.literal('USD') });
 
 export const usersResponse = z.discriminatedUnion('status', [
@@ -20,7 +32,7 @@ export const usersResponse = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('login_required'),
     login_id: z.string().min(1),
-    login_url: z.string().url(),
+    login_url: link,
     expires_at: z.string(),
   }),
 ]);
@@ -52,7 +64,7 @@ export const accountResponse = z.object({
 });
 export type AccountResponse = z.infer<typeof accountResponse>;
 
-export const frameLinkResponse = z.object({ frame_url: z.string().url(), expires_at: z.string() });
+export const frameLinkResponse = z.object({ frame_url: link, expires_at: z.string() });
 export const topUpResponse = frameLinkResponse.extend({ top_up_id: z.string(), amount: amount.nullable().optional() });
 export type TopUpResponse = z.infer<typeof topUpResponse>;
 
@@ -67,17 +79,17 @@ export const orderResponse = z.discriminatedUnion('status', [
     last4: z.string().regex(/^[0-9]{4}$/),
     card_limit: amount,
     // Present only on the response that first hands the card out (SPEC 4 clarification).
-    reveal_url: z.string().url().optional(),
+    reveal_url: link.optional(),
     reveal_expires_at: z.string().optional(),
     card_expires_at: z.string(),
   }),
-  z.object({ order_id: z.string(), status: z.literal('payment_required'), frame_url: z.string().url(), amount_due: amount }),
-  z.object({ order_id: z.string(), status: z.literal('login_required'), login_id: z.string(), login_url: z.string().url() }),
+  z.object({ order_id: z.string(), status: z.literal('payment_required'), frame_url: link, amount_due: amount }),
+  z.object({ order_id: z.string(), status: z.literal('login_required'), login_id: z.string(), login_url: link }),
   z.object({
     order_id: z.string(),
     status: z.literal('identity_check_required'),
     // null when the link cannot be made right now; absent on an idempotent replay of POST /orders.
-    kyc_url: z.string().url().nullable().optional(),
+    kyc_url: link.nullable().optional(),
     message: z.string().optional(),
   }),
   z.object({ order_id: z.string(), status: z.literal('issuing') }),
@@ -89,7 +101,7 @@ export const orderResponse = z.discriminatedUnion('status', [
 ]);
 export type OrderResponse = z.infer<typeof orderResponse>;
 
-export const revealLinkResponse = z.object({ reveal_url: z.string().url(), reveal_expires_at: z.string() });
+export const revealLinkResponse = z.object({ reveal_url: link, reveal_expires_at: z.string() });
 /** bapi never stores reveal links, so an idempotent replay of card-reveal answers 201 with only a message. */
 const revealOrReplay = z.union([revealLinkResponse, z.object({ message: z.string() })]);
 export const cancelResponse = z.object({ status: z.literal('cancelled'), amount_returned: amount });

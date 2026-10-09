@@ -58,8 +58,23 @@ export interface DemoOrder {
   createdAt: string;
 }
 
+/** How long a browser stays signed in to Tiny without coming back. */
+export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
+/**
+ * After a rotation the old id keeps working this long, so requests the page
+ * already had on their way do not fail. Short, because the point of rotating
+ * is that the old id stops being useful.
+ */
+const ROTATION_GRACE_MS = 30_000;
+
+interface SessionRecord {
+  userId: string;
+  /** Epoch milliseconds. */
+  expiresAt: number;
+}
+
 interface StoreShape {
-  sessions: Record<string, string>;
+  sessions: Record<string, SessionRecord>;
   users: Record<string, DemoUser>;
   orders: Record<string, DemoOrder>;
 }
@@ -72,6 +87,17 @@ export class Store {
       ? (JSON.parse(readFileSync(file, 'utf8')) as StoreShape)
       : { sessions: {}, users: {}, orders: {} };
     let changed = false;
+    const now = Date.now();
+    for (const [sid, record] of Object.entries(this.data.sessions as Record<string, SessionRecord | string>)) {
+      // Earlier versions stored the user id alone and never expired a session: give each a fresh expiry.
+      if (typeof record === 'string') {
+        this.data.sessions[sid] = { userId: record, expiresAt: now + SESSION_TTL_MS };
+        changed = true;
+      } else if (record.expiresAt <= now) {
+        delete this.data.sessions[sid];
+        changed = true;
+      }
+    }
     for (const user of Object.values(this.data.users)) {
       // Files from earlier versions kept the name and email typed at sign-up. Nothing reads them any
       // more, so they are dropped rather than kept as personal data with no use.
@@ -110,8 +136,8 @@ export class Store {
       for (const order of Object.values(this.data.orders)) {
         if (order.demoUserId === other.id) order.demoUserId = keepId;
       }
-      for (const [sid, uid] of Object.entries(this.data.sessions)) {
-        if (uid === other.id) this.data.sessions[sid] = keepId;
+      for (const record of Object.values(this.data.sessions)) {
+        if (record.userId === other.id) record.userId = keepId;
       }
       delete this.data.users[other.id];
     }
@@ -151,15 +177,41 @@ export class Store {
       pendingLogin: null,
     };
     this.data.users[user.id] = user;
-    const sessionId = randomBytes(32).toString('base64url');
-    this.data.sessions[sessionId] = user.id;
+    const sessionId = this.newSession(user.id);
     this.save();
     return { user, sessionId };
   }
 
+  private newSession(userId: string): string {
+    const sessionId = randomBytes(32).toString('base64url');
+    this.data.sessions[sessionId] = { userId, expiresAt: Date.now() + SESSION_TTL_MS };
+    return sessionId;
+  }
+
   userForSession(sessionId: string | undefined): DemoUser | null {
     if (!sessionId || !Object.hasOwn(this.data.sessions, sessionId)) return null;
-    return this.data.users[this.data.sessions[sessionId]] ?? null;
+    const record = this.data.sessions[sessionId];
+    if (record.expiresAt <= Date.now()) {
+      delete this.data.sessions[sessionId];
+      this.save();
+      return null;
+    }
+    return this.data.users[record.userId] ?? null;
+  }
+
+  /**
+   * A new session id for the same account, used when the account gains access
+   * to someone's money (it links to Perflo). An id that existed before that
+   * moment, wherever it may have leaked or been planted, no longer opens the
+   * linked account once the short grace period ends.
+   */
+  rotateSession(sessionId: string): string | null {
+    if (!Object.hasOwn(this.data.sessions, sessionId)) return null;
+    const old = this.data.sessions[sessionId];
+    const fresh = this.newSession(old.userId);
+    old.expiresAt = Math.min(old.expiresAt, Date.now() + ROTATION_GRACE_MS);
+    this.save();
+    return fresh;
   }
 
   endSession(sessionId: string): void {

@@ -24,9 +24,13 @@ function browser(demo: ReturnType<typeof makeDemo>) {
     if (set?.length) cookie = set[0].split(';')[0];
     return res;
   };
+  // Like a real browser on Tiny's page: one host, and its own origin on every POST.
+  const host = 'tiny.test';
   return {
-    post: async (path: string, body: unknown = {}) => keep(await request(app).post(path).set('Cookie', cookie).send(body as object)),
-    get: async (path: string) => keep(await request(app).get(path).set('Cookie', cookie)),
+    post: async (path: string, body: unknown = {}) =>
+      keep(await request(app).post(path).set('Host', host).set('Origin', `https://${host}`).set('Cookie', cookie).send(body as object)),
+    get: async (path: string) => keep(await request(app).get(path).set('Host', host).set('Cookie', cookie)),
+    cookie: () => cookie,
     raw: app,
   };
 }
@@ -400,7 +404,9 @@ describe('demo API guards', () => {
     const b = browser(demo);
     expect((await b.get('/demo/orders')).status).toBe(401);
     expect((await b.post('/demo/link/start')).status).toBe(401);
-    expect((await request(b.raw).post('/demo/session').set('Content-Type', 'text/plain').send('x')).status).toBe(415);
+    expect(
+      (await request(b.raw).post('/demo/session').set('Host', 'tiny.test').set('Origin', 'https://tiny.test').set('Content-Type', 'text/plain').send('x')).status,
+    ).toBe(415);
     expect((await b.post('/demo/signup', { first_name: 'A', last_name: 'B', email: 'a@example.com' })).status).toBe(404);
     expect((await b.get('/demo/me')).status).toBe(404);
     await signUp(b);

@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   const store = new Store(config.dataFile);
   const api = new PerfloApi(config.perfloApiBase, config.credentials, log);
   const service = new DemoService(store, api, log, config);
-  const app = createDemoApp({ config, store, service, log });
+  const app = createDemoApp({ config, store, service, log, production: process.env.NODE_ENV === 'production' });
 
   if (config.mode === 'mock') {
     const certificate = tls();
