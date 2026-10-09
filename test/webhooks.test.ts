@@ -4,15 +4,15 @@
  * feed that carries the result to the person's page.
  */
 import { readdirSync, readFileSync } from 'node:fs';
-import { createServer, request as httpRequest, type Server } from 'node:http';
+import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDemoApp } from '../server/app.js';
 import { Store } from '../server/store.js';
-import type { LiveMessage, OrderView } from '../server/views.js';
+import type { OrderView } from '../server/views.js';
 import { verifyWebhook, WEBHOOK_PATH, webhookCanonicalString, webhookHeaders } from '../server/webhooks.js';
-import { finishSetup, makeDemo, payInFrame, startMock, wait, WEBHOOK_SECRET } from './helpers.js';
+import { finishSetup, makeDemo, openStream, payInFrame, startMock, wait, WEBHOOK_SECRET } from './helpers.js';
 
 const NOW = 1_791_600_000;
 const body = (event: object) => Buffer.from(JSON.stringify(event), 'utf8');
@@ -150,30 +150,6 @@ describe('the webhook endpoint', () => {
     expect((await request(app).get('/demo/stream')).status).toBe(401);
   });
 });
-
-/** Reads a live feed over a real connection, collecting every message. */
-function openStream(base: string, cookie: string): Promise<{ messages: LiveMessage[]; close: () => void }> {
-  return new Promise((resolve, reject) => {
-    const messages: LiveMessage[] = [];
-    const req = httpRequest(`${base}/demo/stream`, { headers: { Cookie: cookie } }, (res) => {
-      if (res.statusCode !== 200) return reject(new Error(`stream ${res.statusCode}`));
-      let buffer = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk: string) => {
-        buffer += chunk;
-        for (let end = buffer.indexOf('\n\n'); end !== -1; end = buffer.indexOf('\n\n')) {
-          const frame = buffer.slice(0, end);
-          buffer = buffer.slice(end + 2);
-          const data = frame.split('\n').find((line) => line.startsWith('data: '));
-          if (data) messages.push(JSON.parse(data.slice('data: '.length)) as LiveMessage);
-        }
-      });
-      resolve({ messages, close: () => req.destroy() });
-    });
-    req.on('error', () => undefined);
-    req.end();
-  });
-}
 
 describe('an order moved on by webhooks alone', () => {
   let server: Server | null = null;

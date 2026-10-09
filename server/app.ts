@@ -176,7 +176,10 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     if (wasLinked || store.user(user.id).perflo === null) return;
     const sid = sessionId(req);
     const fresh = sid ? store.rotateSession(sid) : null;
-    if (fresh) setSession(res, fresh);
+    if (!sid || !fresh) return;
+    setSession(res, fresh);
+    // A live feed opened with the old id is closed; the page opens it again with the new one.
+    service.live.closeSession(sid);
   };
 
   const parse = <T>(schema: z.ZodType<T>, value: unknown, error: HttpError): T => {
@@ -221,7 +224,10 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
   app.post('/demo/logout', (req, res) => {
     parse(noBody, req.body, unreadable);
     const sid = sessionId(req);
-    if (sid) store.endSession(sid);
+    if (sid) {
+      store.endSession(sid);
+      service.live.closeSession(sid);
+    }
     res.clearCookie(SESSION_COOKIE, { path: '/' });
     res.json({ ok: true });
   });
@@ -342,8 +348,14 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
    * webhooks arrive. The page reads its state once when it opens or reconnects and never polls.
    */
   app.get('/demo/stream', (req, res) => {
+    // A GET passes the Origin check, so a request another site started is refused here. Browsers that
+    // send no Sec-Fetch-Site still never send the SameSite=Strict cookie from another site.
+    const site = req.get('sec-fetch-site');
+    if (site !== undefined && site !== 'same-origin' && site !== 'none') throw new HttpError(403, 'Open Tiny itself to see updates.');
+    // The session cookie alone picks the account: nothing in the query or path is read.
     const user = currentUser(req);
-    if (!service.live.open(user.id, res)) throw new HttpError(429, 'Too many Tiny pages are open. Close one and reload.');
+    if (!service.live.open(user.id, sessionId(req) as string, res))
+      throw new HttpError(429, 'Too many Tiny pages are open. Close one and reload.');
   });
 
   app.get('/demo/events', (req, res) => {

@@ -186,13 +186,18 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
   on twice. A new event is answered 200 at once and acted on after: an `order.*` event reads
   `GET /orders/{id}` (the source of truth; the event body only says which order), does what that status
   needs (a ready card is checked out), and pushes the result to the person's open pages. `user.connected`
-  tells the page to pick up the access (its own request, so its session is rotated as for any link);
-  `user.disconnected` makes Tiny ask Perflo whether its token still works and drop it if not; `ping`
+  tells the page of an account waiting on a sign-in to pick up the access (its own request, so its session
+  is rotated as for any link); `user.disconnected` for the Perflo person an account is linked to makes Tiny
+  ask Perflo whether its token still works and drop it if not. Neither links or unlinks anything by itself,
+  and one that matches no account in that state is logged and ignored. `ping`
   (Builder's test) is logged. An event for an order this copy of Tiny did not place is logged and ignored.
 - **Live updates** (`server/live.ts`, `GET /demo/stream`): Server-Sent Events for the session's own account:
   an order as the browser sees it, "access or balance changed", "connected", "new log lines". Nothing secret
   goes on it. The page reads its state once when it opens and once each time the stream comes back after a
-  drop.
+  drop. A stream belongs to the session that opened it, not to the account: only the session cookie picks
+  it (nothing in the query is read), it is closed when that session signs out or linking replaces it (the
+  page opens it again with its new cookie), the session is checked again before every message, and a
+  request another site started (`Sec-Fetch-Site` other than `same-origin`) is refused.
 - **Cancel card**: `POST /orders/{id}/cancel` is safe to send again (a cancelled order answers what was
   recorded). While it answers 503 (payments busy, for example the card issuer briefly busy while it closes
   the card), or no answer comes in time, the page stays on "Cancelling..." and sends it again after 3, 6, 12,

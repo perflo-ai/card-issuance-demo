@@ -45,7 +45,8 @@ export class DemoService {
    */
   private readonly placing = new Set<Promise<unknown>>();
   /** The person's open pages, which hear about changes as they happen. */
-  readonly live = new LiveUpdates();
+  /** Each stream is checked against the store before every write: only a session that still opens this account hears it. */
+  readonly live = new LiveUpdates((sessionId, demoUserId) => this.store.userForSession(sessionId)?.id === demoUserId);
 
   constructor(
     private readonly store: Store,
@@ -301,25 +302,27 @@ export class DemoService {
     this.live.send(result.user.id, { type: 'log' });
   }
 
+  /**
+   * A signed event names a Perflo person and the Tiny account Tiny gave Perflo. Neither links nor
+   * unlinks anything by itself: user.connected only wakes the page of an account waiting on a sign-in
+   * (the page links with its own request, which rotates its session), and user.disconnected only
+   * makes Tiny ask Perflo again about the person this account is linked to.
+   */
   private async onUserEvent(event: WebhookEvent): Promise<void> {
     const external = event.data.external_user_id;
     const user = external ? this.store.findUser(external) : null;
-    if (!user) {
-      this.log.add(null, 'webhook', `${event.type} for a person this copy of Tiny does not know`);
+    const connected = event.type === 'user.connected';
+    const forThisAccount = user !== null && (connected ? user.pendingLogin !== null : user.perflo?.userId === event.data.user_id);
+    if (!user || !forThisAccount) {
+      this.log.add(null, 'webhook', `${event.type} for no account here waiting on it`, { event_id: event.id });
       return;
     }
-    this.log.add(
-      user.id,
-      'webhook',
-      event.type === 'user.connected' ? 'Perflo says payments were set up' : 'Perflo says payments were turned off',
-      {
-        event_id: event.id,
-      },
-    );
-    if (event.type === 'user.connected') {
-      // The page picks up the access with its own request, which also rotates its session.
+    this.log.add(user.id, 'webhook', connected ? 'Perflo says payments were set up' : 'Perflo says payments were turned off', {
+      event_id: event.id,
+    });
+    if (connected) {
       this.live.send(user.id, { type: 'connected' });
-    } else if (user.perflo && user.perflo.userId === event.data.user_id) {
+    } else {
       // Asking Perflo is what decides: a refused token is dropped there (see account()).
       await this.account(user);
     }
