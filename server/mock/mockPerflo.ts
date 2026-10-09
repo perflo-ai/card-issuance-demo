@@ -12,6 +12,11 @@
  *   POST /mock/control/revoke        simulates the person turning off Tiny's access
  *   GET  /mock-relay/partner-cards/:cardId/sensitive   the reveal link (already decrypted), signed and with
  *                                                     the person's Bearer token, as the real one requires
+ *
+ * Webhooks: with `webhook` set, the mock tells the partner's backend about every order and person
+ * status change, signed exactly as Perflo signs them, retried when the partner does not answer 2xx.
+ * Like Perflo's own sweep, it also moves orders on by itself (a slow card becoming ready, an order
+ * resuming once money arrived), so nothing has to ask it again and again.
  */
 
 import { createHash, randomBytes, randomInt } from 'node:crypto';
@@ -19,6 +24,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { z } from 'zod';
 import { centsToApiAmount, isApiAmount, apiAmountToCents } from '../money.js';
 import { verifySignature } from '../signing.js';
+import { webhookHeaders } from '../webhooks.js';
 import { frameAssets, framePage, kycPage } from './mockPages.js';
 
 export const MOCK_CODE = '123456';
@@ -147,7 +153,15 @@ export interface MockOptions {
   /** The partner website allowed to embed frames and receive postMessage. */
   partnerOrigin: string;
   slowIssueMs?: number;
+  /** Where to send webhooks and the secret to sign them with. Unset: no webhooks are sent. */
+  webhook?: { url: string; secret: string; fetchImpl?: typeof fetch };
 }
+
+/** How often the mock moves orders on by itself and announces changes (stands in for bapi's sweep). */
+const MOCK_SWEEP_MS = 500;
+/** Waits before each new try of a webhook the partner did not accept, like Perflo (but in seconds). */
+const MOCK_WEBHOOK_RETRY_MS = [1_000, 5_000, 15_000];
+const MOCK_WEBHOOK_TIMEOUT_MS = 10_000;
 
 class HttpError extends Error {
   constructor(
@@ -401,8 +415,94 @@ export function createMockPerflo(options: MockOptions) {
       : kept;
   }
 
+  // Webhooks: what each order and person was last announced as, and what is still to be sent.
+  const announced = new Map<string, string>();
+  const outbox: Array<{ id: string; body: Buffer; tries: number }> = [];
+  let sending = false;
+
+  function enqueue(type: string, data: Record<string, unknown>): void {
+    const eventId = `evt_${randomBytes(16).toString('base64url')}`;
+    const body = Buffer.from(JSON.stringify({ id: eventId, type, created_at: new Date().toISOString(), data }), 'utf8');
+    outbox.push({ id: eventId, body, tries: 0 });
+    void drain();
+  }
+
+  async function deliver(event: { id: string; body: Buffer }): Promise<boolean> {
+    const hook = options.webhook as NonNullable<MockOptions['webhook']>;
+    const url = new URL(hook.url);
+    try {
+      const answer = await (hook.fetchImpl ?? fetch)(hook.url, {
+        method: 'POST',
+        headers: webhookHeaders(hook.secret, 'wh1', url.pathname, event.body, event.id),
+        body: event.body,
+        signal: AbortSignal.timeout(MOCK_WEBHOOK_TIMEOUT_MS),
+      });
+      return answer.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** One event at a time, in the order they happened; a refused one is tried again before the next. */
+  async function drain(): Promise<void> {
+    if (sending) return;
+    sending = true;
+    try {
+      for (let next = outbox[0]; next; next = outbox[0]) {
+        if (await deliver(next)) {
+          outbox.shift();
+          continue;
+        }
+        const wait = MOCK_WEBHOOK_RETRY_MS[next.tries];
+        if (wait === undefined) {
+          console.warn('[mock] webhook not accepted after every try; dropped', next.id);
+          outbox.shift();
+          continue;
+        }
+        next.tries++;
+        await new Promise((done) => setTimeout(done, wait).unref());
+      }
+    } finally {
+      sending = false;
+    }
+  }
+
+  /** Moves orders on with time and announces every status that changed since it was last announced. */
+  function sweep(): void {
+    for (const order of orders.values()) {
+      refresh(order);
+      const view = present(order, false).body;
+      const status = String(view.status);
+      const key = `order:${order.orderId}`;
+      if (announced.get(key) === status) continue;
+      announced.set(key, status);
+      // Like Perflo, "issuing" is not announced: the next change (ready, or failed) is.
+      if (status !== 'issuing') enqueue(`order.${status}`, view);
+    }
+    for (const user of users.values()) {
+      const connected = user.grant !== null && user.token !== null;
+      const key = `user:${user.userId}`;
+      const before = announced.get(key);
+      const now = connected ? 'connected' : 'disconnected';
+      if (before === now) continue;
+      announced.set(key, now);
+      // A person who was never connected is not announced as disconnected.
+      if (before === undefined && !connected) continue;
+      enqueue(`user.${now}`, { user_id: user.userId, external_user_id: user.externalUserId, status: now });
+    }
+  }
+
+  if (options.webhook) setInterval(sweep, MOCK_SWEEP_MS).unref();
+
   const app = express();
   app.disable('x-powered-by');
+  // Every answer may have changed a status: announce it as soon as the request is done.
+  if (options.webhook) {
+    app.use((_req, res, next) => {
+      res.on('finish', () => setImmediate(sweep));
+      next();
+    });
+  }
   app.use(
     express.json({
       limit: '32kb',

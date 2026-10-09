@@ -6,7 +6,8 @@ import { randomUUID } from 'node:crypto';
 import type { DemoConfig } from './config.js';
 import type { EventLog } from './eventLog.js';
 import { centsToApiAmount } from './money.js';
-import { nextStep, TERMINAL_STATUSES, withoutRevealLink } from './orderState.js';
+import { LiveUpdates } from './live.js';
+import { nextStep, TERMINAL_STATUSES, toView, withoutRevealLink } from './orderState.js';
 import {
   isUserTokenRefused,
   PerfloApiError,
@@ -17,6 +18,7 @@ import {
 } from './perfloApi.js';
 import { revealCard, RevealError, simulateCheckout, type RevealedCard } from './checkout.js';
 import type { DemoOrder, DemoUser, Store } from './store.js';
+import type { WebhookEvent } from './webhooks.js';
 
 import type { LinkStatus, Notice } from './views.js';
 
@@ -32,8 +34,19 @@ export class DemoError extends Error {
   }
 }
 
+/** Waits before trying a webhook's follow-up read again, when Perflo was briefly unavailable. */
+const WEBHOOK_RETRY_DELAYS_MS = [2_000, 10_000];
+
 export class DemoService {
   private readonly locks = new Map<string, Promise<unknown>>();
+  /**
+   * Orders being placed right now. POST /orders can take a while, and Perflo may announce a change
+   * to the order before its answer (with the order id) is stored here; such a webhook waits for these.
+   */
+  private readonly placing = new Set<Promise<unknown>>();
+  /** The person's open pages, which hear about changes as they happen. */
+  /** Each stream is checked against the store before every write: only a session that still opens this account hears it. */
+  readonly live = new LiveUpdates((sessionId, demoUserId) => this.store.userForSession(sessionId)?.id === demoUserId);
 
   constructor(
     private readonly store: Store,
@@ -151,52 +164,59 @@ export class DemoService {
    * otherwise look at its current state (the only retry SPEC 4 allows).
    */
   async advanceOrder(user: DemoUser, orderId: string): Promise<{ order: DemoOrder; user: DemoUser; notice: Notice }> {
-    return this.exclusive(`order:${orderId}`, async () => {
-      let current = this.store.user(user.id);
-      const order = this.store.order(current.id, orderId);
-      if (!order) throw new DemoError('not_found', 'That order was not found');
-      if (order.state === 'discarded') throw new DemoError('conflict', 'That order was cancelled before it was sent');
-      if (order.last && TERMINAL_STATUSES.has(order.last.status)) return { order, user: current, notice: null };
+    const run = this.exclusive(`order:${orderId}`, () => this.advanceOrderNow(user, orderId));
+    if (this.store.order(user.id, orderId)?.perfloOrderId === null) {
+      this.placing.add(run);
+      void run.catch(() => undefined).finally(() => this.placing.delete(run));
+    }
+    return run;
+  }
 
-      let response: OrderResponse;
-      if (order.perfloOrderId === null) {
-        this.store.updateOrder(order, (o) => (o.state = 'placing'));
-        if (!current.perflo) {
-          const link = await this.ensureLinked(current);
-          current = link.user;
-          if (link.status !== 'linked' || !current.perflo) return { order, user: current, notice: null };
-        }
-        try {
-          response = await this.api.createOrder(
-            current.id,
-            current.perflo.token,
-            order.idempotencyKey,
-            this.orderBody(order, current.perflo.userId),
-          );
-        } catch (error) {
-          if (!isUserTokenRefused(error)) throw error;
-          // Our token is not accepted any more: drop it and link again.
-          this.log.add(current.id, 'demo', 'Access token refused: setting up access again');
-          current = this.store.updateUser(current.id, (u) => (u.perflo = null));
-          const link = await this.ensureLinked(current);
-          current = link.user;
-          if (link.status !== 'linked' || !current.perflo) return { order, user: current, notice: null };
-          response = await this.api.createOrder(
-            current.id,
-            current.perflo.token,
-            order.idempotencyKey,
-            this.orderBody(order, current.perflo.userId),
-          );
-        }
-        if (response.status === 'identity_check_required' && !response.kyc_url) {
-          // A replay (or a link that could not be made yet) carries no ID check link: ask for the order's state.
-          response = await this.api.getOrder(current.id, response.order_id);
-        }
-      } else {
-        response = await this.api.getOrder(current.id, order.perfloOrderId);
+  private async advanceOrderNow(user: DemoUser, orderId: string): Promise<{ order: DemoOrder; user: DemoUser; notice: Notice }> {
+    let current = this.store.user(user.id);
+    const order = this.store.order(current.id, orderId);
+    if (!order) throw new DemoError('not_found', 'That order was not found');
+    if (order.state === 'discarded') throw new DemoError('conflict', 'That order was cancelled before it was sent');
+    if (order.last && TERMINAL_STATUSES.has(order.last.status)) return { order, user: current, notice: null };
+
+    let response: OrderResponse;
+    if (order.perfloOrderId === null) {
+      this.store.updateOrder(order, (o) => (o.state = 'placing'));
+      if (!current.perflo) {
+        const link = await this.ensureLinked(current);
+        current = link.user;
+        if (link.status !== 'linked' || !current.perflo) return { order, user: current, notice: null };
       }
-      return this.handle(current, order, response);
-    });
+      try {
+        response = await this.api.createOrder(
+          current.id,
+          current.perflo.token,
+          order.idempotencyKey,
+          this.orderBody(order, current.perflo.userId),
+        );
+      } catch (error) {
+        if (!isUserTokenRefused(error)) throw error;
+        // Our token is not accepted any more: drop it and link again.
+        this.log.add(current.id, 'demo', 'Access token refused: setting up access again');
+        current = this.store.updateUser(current.id, (u) => (u.perflo = null));
+        const link = await this.ensureLinked(current);
+        current = link.user;
+        if (link.status !== 'linked' || !current.perflo) return { order, user: current, notice: null };
+        response = await this.api.createOrder(
+          current.id,
+          current.perflo.token,
+          order.idempotencyKey,
+          this.orderBody(order, current.perflo.userId),
+        );
+      }
+      if (response.status === 'identity_check_required' && !response.kyc_url) {
+        // A replay (or a link that could not be made yet) carries no ID check link: ask for the order's state.
+        response = await this.api.getOrder(current.id, response.order_id);
+      }
+    } else {
+      response = await this.api.getOrder(current.id, order.perfloOrderId);
+    }
+    return this.handle(current, order, response);
   }
 
   /**
@@ -231,6 +251,84 @@ export class DemoService {
         }
       });
     }
+  }
+
+  /**
+   * A signed webhook from Perflo, already checked and new (see app.ts). It only says "look now": the
+   * order is read again from Perflo (the source of truth), Tiny does what it does with that answer
+   * (on a ready card, the checkout), and the person's open pages are told. A read Perflo could not
+   * answer is tried again a couple of times; after that the page catches up when it is next opened.
+   */
+  async onWebhook(event: WebhookEvent): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        if (event.type.startsWith('order.')) await this.onOrderEvent(event);
+        else if (event.type === 'user.connected' || event.type === 'user.disconnected') await this.onUserEvent(event);
+        else this.log.add(null, 'webhook', event.type === 'ping' ? 'Test event from Perflo received' : `Event ${event.type} ignored`);
+        return;
+      } catch (error) {
+        const delay = WEBHOOK_RETRY_DELAYS_MS[attempt];
+        if (!(error instanceof PerfloUnavailableError) || delay === undefined) {
+          const reason = error instanceof Error ? error.message : 'unknown error';
+          this.log.add(null, 'webhook', `Could not act on ${event.type}: ${reason}`);
+          return;
+        }
+        await new Promise((done) => setTimeout(done, delay));
+      }
+    }
+  }
+
+  private async onOrderEvent(event: WebhookEvent): Promise<void> {
+    const perfloOrderId = event.data.order_id;
+    if (!perfloOrderId) return;
+    let order = this.store.orderForWebhook(perfloOrderId);
+    if (!order && this.placing.size > 0) {
+      await Promise.allSettled([...this.placing]);
+      order = this.store.orderForWebhook(perfloOrderId);
+    }
+    if (!order) {
+      // Placed by another copy of Tiny sharing these partner credentials, or older than this store.
+      this.log.add(null, 'webhook', `${event.type} for an order this copy of Tiny did not place`);
+      return;
+    }
+    const user = this.store.user(order.demoUserId);
+    this.log.add(user.id, 'webhook', `Perflo says ${event.type.slice('order.'.length).replace(/_/g, ' ')}`, {
+      order_id: perfloOrderId,
+      event_id: event.id,
+    });
+    const result = await this.advanceOrder(user, order.id);
+    this.live.send(result.user.id, { type: 'order', order: toView(result.order, result.user), notice: result.notice });
+    this.live.send(result.user.id, { type: 'account', linked: result.user.perflo !== null });
+    this.live.send(result.user.id, { type: 'log' });
+  }
+
+  /**
+   * A signed event names a Perflo person and the Tiny account Tiny gave Perflo. Neither links nor
+   * unlinks anything by itself: user.connected only wakes the page of an account waiting on a sign-in
+   * (the page links with its own request, which rotates its session), and user.disconnected only
+   * makes Tiny ask Perflo again about the person this account is linked to.
+   */
+  private async onUserEvent(event: WebhookEvent): Promise<void> {
+    const external = event.data.external_user_id;
+    const user = external ? this.store.findUser(external) : null;
+    const connected = event.type === 'user.connected';
+    const forThisAccount = user !== null && (connected ? user.pendingLogin !== null : user.perflo?.userId === event.data.user_id);
+    if (!user || !forThisAccount) {
+      this.log.add(null, 'webhook', `${event.type} for no account here waiting on it`, { event_id: event.id });
+      return;
+    }
+    this.log.add(user.id, 'webhook', connected ? 'Perflo says payments were set up' : 'Perflo says payments were turned off', {
+      event_id: event.id,
+    });
+    if (connected) {
+      this.live.send(user.id, { type: 'connected' });
+    } else {
+      // Asking Perflo is what decides: a refused token is dropped there (see account()).
+      await this.account(user);
+    }
+    const fresh = this.store.user(user.id);
+    this.live.send(fresh.id, { type: 'account', linked: fresh.perflo !== null });
+    this.live.send(fresh.id, { type: 'log' });
   }
 
   private async handle(

@@ -17,6 +17,7 @@ import { requestLog, type Logger } from './logger.js';
 import type { DemoService } from './service.js';
 import { SESSION_TTL_MS, type DemoUser, type Store } from './store.js';
 import { FRAME_EVENT_TYPES, type CardDetailsView, type MeView } from './views.js';
+import { verifyWebhook, WEBHOOK_PATH, webhookEvent } from './webhooks.js';
 
 const SESSION_COOKIE = 'tiny_session';
 /** The test control talks to the mock on this computer; it never needs long. */
@@ -103,7 +104,41 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     res.set('Cache-Control', 'no-store').json({ status: 'ok' });
   });
 
-  // Generous for one person's page (it reads a few times a minute while an order is moving), tight for a script.
+  /**
+   * Perflo's webhooks: server to server, so no session, no Origin check and no CSRF rules apply. The
+   * signature is what proves Perflo sent it, checked over the raw bytes before anything parses them.
+   * A new event is answered at once and acted on after, so Perflo never waits on Tiny's own calls.
+   */
+  app.post(WEBHOOK_PATH, rateLimit({ windowMs: 60_000, max: 600 }), express.raw({ type: () => true, limit: '64kb' }), (req, res) => {
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const checked = verifyWebhook(req.headers, req.path, raw, config.webhookSecret);
+    if (!checked.ok) {
+      logger.warn('webhook refused', { request_id: req.requestId, reason: checked.reason });
+      res.status(401).json({ error: { message: 'Signature not accepted.' } });
+      return;
+    }
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(raw.toString('utf8'));
+    } catch {
+      parsedJson = null;
+    }
+    const event = webhookEvent.safeParse(parsedJson);
+    if (!event.success || event.data.id !== checked.eventId) {
+      logger.warn('webhook unreadable', { request_id: req.requestId });
+      res.status(400).json({ error: { message: 'The event could not be read.' } });
+      return;
+    }
+    if (!store.rememberWebhookEvent(event.data.id)) {
+      // A retry of an event already handled: answered, not acted on twice.
+      res.json({ received: true, duplicate: true });
+      return;
+    }
+    res.json({ received: true });
+    void service.onWebhook(event.data);
+  });
+
+  // Generous for one person's page, tight for a script.
   app.use('/demo', rateLimit({ windowMs: 60_000, max: 300 }));
   // Each new browser makes an account in the store: few per address.
   app.use(
@@ -141,7 +176,10 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     if (wasLinked || store.user(user.id).perflo === null) return;
     const sid = sessionId(req);
     const fresh = sid ? store.rotateSession(sid) : null;
-    if (fresh) setSession(res, fresh);
+    if (!sid || !fresh) return;
+    setSession(res, fresh);
+    // A live feed opened with the old id is closed; the page opens it again with the new one.
+    service.live.closeSession(sid);
   };
 
   const parse = <T>(schema: z.ZodType<T>, value: unknown, error: HttpError): T => {
@@ -186,7 +224,10 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
   app.post('/demo/logout', (req, res) => {
     parse(noBody, req.body, unreadable);
     const sid = sessionId(req);
-    if (sid) store.endSession(sid);
+    if (sid) {
+      store.endSession(sid);
+      service.live.closeSession(sid);
+    }
     res.clearCookie(SESSION_COOKIE, { path: '/' });
     res.json({ ok: true });
   });
@@ -300,6 +341,21 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
       amountReturned: result.amountReturned,
       ...(result.order ? { order: toView(result.order, store.user(user.id)) } : {}),
     });
+  });
+
+  /**
+   * The page's live feed (Server-Sent Events): orders, access and the log, pushed as Perflo's
+   * webhooks arrive. The page reads its state once when it opens or reconnects and never polls.
+   */
+  app.get('/demo/stream', (req, res) => {
+    // A GET passes the Origin check, so a request another site started is refused here. Browsers that
+    // send no Sec-Fetch-Site still never send the SameSite=Strict cookie from another site.
+    const site = req.get('sec-fetch-site');
+    if (site !== undefined && site !== 'same-origin' && site !== 'none') throw new HttpError(403, 'Open Tiny itself to see updates.');
+    // The session cookie alone picks the account: nothing in the query or path is read.
+    const user = currentUser(req);
+    if (!service.live.open(user.id, sessionId(req) as string, res))
+      throw new HttpError(429, 'Too many Tiny pages are open. Close one and reload.');
   });
 
   app.get('/demo/events', (req, res) => {

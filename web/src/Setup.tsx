@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type FrameEventPayload } from './api';
-import { pageVisibility, useFocusWhenClosed } from './browser';
+import { useFocusWhenClosed } from './browser';
 import { SETUP_STEPS, stalledText, waitingText } from './copy';
+import { untilConnected } from './live';
 import { PerfloFrame } from './PerfloFrame';
-import { backoff, poll, sleep } from './polling';
 import { StepList } from './Steps';
 import type { LinkStatus } from '../../server/views';
 
@@ -18,7 +18,7 @@ interface Props {
   disabled?: boolean;
 }
 
-/** After the frame says setup is done, how long Tiny keeps looking for the approval before saying it is slow. */
+/** After the frame says setup is done, how long Tiny waits for Perflo's word before saying it is slow. */
 const FINISH_BUDGET_MS = 20_000;
 
 /**
@@ -79,23 +79,15 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
     let status: LinkStatus = first ?? 'pending';
     try {
       if (status === 'pending') {
-        // The approval can take a moment to show; the frame event already looked once.
-        if (first === 'pending' && !(await sleep(1000, controller.signal))) return;
-        const end = await poll({
-          look: async () => {
-            status = await api
-              .refreshLink()
-              .then((r) => r.link)
-              .catch((): LinkStatus => 'pending');
-            return status;
-          },
-          settled: (s) => s !== 'pending',
-          delay: backoff(1000, 4000),
-          budgetMs: FINISH_BUDGET_MS,
-          signal: controller.signal,
-          visibility: pageVisibility,
-        });
-        if (end === 'stopped') return;
+        // The frame event already looked once. Perflo's user.connected webhook tells Tiny's server
+        // when the approval lands, and the server says so here; nothing is asked meanwhile.
+        await untilConnected(FINISH_BUDGET_MS, controller.signal);
+        if (controller.signal.aborted) return;
+        // Heard, or not heard in time: one look decides, and picks up Tiny's access token.
+        status = await api
+          .refreshLink()
+          .then((r) => r.link)
+          .catch((): LinkStatus => 'pending');
       }
       setFinishing(false);
       await settle(status);

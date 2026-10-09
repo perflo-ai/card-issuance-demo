@@ -1,5 +1,5 @@
 import { mkdtempSync } from 'node:fs';
-import { createServer, type RequestListener } from 'node:http';
+import { createServer, request as httpRequest, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DemoConfig } from '../server/config.js';
@@ -10,6 +10,7 @@ import { PerfloApi } from '../server/perfloApi.js';
 import { DemoService } from '../server/service.js';
 import { signatureHeaders } from '../server/signing.js';
 import { Store } from '../server/store.js';
+import type { LiveMessage } from '../server/views.js';
 
 export const CREDS = {
   partnerId: '3f2b8c1e-5d4a-4b6f-9a7c-1e2d3c4b5a69',
@@ -17,18 +18,23 @@ export const CREDS = {
   secret: 'dGlueS1kZW1vLXNpZ25pbmctdmVjdG9yLXNlY3JldDA',
 };
 export const PARTNER_ORIGIN = 'https://localhost:5174';
+/** The webhook secret tests sign and check with, in the shape Perflo Builder shows. */
+export const WEBHOOK_SECRET = 'whsec_dGlueS1kZW1vLXdlYmhvb2stdGVzdC1zZWNyZXQtMDA';
 /** Where the test browser says it is (Host header and Origin). */
 export const TEST_HOST = 'tiny.test';
 export const TEST_ORIGIN = `https://${TEST_HOST}`;
 
-export async function startMock(slowIssueMs = 50): Promise<{ base: string; close: () => Promise<void> }> {
+export async function startMock(
+  slowIssueMs = 50,
+  webhook?: { url: string; secret: string },
+): Promise<{ base: string; close: () => Promise<void> }> {
   let handler: RequestListener = () => undefined;
   const server = createServer((req, res) => handler(req, res));
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   const address = server.address();
   if (typeof address !== 'object' || address === null) throw new Error('no port');
   const base = `http://127.0.0.1:${address.port}`;
-  handler = createMockPerflo({ ...CREDS, selfOrigin: base, partnerOrigin: PARTNER_ORIGIN, slowIssueMs });
+  handler = createMockPerflo({ ...CREDS, selfOrigin: base, partnerOrigin: PARTNER_ORIGIN, slowIssueMs, ...(webhook ? { webhook } : {}) });
   return { base, close: () => new Promise<void>((done) => server.close(() => done())) };
 }
 
@@ -131,6 +137,7 @@ export function makeDemo(base: string, mode: 'mock' | 'live' = 'mock') {
     dataFile,
     listen: { kind: 'local' },
     publicOrigin: TEST_ORIGIN,
+    webhookSecret: WEBHOOK_SECRET,
   };
   const log = new EventLog();
   const store = new Store(dataFile);
@@ -143,3 +150,41 @@ export function makeDemo(base: string, mode: 'mock' | 'live' = 'mock') {
 }
 
 export const wait = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+/** A live feed read over a real connection: every message, and whether the server closed it. */
+export interface OpenStream {
+  messages: LiveMessage[];
+  closed: () => boolean;
+  close: () => void;
+}
+
+/** Opens GET /demo/stream as a browser would (its own cookie), on a server that is really listening. */
+export function openStream(base: string, cookie: string, headers: Record<string, string> = {}, query = ''): Promise<OpenStream> {
+  return new Promise((resolve, reject) => {
+    const messages: LiveMessage[] = [];
+    let ended = false;
+    const req = httpRequest(`${base}/demo/stream${query}`, { headers: { Cookie: cookie, ...headers } }, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        reject(new Error(`stream ${res.statusCode}`));
+        return;
+      }
+      let buffer = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk: string) => {
+        buffer += chunk;
+        for (let end = buffer.indexOf('\n\n'); end !== -1; end = buffer.indexOf('\n\n')) {
+          const frame = buffer.slice(0, end);
+          buffer = buffer.slice(end + 2);
+          const data = frame.split('\n').find((line) => line.startsWith('data: '));
+          if (data) messages.push(JSON.parse(data.slice('data: '.length)) as LiveMessage);
+        }
+      });
+      res.on('end', () => (ended = true));
+      res.on('close', () => (ended = true));
+      resolve({ messages, closed: () => ended, close: () => req.destroy() });
+    });
+    req.on('error', () => undefined);
+    req.end();
+  });
+}

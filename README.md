@@ -46,8 +46,10 @@ PARTNER_KEY_VERSION=v1
 PARTNER_SECRET=<any 43 base64url characters>
 ```
 
-`npm run dev` starts the test payments service on `PERFLO_API_BASE` as well. Its state is in memory, so a
-restart starts it fresh (the demo's own store in `data/` is kept: sign out and set up payments again after a
+`npm run dev` starts the test payments service on `PERFLO_API_BASE` as well. Like Perflo, it sends Tiny a
+signed webhook for every order and person status change (to `https://localhost:5174/webhooks/perflo`), with a
+webhook secret made fresh for each run, so `PERFLO_WEBHOOK_SECRET` can stay unset here. Its state is in
+memory, so a restart starts it fresh (the demo's own store in `data/` is kept: sign out and set up payments again after a
 restart).
 
 Things to try, in order:
@@ -70,10 +72,9 @@ Things to try, in order:
 Each order in the chat lists its steps (identity check and adding money only when the order asked for them)
 and says what Tiny is doing or waiting for right now, from the statuses payments returned.
 
-The developer log at the bottom of the panel shows every call Tiny's server made and every frame event,
-with access tokens, card details and link codes removed. A status read that gets the same answer as the line
-before it is not repeated, so the log shows one line per change. It reads new lines after each request the page
-makes, not on a timer.
+The developer log at the bottom of the panel shows every call Tiny's server made, every webhook it received
+(tagged `webhook`) and every frame event, with access tokens, card details and link codes removed. It reads new
+lines after each request the page makes and when the server says it wrote some, never on a timer.
 
 Mock rules (illustrative numbers from the SPEC, not production values): card load = max($15, order x 1.033 +
 $0.25), card fee $1; orders above $100 issue after about 3 seconds; identity check above $200 of total card
@@ -87,18 +88,29 @@ PERFLO_API_BASE=<the Perflo API base>
 PARTNER_ID=<partner_id>
 PARTNER_KEY_VERSION=<key_version>
 PARTNER_SECRET=<secret>
+PERFLO_WEBHOOK_SECRET=<whsec_... from Builder>
 ```
 
 1. Have a Builder agent (the partner row) and create its credentials with
    `POST /v1/agents/:agent_id/partner-credentials`. The secret is shown once; put it in `.env`.
 2. Allow the demo to embed frames: `PUT /v1/agents/:agent_id/allowed-origins` with
    `{"allowed_origins":["https://localhost:5174"]}` (the dev seed already registers this origin).
-3. Point `PERFLO_API_BASE` at the backend:
+3. **Webhooks** (required: Tiny does not poll, so without them nothing moves after an order is placed). In
+   Perflo Builder, on the agent, save the webhook address `https://<where Tiny runs>/webhooks/perflo`. Builder
+   then shows the webhook secret (`whsec_...`, its own secret, not the partner API secret): put it in
+   `PERFLO_WEBHOOK_SECRET`. Perflo calls that address from the internet, so on this computer it needs a public
+   https address forwarded to `https://localhost:5174` (a tunnel); a hosted demo just uses its own address.
+   Builder's **Send a test** sends a `ping`: the developer log shows "Test event from Perflo received".
+4. Point `PERFLO_API_BASE` at the backend:
    - a local `perflo-backend-api` with `PARTNER_V2_ENABLED=true`: `http://localhost:3001`. Its `.env` points
      at production, so run it only with a development or staging configuration.
    - a staging or develop host that runs the partner v2 build. Check it serves `/partner/v2` before
      pointing the demo at it. Never point the demo at production.
-4. `npm run dev`.
+5. `npm run dev`.
+
+**Rotating the webhook secret.** After you rotate it in Builder, Perflo signs every try with the new secret
+only, retries included. Put the new one in `PERFLO_WEBHOOK_SECRET` and restart. Webhooks refused in between
+are not lost: Perflo keeps trying each one for 24 hours, and Tiny recognises any it already handled.
 
 In live mode Tiny never buys anything: there is no real shop. After the card details are read, it fills a
 checkout form in memory and stops, and says so in the chat. The card stays open until you cancel it or it
@@ -119,13 +131,16 @@ listens on that port over plain HTTP on every interface; without it, it runs on
 `https://localhost:5174` as above. Mock mode only runs on this computer.
 
 1. **Variables:** `DEMO_MODE=live`, `PERFLO_API_BASE`, `PARTNER_ID`, `PARTNER_KEY_VERSION`,
-   `PARTNER_SECRET`. A `.env` file is read only when present and never replaces a variable the
+   `PARTNER_SECRET`, `PERFLO_WEBHOOK_SECRET`. A `.env` file is read only when present and never replaces a variable the
    host already set.
 2. **Build and start:** `npm ci --include=dev && npm run build`, then `npm start`. The build needs
    the dev dependencies (TypeScript, Vite).
 3. **Frames:** add the host's address (for example `https://tiny-demo.up.railway.app`) to this
    partner's allowed origins in Perflo (Builder > Agent > Website embeds). Until then every Perflo
    frame answers 404 inside the demo.
+   **Webhooks:** save `https://<the host's address>/webhooks/perflo` as the webhook address in Builder (for
+   example `https://card-issuance-demo-production.up.railway.app/webhooks/perflo`), copy the secret it
+   shows into `PERFLO_WEBHOOK_SECRET`, redeploy, then press **Send a test**.
 4. **Data:** users, orders and access tokens live in `DEMO_DATA_FILE` (default
    `data/demo-store.json`). On a host without a volume that file is lost on every deploy, and
    people must connect again. Point `DEMO_DATA_FILE` at a mounted volume to keep it. A file that
@@ -159,10 +174,30 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
 - **Orders**: `POST /orders` with an `Idempotency-Key` fixed per chat order. Every retry is
   `GET /orders/{id}` (signature only, no token), never a second POST. Each status is handled:
   `ready` (read the card once through `reveal_url`, later reveals through `/card-reveal`), `payment_required`
-  (add money frame, then look again after `perflo:top_up_completed`), `login_required` (setup frame, the
-  order resumes on its own), `identity_check_required` (opens in a new tab, then try again), `issuing`
-  (looks again after 2 seconds, then a little longer each time up to 10 seconds, for up to five minutes),
-  `declined`, `completed`, `cancelled`, `expired`, `failed`.
+  (add money frame; the order goes ahead when Perflo's webhook says so), `login_required` (setup frame, the
+  order resumes on its own), `identity_check_required` (opens in a new tab; "try again" reads the order once),
+  `issuing` (no webhook for it; the next one, `order.ready` or `order.failed`, moves it on), `declined`,
+  `completed`, `cancelled`, `expired`, `failed`.
+- **Webhooks** (`server/webhooks.ts`, `POST /webhooks/perflo`): the raw body is checked before anything parses
+  it. `X-Perflo-Signature` = base64url HMAC-SHA256 with the webhook secret of
+  `perflo-webhook-v1\n<X-Perflo-Key>\nPOST\n<path of the webhook address>\n<X-Perflo-Timestamp>\n<sha256hex(raw body)>`,
+  compared in constant time; a timestamp more than 120 s from Tiny's clock is refused. `X-Perflo-Event-Id` is
+  remembered in the store for 48 hours, so a retry of an event already handled is answered 200 and not acted
+  on twice. A new event is answered 200 at once and acted on after: an `order.*` event reads
+  `GET /orders/{id}` (the source of truth; the event body only says which order), does what that status
+  needs (a ready card is checked out), and pushes the result to the person's open pages. `user.connected`
+  tells the page of an account waiting on a sign-in to pick up the access (its own request, so its session
+  is rotated as for any link); `user.disconnected` for the Perflo person an account is linked to makes Tiny
+  ask Perflo whether its token still works and drop it if not. Neither links or unlinks anything by itself,
+  and one that matches no account in that state is logged and ignored. `ping`
+  (Builder's test) is logged. An event for an order this copy of Tiny did not place is logged and ignored.
+- **Live updates** (`server/live.ts`, `GET /demo/stream`): Server-Sent Events for the session's own account:
+  an order as the browser sees it, "access or balance changed", "connected", "new log lines". Nothing secret
+  goes on it. The page reads its state once when it opens and once each time the stream comes back after a
+  drop. A stream belongs to the session that opened it, not to the account: only the session cookie picks
+  it (nothing in the query is read), it is closed when that session signs out or linking replaces it (the
+  page opens it again with its new cookie), the session is checked again before every message, and a
+  request another site started (`Sec-Fetch-Site` other than `same-origin`) is refused.
 - **Cancel card**: `POST /orders/{id}/cancel` is safe to send again (a cancelled order answers what was
   recorded). While it answers 503 (payments busy, for example the card issuer briefly busy while it closes
   the card), or no answer comes in time, the page stays on "Cancelling..." and sends it again after 3, 6, 12,
@@ -199,11 +234,12 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
   Perflo's emailed code is what proves who the person is. Once an account links to a Perflo user that an
   earlier Tiny account already linked to, it is the same person, so the earlier account's orders move onto the
   new one.
-- **Requests**: the page asks only when something can have changed. Nothing is read on a timer while the page
-  is quiet. While an order waits on payments (a card getting ready, money arriving, an identity check result)
-  one look runs at a time, the wait between looks grows, looking pauses while the tab is hidden, and it stops
-  at the answer or after its time limit (then a "Check again" button). The balance is read after an order
-  changes status, a card is cancelled, money or limits are saved, and when the tab comes back into view.
+- **Requests**: nothing polls. While an order waits on payments (a card getting ready, money arriving, an
+  identity check result) the page shows that Tiny is waiting and asks nothing; Perflo's webhook brings the
+  change. If none has come after a few minutes the page says it is taking longer than usual, and "Check again"
+  reads the order once. The balance is read after an order changes status, a card is cancelled, money or
+  limits are saved, and when the tab comes back into view. The one loop left is the cancel, which only sends
+  the cancel itself again while payments is busy.
 - **Orders tab**: the same list as the chat. Opening the tab reads it once; orders that are still moving are
   read again from Perflo first (`GET /orders/:id`, never a new order).
 
@@ -229,6 +265,8 @@ server/
   service.ts      the partner flow: link, logins, orders, card, cancel, links
   perfloApi.ts    signed, validated Partner API v2 client
   signing.ts      canonical string, HMAC, verification
+  webhooks.ts     webhook signature check and event shape
+  live.ts         pushes changes to the person's open pages (Server-Sent Events)
   checkout.ts     card reveal (revealCard) and the simulated checkout
   errors.ts       what the browser is told for each failure
   security.ts     response headers, same-origin check, rate limit

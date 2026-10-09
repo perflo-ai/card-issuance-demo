@@ -553,6 +553,9 @@ button:disabled {
 .tag.api {
   background: #eef0f6;
 }
+.tag.webhook {
+  background: #f4eee4;
+}
 
 .check {
   display: flex;

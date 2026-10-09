@@ -11,6 +11,7 @@ import { createMockPerflo } from './mock/mockPerflo.js';
 import { PerfloApi } from './perfloApi.js';
 import { DemoService } from './service.js';
 import { Store } from './store.js';
+import { WEBHOOK_PATH } from './webhooks.js';
 
 const CERT = resolve('certs/localhost.pem');
 /** On SIGTERM, how long requests already on their way get to finish (a POST /orders can wait up to 90 s). */
@@ -57,6 +58,8 @@ async function main(): Promise<void> {
       secret: config.credentials.secret,
       selfOrigin: base.origin,
       partnerOrigin: DEMO_ORIGIN,
+      // Tiny's own webhook address on this computer, signed with the same secret Tiny checks.
+      webhook: { url: `${DEMO_ORIGIN}${WEBHOOK_PATH}`, secret: config.webhookSecret },
     });
     const mockServer = base.protocol === 'https:' ? createHttpsServer(certificate, mock) : createHttpServer(mock);
     const port = Number(base.port || (base.protocol === 'https:' ? 443 : 80));

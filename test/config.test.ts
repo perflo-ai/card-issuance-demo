@@ -13,6 +13,7 @@ const LIVE = {
   PARTNER_ID: 'deb4ed28-805b-4c37-938b-78f18788d9b1',
   PARTNER_KEY_VERSION: 'v1',
   PARTNER_SECRET: 'a'.repeat(43),
+  PERFLO_WEBHOOK_SECRET: `whsec_${'b'.repeat(43)}`,
 };
 
 describe('loadConfig: where the demo listens', () => {
@@ -49,5 +50,32 @@ describe('loadConfig: the address state-changing requests must come from', () =>
 
   it.each(['http://tiny.example', 'https://tiny.example/app', 'tiny.example'])('refuses DEMO_PUBLIC_ORIGIN=%s', (origin) => {
     expect(() => loadConfig({ ...LIVE, PORT: '8080', DEMO_PUBLIC_ORIGIN: origin })).toThrow(ConfigError);
+  });
+});
+
+describe('loadConfig: the webhook secret', () => {
+  it('is required in live mode, because without webhooks nothing on the page would move', () => {
+    const { PERFLO_WEBHOOK_SECRET: _unset, ...withoutSecret } = LIVE;
+    expect(() => loadConfig(withoutSecret)).toThrow(/PERFLO_WEBHOOK_SECRET is required in live mode/);
+  });
+
+  it('must be the whsec_ secret Builder shows, and the error never repeats it', () => {
+    const wrong = 'not-a-webhook-secret-but-the-partner-api-secret-1234';
+    let message = '';
+    try {
+      loadConfig({ ...LIVE, PERFLO_WEBHOOK_SECRET: wrong });
+    } catch (error) {
+      message = error instanceof Error ? error.message : '';
+    }
+    expect(message).toMatch(/whsec_/);
+    expect(message).not.toContain(wrong);
+  });
+
+  it('in mock mode is made fresh for the run when unset (the mock signs with the same one)', () => {
+    const { PERFLO_WEBHOOK_SECRET: _unset, ...withoutSecret } = LIVE;
+    const one = loadConfig({ ...withoutSecret, DEMO_MODE: 'mock', PERFLO_API_BASE: 'https://localhost:8791' }).webhookSecret;
+    const two = loadConfig({ ...withoutSecret, DEMO_MODE: 'mock', PERFLO_API_BASE: 'https://localhost:8791' }).webhookSecret;
+    expect(one).toMatch(/^whsec_[A-Za-z0-9_-]{43}$/);
+    expect(one).not.toBe(two);
   });
 });

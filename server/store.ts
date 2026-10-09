@@ -81,6 +81,12 @@ export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
  */
 const ROTATION_GRACE_MS = 30_000;
 
+/**
+ * How long a webhook event id is remembered. Perflo tries an event again for up to 24 hours, so a
+ * retry that arrives after Tiny already handled it is still recognised.
+ */
+export const WEBHOOK_EVENT_MEMORY_MS = 48 * 60 * 60_000;
+
 /** Session ids as Tiny makes them: 32 random bytes, base64url. Anything else is not looked up at all. */
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
@@ -150,6 +156,8 @@ const storeFile = z
     sessions: z.record(z.string(), sessionRecord),
     users: z.record(z.string(), userRecord),
     orders: z.record(z.string(), orderRecord),
+    // Webhook event ids already handled, with when they arrived (epoch ms). Older files have none.
+    webhookEvents: z.record(z.string(), z.number().int().positive()).optional(),
   })
   .strict();
 
@@ -189,6 +197,7 @@ export class Store {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly users = new Map<string, DemoUser>();
   private readonly orders = new Map<string, DemoOrder>();
+  private readonly webhookEvents = new Map<string, number>();
   /** What the file holds now; a save that would write the same bytes writes nothing. */
   private written: string | null = null;
   /** False when there was no data file: the caller logs that Tiny started empty. */
@@ -200,6 +209,9 @@ export class Store {
     const { raw, data } = readStoreFile(file);
     const now = Date.now();
     for (const [id, record] of Object.entries(data.orders)) this.orders.set(id, record);
+    for (const [id, at] of Object.entries(data.webhookEvents ?? {})) {
+      if (at > now - WEBHOOK_EVENT_MEMORY_MS) this.webhookEvents.set(id, at);
+    }
     for (const [id, record] of Object.entries(data.users)) {
       // Names and emails typed at the old sign-up are dropped: nothing reads them any more.
       const { firstName: _first, lastName: _last, email: _email, ...user } = record;
@@ -260,7 +272,12 @@ export class Store {
   /** Writes the store if, and only if, its content changed since the last write. */
   private save(): void {
     const json = JSON.stringify(
-      { sessions: Object.fromEntries(this.sessions), users: Object.fromEntries(this.users), orders: Object.fromEntries(this.orders) },
+      {
+        sessions: Object.fromEntries(this.sessions),
+        users: Object.fromEntries(this.users),
+        orders: Object.fromEntries(this.orders),
+        webhookEvents: Object.fromEntries(this.webhookEvents),
+      },
       null,
       2,
     );
@@ -380,6 +397,33 @@ export class Store {
 
   orderByPerfloId(demoUserId: string, perfloOrderId: string): DemoOrder | null {
     return [...this.orders.values()].find((o) => o.demoUserId === demoUserId && o.perfloOrderId === perfloOrderId) ?? null;
+  }
+
+  /**
+   * The order Perflo knows by this id, whoever it belongs to. Only for a signed webhook, which names
+   * an order and no person; every route a browser reaches looks orders up within its own account.
+   */
+  orderForWebhook(perfloOrderId: string): DemoOrder | null {
+    return [...this.orders.values()].find((o) => o.perfloOrderId === perfloOrderId) ?? null;
+  }
+
+  /** The Tiny account with this id, or null. Tiny's account id is the external_user_id Perflo knows. */
+  findUser(id: string): DemoUser | null {
+    return this.users.get(id) ?? null;
+  }
+
+  /**
+   * Records a webhook event id. True the first time it is seen, false for a retry of one already
+   * handled. Ids older than WEBHOOK_EVENT_MEMORY_MS are forgotten as new ones arrive.
+   */
+  rememberWebhookEvent(eventId: string, now: number = Date.now()): boolean {
+    for (const [id, at] of this.webhookEvents) {
+      if (at <= now - WEBHOOK_EVENT_MEMORY_MS) this.webhookEvents.delete(id);
+    }
+    if (this.webhookEvents.has(eventId)) return false;
+    this.webhookEvents.set(eventId, now);
+    this.save();
+    return true;
   }
 
   ordersFor(demoUserId: string): DemoOrder[] {
