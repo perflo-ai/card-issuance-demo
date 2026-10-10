@@ -16,7 +16,8 @@ import { alwaysVisible, poll, type Visibility } from './polling';
 import type { OrderView } from '../../server/views';
 
 export interface Cancelled {
-  amountReturned: string;
+  /** null while a reused card is open: its unused money comes back when it closes. */
+  amountReturned: string | null;
   order?: OrderView;
 }
 

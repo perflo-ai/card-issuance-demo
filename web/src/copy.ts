@@ -16,6 +16,15 @@ export function money(amount: string): string {
   }
 }
 
+/**
+ * What went back to the balance after an order: the amount once it is known, or, while a reused card is
+ * still open (null), that its unused money comes back when the card closes. Nothing for nothing returned.
+ */
+export function returnedLine(amountReturned: string | null | undefined): string | null {
+  if (amountReturned === null) return 'Unused money comes back when the card closes.';
+  return amountReturned && amountReturned !== '0.00' ? `${money(amountReturned)} went back to your balance.` : null;
+}
+
 export function declineHint(reason: DeclineReason): string | null {
   switch (reason) {
     case 'over_order_limit':

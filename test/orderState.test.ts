@@ -71,8 +71,25 @@ describe('every SPEC 4 order status maps to a browser view', () => {
       { order_id: 'ord_1', status: 'completed', amount_spent: '412.80', amount_returned: '4.20' },
       { phase: 'completed', amountSpent: '412.80', amountReturned: '4.20' },
     ],
+    // A reused card still open: what goes back is not known until it closes.
+    [
+      { order_id: 'ord_1', one_time: false, status: 'completed', amount_spent: '18.00', amount_returned: null },
+      { phase: 'completed', amountSpent: '18.00', amountReturned: null },
+    ],
     [{ order_id: 'ord_1', status: 'cancelled' }, { phase: 'cancelled' }],
+    [
+      { order_id: 'ord_1', status: 'cancelled', amount_returned: '20.91' },
+      { phase: 'cancelled', amountReturned: '20.91' },
+    ],
+    [
+      { order_id: 'ord_1', status: 'cancelled', amount_returned: null },
+      { phase: 'cancelled', amountReturned: null },
+    ],
     [{ order_id: 'ord_1', status: 'expired' }, { phase: 'expired' }],
+    [
+      { order_id: 'ord_1', status: 'expired', amount_returned: '9.33' },
+      { phase: 'expired', amountReturned: '9.33' },
+    ],
     [{ order_id: 'ord_1', status: 'failed' }, { phase: 'failed' }],
   ];
 

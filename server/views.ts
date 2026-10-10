@@ -69,7 +69,8 @@ export interface OrderView {
   cardExpiresAt?: string;
   checkout?: CheckoutSummary;
   amountSpent?: string;
-  amountReturned?: string;
+  /** What went back to the balance; null while a reused card is open (its unused money comes back when it closes). */
+  amountReturned?: string | null;
 }
 
 /**

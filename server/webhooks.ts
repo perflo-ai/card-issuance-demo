@@ -60,6 +60,7 @@ export const WEBHOOK_EVENT_TYPES = [
   'order.failed',
   'user.connected',
   'user.disconnected',
+  'card.closed',
   'ping',
 ] as const;
 export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
@@ -84,6 +85,15 @@ export const webhookEvent = z.object({
     .passthrough(),
 });
 export type WebhookEvent = z.infer<typeof webhookEvent>;
+
+/**
+ * card.closed (a reused card's 12 hours ended): the orders that used the card, newest first. Tiny
+ * reads only which orders; each one's final figures are read again from Perflo.
+ */
+export const cardClosedData = z.object({
+  card_id: opaqueId,
+  orders: z.array(z.object({ order_id: opaqueId }).passthrough()).max(500),
+});
 
 export function webhookCanonicalString(key: string, path: string, timestamp: string, rawBody: Buffer): string {
   const bodyHash = createHash('sha256').update(rawBody).digest('hex');

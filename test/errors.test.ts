@@ -118,6 +118,18 @@ describe('PerfloApi retries only reads, and only when told to try again', () => 
     expect([...calls, ...busy.calls]).toEqual(['POST /partner/v2/orders/ord_1/cancel', 'POST /partner/v2/orders']);
   });
 
+  it('a reused card answers null for what went back until it closes, on the order and on the cancel', async () => {
+    const open = { order_id: 'ord_1', one_time: false, status: 'completed', amount_spent: '18.00', amount_returned: null };
+    const { api } = scripted([
+      { status: 200, body: open },
+      { status: 200, body: { status: 'cancelled', amount_returned: null } },
+      { status: 200, body: { order_id: 'ord_2', one_time: false, status: 'cancelled', amount_returned: null } },
+    ]);
+    expect(await api.getOrder('u1', 'ord_1')).toEqual(open);
+    expect(await api.cancelOrder('u1', 'ord_2', 'ptk_test_token_value')).toEqual({ status: 'cancelled', amount_returned: null });
+    expect(await api.getOrder('u1', 'ord_2')).toMatchObject({ status: 'cancelled', amount_returned: null });
+  });
+
   it('a busy cancel is not sent again here, keeps Retry-After for the browser, and logs a repeated refusal once', async () => {
     const unavailable = {
       status: 503,
