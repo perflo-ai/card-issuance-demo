@@ -84,6 +84,12 @@ export type DeclineReason = z.infer<typeof declineReason>;
  * it; Tiny then works the mode out from the cards it was given (web/src/cards.ts).
  */
 const orderId = { order_id: z.string(), one_time: z.boolean().optional() };
+/**
+ * What went back to the person's balance. null while a reused card is still open: its unused money
+ * comes back when the card closes, and card.closed then says the final figures. A one-time order always
+ * answers a figure. Absent on cancelled and expired from a Perflo that predates it.
+ */
+const returned = amount.nullable();
 
 export const orderResponse = z.discriminatedUnion('status', [
   z.object({
@@ -108,9 +114,9 @@ export const orderResponse = z.discriminatedUnion('status', [
   }),
   z.object({ ...orderId, status: z.literal('issuing') }),
   z.object({ ...orderId, status: z.literal('declined'), reason: declineReason, message: z.string() }),
-  z.object({ ...orderId, status: z.literal('completed'), amount_spent: amount, amount_returned: amount }),
-  z.object({ ...orderId, status: z.literal('cancelled') }),
-  z.object({ ...orderId, status: z.literal('expired') }),
+  z.object({ ...orderId, status: z.literal('completed'), amount_spent: amount, amount_returned: returned }),
+  z.object({ ...orderId, status: z.literal('cancelled'), amount_returned: returned.optional() }),
+  z.object({ ...orderId, status: z.literal('expired'), amount_returned: returned.optional() }),
   z.object({ ...orderId, status: z.literal('failed') }),
 ]);
 export type OrderResponse = z.infer<typeof orderResponse>;
@@ -118,7 +124,7 @@ export type OrderResponse = z.infer<typeof orderResponse>;
 export const revealLinkResponse = z.object({ reveal_url: link, reveal_expires_at: z.string() });
 /** bapi never stores reveal links, so an idempotent replay of card-reveal answers 201 with only a message. */
 const revealOrReplay = z.union([revealLinkResponse, z.object({ message: z.string() })]);
-export const cancelResponse = z.object({ status: z.literal('cancelled'), amount_returned: amount });
+export const cancelResponse = z.object({ status: z.literal('cancelled'), amount_returned: returned });
 
 const errorEnvelope = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 

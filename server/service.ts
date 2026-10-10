@@ -18,7 +18,7 @@ import {
 } from './perfloApi.js';
 import { revealCard, RevealError, simulateCheckout, type RevealedCard } from './checkout.js';
 import type { DemoOrder, DemoUser, Store } from './store.js';
-import type { WebhookEvent } from './webhooks.js';
+import { cardClosedData, type WebhookEvent } from './webhooks.js';
 
 import type { LinkStatus, Notice } from './views.js';
 
@@ -264,6 +264,7 @@ export class DemoService {
       try {
         if (event.type.startsWith('order.')) await this.onOrderEvent(event);
         else if (event.type === 'user.connected' || event.type === 'user.disconnected') await this.onUserEvent(event);
+        else if (event.type === 'card.closed') await this.onCardClosed(event);
         else this.log.add(null, 'webhook', event.type === 'ping' ? 'Test event from Perflo received' : `Event ${event.type} ignored`);
         return;
       } catch (error) {
@@ -300,6 +301,38 @@ export class DemoService {
     this.live.send(result.user.id, { type: 'order', order: toView(result.order, result.user), notice: result.notice });
     this.live.send(result.user.id, { type: 'account', linked: result.user.perflo !== null });
     this.live.send(result.user.id, { type: 'log' });
+  }
+
+  /**
+   * A reused card closed: what each of its orders gave back is final now. Each order this copy of Tiny
+   * placed is read again from Perflo (the source of truth) and its page told; any other is logged.
+   */
+  private async onCardClosed(event: WebhookEvent): Promise<void> {
+    const data = cardClosedData.safeParse(event.data);
+    if (!data.success) {
+      this.log.add(null, 'webhook', 'card.closed without a readable list of orders', { event_id: event.id });
+      return;
+    }
+    for (const { order_id: perfloOrderId } of data.data.orders) {
+      const order = this.store.orderForWebhook(perfloOrderId);
+      if (!order) {
+        this.log.add(null, 'webhook', 'card.closed for an order this copy of Tiny did not place', {
+          order_id: perfloOrderId,
+          event_id: event.id,
+        });
+        continue;
+      }
+      const user = this.store.user(order.demoUserId);
+      await this.exclusive(`order:${order.id}`, async () => {
+        const latest = await this.api.getOrder(user.id, perfloOrderId);
+        this.store.updateOrder(order, (o) => recordAnswer(o, latest));
+      });
+      this.log.add(user.id, 'webhook', 'Perflo says the card closed', { order_id: perfloOrderId, event_id: event.id });
+      const fresh = this.store.user(user.id);
+      this.live.send(fresh.id, { type: 'order', order: toView(order, fresh), notice: null });
+      this.live.send(fresh.id, { type: 'account', linked: fresh.perflo !== null });
+      this.live.send(fresh.id, { type: 'log' });
+    }
   }
 
   /**
@@ -397,7 +430,7 @@ export class DemoService {
     return null;
   }
 
-  async cancelCard(user: DemoUser, perfloOrderId: string): Promise<{ amountReturned: string; order: DemoOrder | null }> {
+  async cancelCard(user: DemoUser, perfloOrderId: string): Promise<{ amountReturned: string | null; order: DemoOrder | null }> {
     if (!user.perflo) throw new DemoError('not_linked', 'Payments are not set up yet');
     const token = user.perflo.token;
     return this.exclusive(`cancel:${perfloOrderId}`, async () => {

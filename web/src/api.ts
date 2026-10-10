@@ -84,7 +84,7 @@ export const api = {
   cardDetails: (perfloOrderId: string) =>
     request<{ card: CardDetailsView }>('POST', `/demo/orders/${encodeURIComponent(perfloOrderId)}/card-details`),
   cancelCard: (perfloOrderId: string) =>
-    request<{ amountReturned: string; order?: OrderView }>('POST', `/demo/cards/${encodeURIComponent(perfloOrderId)}/cancel`),
+    request<{ amountReturned: string | null; order?: OrderView }>('POST', `/demo/cards/${encodeURIComponent(perfloOrderId)}/cancel`),
   events: (after: number) => request<{ events: LogEntry[] }>('GET', `/demo/events?after=${after}`),
   mockRevoke: () => request<{ ok: true }>('POST', '/demo/mock/revoke-access'),
   mockStopAtCheckout: (on: boolean) => request<{ user: MeView }>('POST', '/demo/mock/stop-at-checkout', { on }),

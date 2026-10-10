@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { quote } from '../server/mock/mockPerflo.js';
 import { apiAmountToCents, centsToApiAmount } from '../server/money.js';
-import { finishSetup, frameCall, payInFrame, revealFetch, signedFetch, startMock, wait } from './helpers.js';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { finishSetup, frameCall, payInFrame, revealFetch, signedFetch, startMock, wait, WEBHOOK_SECRET } from './helpers.js';
 
 let mock: { base: string; close: () => Promise<void> };
 beforeEach(async () => {
@@ -253,6 +255,7 @@ describe('orders', () => {
       order_id: placed.json.order_id,
       one_time: true,
       status: 'cancelled',
+      amount_returned: centsToApiAmount(quote(2000).loadCents),
     });
     expect((await signedFetch(mock.base, 'POST', `/partner/v2/orders/${placed.json.order_id}/cancel`, { token })).status).toBe(409);
   });
@@ -426,7 +429,9 @@ describe('reuse mode (a partner whose cards serve every order for their 12 hours
     const first = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '20.00') });
     const second = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k2', body: order(userId, '10.00') });
     const cancelled = await signedFetch(mock.base, 'POST', `/partner/v2/orders/${first.json.order_id}/cancel`, { token });
-    expect(cancelled.json).toEqual({ status: 'cancelled', amount_returned: centsToApiAmount(quote(2000).loadCents) });
+    // Like bapi: the card is still open, so what went back is final only once it closes.
+    expect(cancelled.json).toEqual({ status: 'cancelled', amount_returned: null });
+    expect((await signedFetch(mock.base, 'GET', `/partner/v2/orders/${first.json.order_id}`)).json.amount_returned).toBeNull();
     expect((await signedFetch(mock.base, 'GET', `/partner/v2/orders/${second.json.order_id}`)).json.status).toBe('ready');
     const link = await signedFetch(mock.base, 'POST', `/partner/v2/orders/${second.json.order_id}/card-reveal`, { token, idem: 'r1' });
     expect((await revealFetch(link.json.reveal_url, token)).status).toBe(200);
@@ -455,7 +460,7 @@ describe('reuse mode (a partner whose cards serve every order for their 12 hours
     expect((await signedFetch(mock.base, 'GET', `/partner/v2/orders/${first.json.order_id}`)).json).toMatchObject({
       status: 'completed',
       amount_spent: '18.00',
-      amount_returned: '0.00',
+      amount_returned: null,
     });
     expect((await signedFetch(mock.base, 'GET', `/partner/v2/orders/${second.json.order_id}`)).json.status).toBe('ready');
     const before = apiAmountToCents(await balanceOf(userId, token));
@@ -477,6 +482,70 @@ describe('reuse mode (a partner whose cards serve every order for their 12 hours
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('reuse mode: the card closing', () => {
+  let collector: Server | null = null;
+  afterEach(async () => {
+    await new Promise<void>((done) => (collector ? collector.close(() => done()) : done()));
+    collector = null;
+  });
+
+  it('announces card.closed once, with every order of the card newest first and its final figures', async () => {
+    const events: Array<{ type: string; data: unknown }> = [];
+    collector = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (chunk: Buffer) => (raw += chunk.toString('utf8')));
+      req.on('end', () => {
+        events.push(JSON.parse(raw) as { type: string; data: unknown });
+        res.writeHead(200).end();
+      });
+    });
+    await new Promise<void>((done) => (collector as Server).listen(0, '127.0.0.1', done));
+    const address = collector.address() as AddressInfo;
+    await mock.close();
+    mock = await startMock(50, { url: `http://127.0.0.1:${address.port}/webhooks/perflo`, secret: WEBHOOK_SECRET }, true);
+
+    const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '100.00');
+    const first = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k1', body: order(userId, '20.00') });
+    const second = await signedFetch(mock.base, 'POST', '/partner/v2/orders', { token, idem: 'k2', body: order(userId, '10.00') });
+    await signedFetch(mock.base, 'POST', `/partner/v2/orders/${first.json.order_id}/cancel`, { token });
+    const closed = () => events.filter((e) => e.type === 'card.closed');
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 12 * 60 * 60_000 + 1000);
+      await signedFetch(mock.base, 'GET', `/partner/v2/orders/${second.json.order_id}`);
+      for (let i = 0; i < 100 && closed().length === 0; i++) await wait(20);
+      await wait(600);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(closed()).toHaveLength(1);
+    expect(closed()[0].data).toEqual({
+      card_id: first.json.card_id,
+      last4: first.json.last4,
+      card_expires_at: first.json.card_expires_at,
+      closed_at: expect.any(String),
+      orders: [
+        {
+          order_id: second.json.order_id,
+          status: 'expired',
+          amount_spent: '0.00',
+          amount_returned: centsToApiAmount(quote(1000).loadCents),
+        },
+        {
+          order_id: first.json.order_id,
+          status: 'cancelled',
+          amount_spent: '0.00',
+          amount_returned: centsToApiAmount(quote(2000).loadCents),
+        },
+      ],
+    });
+    expect((await signedFetch(mock.base, 'GET', `/partner/v2/orders/${first.json.order_id}`)).json.amount_returned).toBe(
+      centsToApiAmount(quote(2000).loadCents),
+    );
   });
 });
 

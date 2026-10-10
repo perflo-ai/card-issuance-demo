@@ -4,7 +4,7 @@ import { pageVisibility, useOnMount } from './browser';
 import { cancelUntilDone } from './cancel';
 import { CardDetails } from './CardDetails';
 import { cardUse } from './cards';
-import { CANCEL_SLOW_TEXT, cancelLabel, cardName, money, phaseLabel, when } from './copy';
+import { CANCEL_SLOW_TEXT, cancelLabel, cardName, money, phaseLabel, returnedLine, when } from './copy';
 import { formatUsd } from '../../server/money';
 import type { OrderView } from '../../server/views';
 
@@ -84,9 +84,7 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
                   </p>
                 )}
                 {order.amountSpent && <p className="muted small">Paid {money(order.amountSpent)}</p>}
-                {order.amountReturned && order.amountReturned !== '0.00' && (
-                  <p className="muted small">{money(order.amountReturned)} went back to your balance</p>
-                )}
+                {returnedLine(order.amountReturned) && <p className="muted small">{returnedLine(order.amountReturned)}</p>}
                 {order.phase === 'ready' && order.perfloOrderId && last4 && (
                   <>
                     <CardDetails

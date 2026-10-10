@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDemoApp } from '../server/app.js';
+import { recordAnswer, toView } from '../server/orderState.js';
 import { Store } from '../server/store.js';
 import type { OrderView } from '../server/views.js';
 import { verifyWebhook, WEBHOOK_PATH, webhookCanonicalString, webhookHeaders } from '../server/webhooks.js';
@@ -214,6 +215,52 @@ describe('an order moved on by webhooks alone', () => {
     const fed = JSON.stringify(stream.messages);
     expect(fed).not.toMatch(/ptk_test_|sensitive\?t=|whsec_|[0-9]{16}/);
   }, 15_000);
+});
+
+describe('card.closed', () => {
+  it('stores the final returned of each order this copy placed and pushes it to the page; another order is logged', async () => {
+    const demo = makeDemo('https://localhost:8791');
+    const { user } = demo.store.createUser();
+    const order = demo.store.createOrder(user.id, { merchantName: 'Shop', domain: 'amazon.com', amountCents: 2000, description: '' });
+    demo.store.updateOrder(order, (o) => {
+      o.perfloOrderId = 'ord_1';
+      o.state = 'placed';
+      recordAnswer(o, { order_id: 'ord_1', one_time: false, status: 'completed', amount_spent: '18.00', amount_returned: null });
+    });
+    expect(toView(order, user).amountReturned).toBeNull();
+    const final = { order_id: 'ord_1', one_time: false, status: 'completed', amount_spent: '18.00', amount_returned: '2.40' } as const;
+    const read = vi.spyOn(demo.api, 'getOrder').mockResolvedValue(final);
+    const pushed = vi.spyOn(demo.service.live, 'send');
+    const logged = vi.spyOn(demo.log, 'add');
+
+    await demo.service.onWebhook({
+      id: 'evt_closed_1',
+      type: 'card.closed',
+      created_at: '2026-10-10T12:00:00.000Z',
+      data: {
+        card_id: 'card_1',
+        last4: '4417',
+        card_expires_at: '2026-10-10T12:00:00.000Z',
+        closed_at: '2026-10-10T12:00:01.000Z',
+        orders: [
+          { order_id: 'ord_elsewhere', status: 'completed', amount_spent: '1.00', amount_returned: '0.50' },
+          { order_id: 'ord_1', status: 'completed', amount_spent: '18.00', amount_returned: '2.40' },
+        ],
+      },
+    });
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledWith(user.id, 'ord_1');
+    expect(demo.store.order(user.id, order.id)?.last).toEqual(final);
+    expect(pushed).toHaveBeenCalledWith(
+      user.id,
+      expect.objectContaining({ type: 'order', order: expect.objectContaining({ id: order.id, amountReturned: '2.40' }) }),
+    );
+    expect(logged).toHaveBeenCalledWith(null, 'webhook', 'card.closed for an order this copy of Tiny did not place', {
+      order_id: 'ord_elsewhere',
+      event_id: 'evt_closed_1',
+    });
+  });
 });
 
 describe('no polling left', () => {

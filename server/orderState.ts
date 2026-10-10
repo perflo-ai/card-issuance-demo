@@ -109,11 +109,22 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
         ...base,
         ...card,
         phase: 'cancelled',
-        ...(order.amountReturned ? { amountReturned: order.amountReturned } : {}),
+        // Perflo's own figure on the order; a Perflo that predates it only said it on the cancel answer.
+        ...(last.amount_returned !== undefined
+          ? { amountReturned: last.amount_returned }
+          : order.amountReturned
+            ? { amountReturned: order.amountReturned }
+            : {}),
         ...(order.checkout ? { checkout: order.checkout } : {}),
       };
     case 'expired':
-      return { ...base, ...card, phase: 'expired', ...(order.checkout ? { checkout: order.checkout } : {}) };
+      return {
+        ...base,
+        ...card,
+        phase: 'expired',
+        ...(last.amount_returned !== undefined ? { amountReturned: last.amount_returned } : {}),
+        ...(order.checkout ? { checkout: order.checkout } : {}),
+      };
     case 'failed':
       return { ...base, phase: 'failed' };
   }

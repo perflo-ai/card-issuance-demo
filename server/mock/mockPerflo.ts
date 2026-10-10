@@ -297,6 +297,33 @@ export function createMockPerflo(options: MockOptions) {
       o.returnedCents = back;
       (users.get(o.userId) as MUser).balanceCents += back;
     }
+    // Like bapi: a reused card's close is announced once, with every order of it (newest first) and its final figures.
+    if (card.reusable && options.webhook) {
+      const onCard = [...orders.values()].filter((o) => o.card === card).reverse();
+      enqueue('card.closed', {
+        card_id: card.cardId,
+        last4: card.last4,
+        card_expires_at: new Date(card.expiresAt).toISOString(),
+        closed_at: new Date().toISOString(),
+        orders: onCard.map((o) => {
+          const done = o.status === 'completed' || o.status === 'cancelled' || o.status === 'expired';
+          return {
+            order_id: o.orderId,
+            status: present(o, false).body.status,
+            amount_spent: done ? centsToApiAmount(o.spentCents) : null,
+            amount_returned: done ? returnedOf(o) : null,
+          };
+        }),
+      });
+    }
+  }
+
+  /**
+   * What an order gave back, as bapi answers it: null while its reused card is still open (the money
+   * stays on the card until it closes), the figure otherwise.
+   */
+  function returnedOf(order: MOrder): string | null {
+    return order.card?.reusable && !order.card.closed ? null : centsToApiAmount(order.returnedCents);
   }
 
   /** The checks bapi runs on place and on resume, in SPEC 4 order. */
@@ -440,9 +467,12 @@ export function createMockPerflo(options: MockOptions) {
             ...base,
             status: 'completed',
             amount_spent: centsToApiAmount(order.spentCents),
-            amount_returned: centsToApiAmount(order.returnedCents),
+            amount_returned: returnedOf(order),
           },
         };
+      case 'cancelled':
+      case 'expired':
+        return { status: 200, body: { ...base, status: order.status, amount_returned: returnedOf(order) } };
       default:
         return { status: 200, body: { ...base, status: order.status } };
     }
@@ -832,7 +862,7 @@ export function createMockPerflo(options: MockOptions) {
     user.balanceCents += returned;
     order.status = 'cancelled';
     order.returnedCents = returned;
-    res.status(200).json({ status: 'cancelled', amount_returned: centsToApiAmount(returned) });
+    res.status(200).json({ status: 'cancelled', amount_returned: returnedOf(order) });
   });
 
   // Frames: pages and their same-origin JSON actions (SPEC 8 and 8a). Not signed: the session id is the capability,

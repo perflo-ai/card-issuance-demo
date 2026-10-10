@@ -11,6 +11,7 @@ import {
   declineFallback,
   declineHint,
   money,
+  returnedLine,
   stalledText,
   stepLabel,
   waitingText,
@@ -331,6 +332,8 @@ interface CardProps {
 export function OrderCard(props: CardProps) {
   const { order, action, waiting, note, error, perfloOrigin, onAdvance, onExpect } = props;
   const reusable = props.cardUse.reusable;
+  /** A reused card is still open while Perflo has no final figure for what goes back (null). */
+  const cardOpen = reusable && order.amountReturned === null;
   const [frameOpen, setFrameOpen] = useState(false);
   const card = useRef<HTMLElement>(null);
   useFocusWhenClosed(frameOpen, card);
@@ -567,11 +570,11 @@ export function OrderCard(props: CardProps) {
             Paid {money(order.amountSpent ?? '0.00')} at {order.domain}.
           </p>
           <p className="muted small">
-            {order.checkout && !reusable ? `${cardName(false)} .... ${order.checkout.last4} is now closed. ` : ''}
-            {order.checkout && reusable
-              ? `${cardName(true)} .... ${order.checkout.last4} stays open for your later orders until it expires${order.cardExpiresAt ? ` (${when(order.cardExpiresAt)})` : ''}, and unused money goes back to your balance when it closes. `
+            {order.checkout && !cardOpen ? `${cardName(reusable)} .... ${order.checkout.last4} is now closed. ` : ''}
+            {order.checkout && cardOpen
+              ? `${cardName(true)} .... ${order.checkout.last4} stays open for your later orders until it expires${order.cardExpiresAt ? ` (${when(order.cardExpiresAt)})` : ''}. `
               : ''}
-            {order.amountReturned && order.amountReturned !== '0.00' ? `${money(order.amountReturned)} went back to your balance.` : ''}
+            {returnedLine(order.amountReturned) ?? ''}
           </p>
         </>
       );
@@ -590,14 +593,7 @@ export function OrderCard(props: CardProps) {
       );
       break;
     case 'cancelled':
-      body = (
-        <p>
-          Cancelled.{' '}
-          {order.amountReturned && order.amountReturned !== '0.00'
-            ? `${money(order.amountReturned)} went back to your balance.`
-            : 'Nothing was spent.'}
-        </p>
-      );
+      body = <p>Cancelled. {returnedLine(order.amountReturned) ?? 'Nothing was spent.'}</p>;
       break;
     case 'expired':
       body = <p>The card expired before it was used. The money went back to your balance.</p>;
