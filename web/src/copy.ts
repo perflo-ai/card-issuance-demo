@@ -142,19 +142,19 @@ export function stalledText(waiting: Waiting): string {
 }
 
 /**
- * What a card is called. "One-time card" only while it serves one order: a card payments gave to
- * several orders (see cards.ts) is just "Card".
+ * What a card is called: "One-time card", or just "Card" for one the partner reuses for the person's
+ * orders until it expires (see cards.ts).
  */
-export function cardName(shared: boolean): string {
-  return shared ? 'Card' : 'One-time card';
+export function cardName(reusable: boolean): string {
+  return reusable ? 'Card' : 'One-time card';
 }
 
 /** On the card, for an order placed on the same card as an earlier one. */
 export const SAME_CARD_TEXT = 'Same card as your last order';
 
-/** The cancel button next to an open order. On a shared card it cancels this order only; the card stays open. */
-export function cancelLabel(shared: boolean): string {
-  return shared ? 'Cancel order' : 'Cancel card';
+/** The cancel button next to an open order. On a reused card it cancels this order only; the card stays open. */
+export function cancelLabel(reusable: boolean): string {
+  return reusable ? 'Cancel order' : 'Cancel card';
 }
 
 /** Said when a card's cancel has not gone through after about two minutes of trying, next to "Check again". */

@@ -72,6 +72,7 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
     return { ...base, phase: 'placing' };
   }
 
+  if (last.one_time !== undefined) base.oneTime = last.one_time;
   switch (last.status) {
     case 'ready':
       return {

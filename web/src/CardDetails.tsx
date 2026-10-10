@@ -7,9 +7,9 @@ import type { CardDetailsView } from '../../server/views';
 interface Props {
   perfloOrderId: string;
   last4: string;
-  /** This order's own limit. A card shared with other orders shows what its open orders are for together. */
+  /** This order's own limit. A card that is not one-time shows what its open orders are for together. */
   cardLimit?: string;
-  /** Whether the card serves other orders too (cards.ts). */
+  /** Whether it is a one-time card, and whether it serves other orders too (cards.ts). */
   use: CardUse;
   /** Known from Tiny's own checkout, so the expiry shows before the details are opened. */
   expMonth?: string;
@@ -17,7 +17,7 @@ interface Props {
 }
 
 /**
- * An open card: a one-time card, or one shared by several orders. The number and security code stay hidden until the
+ * An open card: a one-time card, or one that serves several orders. The number and security code stay hidden until the
  * person asks; each Show reads them fresh, and Hide (or leaving the screen)
  * drops them from memory.
  */
@@ -56,8 +56,8 @@ export function CardDetails({ perfloOrderId, last4, cardLimit, use, expMonth, ex
 
   const month = card?.expMonth ?? expMonth;
   const year = card?.expYear ?? expYear;
-  const name = cardName(use.shared);
-  const limit = use.shared ? (use.openTotal ?? cardLimit) : cardLimit;
+  const name = cardName(use.reusable);
+  const limit = use.reusable ? (use.openTotal ?? cardLimit) : cardLimit;
 
   return (
     <div className="card-face" aria-label={`${name} ending ${last4}`}>

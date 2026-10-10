@@ -80,7 +80,7 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
                 </p>
                 {last4 && order.phase !== 'ready' && (
                   <p className="muted small">
-                    {cardName(use.shared)} .... {last4}
+                    {cardName(use.reusable)} .... {last4}
                   </p>
                 )}
                 {order.amountSpent && <p className="muted small">Paid {money(order.amountSpent)}</p>}
@@ -102,7 +102,7 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
                         ? 'Cancelling...'
                         : slowCancel === order.perfloOrderId
                           ? 'Check again'
-                          : cancelLabel(use.shared)}
+                          : cancelLabel(use.reusable)}
                     </button>
                     {slowCancel === order.perfloOrderId && cancelling === null && (
                       <p className="muted small" role="status">

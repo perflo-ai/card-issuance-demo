@@ -73,10 +73,12 @@ Things to try, in order:
     of every open order on the card and pays the oldest open order first, so with **Stop at the checkout page**
     on for the first order, the next checkout shows as paid on that first order. Paying leaves the money on the
     card, cancelling one order leaves the card open for the others, and the card closes at its 12 hours,
-    returning what is left. Tiny is not told the mode: it sees two orders answered with the same card,
-    so the first order on a card shows "One-time card" until a second one lands on it. From then on the card is
-    "Card", later orders say "Same card as your last order", the Payments panel shows the card once with what its
-    open orders are for together, and each order's cancel button says **Cancel order**.
+    returning what is left. Every order answer says which mode it was placed under (`one_time`), so the
+    card is "Card" from the first order on, not "One-time card"; later orders say "Same card as your last
+    order", the Payments panel shows the card once (grouped by its `card_id`) with what its open orders are
+    for together, and each order's cancel button says **Cancel order**. Against a Perflo that does not send
+    `one_time` or the open cards' `card_id` yet, Tiny falls back to reading the cards it was given: the first
+    order on a card shows "One-time card" until a second one lands on it.
 
 Each order in the chat lists its steps (identity check and adding money only when the order asked for them)
 and says what Tiny is doing or waiting for right now, from the statuses payments returned.

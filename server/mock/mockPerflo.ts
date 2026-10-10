@@ -380,7 +380,8 @@ export function createMockPerflo(options: MockOptions) {
 
   /** The public order shape (SPEC 4). `withReveal` only on the answer that first hands the card out. */
   function present(order: MOrder, withReveal: boolean): { status: number; body: Record<string, unknown> } {
-    const base = { order_id: order.orderId };
+    // The card mode, on every answer (bapi #356); the mock's mode is fixed for its run.
+    const base = { order_id: order.orderId, one_time: options.reuseCards !== true };
     switch (order.status) {
       case 'ready': {
         const card = order.card as MCard;
@@ -688,6 +689,7 @@ export function createMockPerflo(options: MockOptions) {
       },
       open_cards: open.map((o) => ({
         order_id: o.orderId,
+        card_id: (o.card as MCard).cardId,
         last4: (o.card as MCard).last4,
         card_limit: centsToApiAmount(o.amountCents),
         expires_at: new Date((o.card as MCard).expiresAt).toISOString(),

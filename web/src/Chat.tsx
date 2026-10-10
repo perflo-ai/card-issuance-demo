@@ -307,7 +307,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
 
 interface CardProps {
   order: OrderView;
-  /** Whether the order's card serves other orders too. */
+  /** Whether the order's card is a one-time card, and whether it serves other orders too. */
   cardUse: CardUse;
   seen: StepKey[];
   notice: Notice;
@@ -330,7 +330,7 @@ interface CardProps {
 
 export function OrderCard(props: CardProps) {
   const { order, action, waiting, note, error, perfloOrigin, onAdvance, onExpect } = props;
-  const shared = props.cardUse.shared;
+  const reusable = props.cardUse.reusable;
   const [frameOpen, setFrameOpen] = useState(false);
   const card = useRef<HTMLElement>(null);
   useFocusWhenClosed(frameOpen, card);
@@ -373,7 +373,7 @@ export function OrderCard(props: CardProps) {
   const cancelButton = (className: string) =>
     order.perfloOrderId && (
       <button className={className} disabled={busy} onClick={() => props.onCancelCard(order.perfloOrderId as string)}>
-        {action === 'cancel' ? 'Cancelling...' : cancelSlow ? 'Check again' : cancelLabel(shared)}
+        {action === 'cancel' ? 'Cancelling...' : cancelSlow ? 'Check again' : cancelLabel(reusable)}
       </button>
     );
 
@@ -511,7 +511,7 @@ export function OrderCard(props: CardProps) {
             />
           )}
           {order.checkout.outcome === 'filled_not_submitted' &&
-            (shared ? (
+            (reusable ? (
               <p>
                 I filled in the checkout on {order.domain}. This demo stops before buying. The card stays open for your later orders until
                 it expires{order.cardExpiresAt ? ` (${when(order.cardExpiresAt)})` : ''}, and unused money goes back to your balance when it
@@ -525,7 +525,7 @@ export function OrderCard(props: CardProps) {
             ))}
           {order.checkout.outcome === 'charge_refused' && (
             <p>
-              {shared
+              {reusable
                 ? 'The shop did not accept the card. You can cancel this order to get its money back.'
                 : 'The shop did not accept the card. You can cancel it to get the money back.'}
             </p>
@@ -535,8 +535,8 @@ export function OrderCard(props: CardProps) {
       ) : (
         <>
           <p>
-            Your {cardName(shared).toLowerCase()} <strong>.... {order.cardLast4}</strong> is ready
-            {order.cardLimit ? `, up to ${money(order.cardLimit)}${shared ? ' for this order' : ''}` : ''}.
+            Your {cardName(reusable).toLowerCase()} <strong>.... {order.cardLast4}</strong> is ready
+            {order.cardLimit ? `, up to ${money(order.cardLimit)}${reusable ? ' for this order' : ''}` : ''}.
           </p>
           {order.perfloOrderId && order.cardLast4 && (
             <CardDetails perfloOrderId={order.perfloOrderId} last4={order.cardLast4} cardLimit={order.cardLimit} use={props.cardUse} />
@@ -567,8 +567,8 @@ export function OrderCard(props: CardProps) {
             Paid {money(order.amountSpent ?? '0.00')} at {order.domain}.
           </p>
           <p className="muted small">
-            {order.checkout && !shared ? `${cardName(false)} .... ${order.checkout.last4} is now closed. ` : ''}
-            {order.checkout && shared
+            {order.checkout && !reusable ? `${cardName(false)} .... ${order.checkout.last4} is now closed. ` : ''}
+            {order.checkout && reusable
               ? `${cardName(true)} .... ${order.checkout.last4} stays open for your later orders until it expires${order.cardExpiresAt ? ` (${when(order.cardExpiresAt)})` : ''}, and unused money goes back to your balance when it closes. `
               : ''}
             {order.amountReturned && order.amountReturned !== '0.00' ? `${money(order.amountReturned)} went back to your balance.` : ''}

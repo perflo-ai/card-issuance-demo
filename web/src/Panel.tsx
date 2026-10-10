@@ -255,7 +255,7 @@ export function Panel(props: Props) {
                         </span>
                         {only && (
                           <button className="link" disabled={busy !== null} onClick={() => void cancelCard(only)}>
-                            {cancellingCard === only ? 'Cancelling...' : slowCancel === only ? 'Check again' : cancelLabel(card.shared)}
+                            {cancellingCard === only ? 'Cancelling...' : slowCancel === only ? 'Check again' : cancelLabel(card.reusable)}
                           </button>
                         )}
                         {only && slowCancel === only && cancellingCard === null && (

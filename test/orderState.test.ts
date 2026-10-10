@@ -109,6 +109,17 @@ describe('the card stays known after the order moves on', () => {
     expect(JSON.stringify(stored)).not.toContain('single-use');
   });
 
+  it("carries payments' word on the card mode, and nothing when payments did not say", () => {
+    const reused = order();
+    recordAnswer(reused, { ...ready, one_time: false });
+    expect(toView(reused, user()).oneTime).toBe(false);
+    recordAnswer(reused, { order_id: 'ord_1', one_time: false, status: 'completed', amount_spent: '1.00', amount_returned: '0.00' });
+    expect(toView(reused, user()).oneTime).toBe(false);
+    const older = order();
+    recordAnswer(older, ready);
+    expect(toView(older, user())).not.toHaveProperty('oneTime');
+  });
+
   it('an order that never had a card shows none', () => {
     const stored = order();
     recordAnswer(stored, { order_id: 'ord_1', status: 'cancelled' });
