@@ -1,23 +1,27 @@
 import { useState } from 'react';
 import { api } from './api';
-import { cardNumber, expiry, money } from './copy';
+import type { CardUse } from './cards';
+import { cardName, cardNumber, expiry, money, SAME_CARD_TEXT } from './copy';
 import type { CardDetailsView } from '../../server/views';
 
 interface Props {
   perfloOrderId: string;
   last4: string;
+  /** This order's own limit. A card that is not one-time shows what its open orders are for together. */
   cardLimit?: string;
+  /** Whether it is a one-time card, and whether it serves other orders too (cards.ts). */
+  use: CardUse;
   /** Known from Tiny's own checkout, so the expiry shows before the details are opened. */
   expMonth?: string;
   expYear?: string;
 }
 
 /**
- * An open one-time card. The number and security code stay hidden until the
+ * An open card: a one-time card, or one that serves several orders. The number and security code stay hidden until the
  * person asks; each Show reads them fresh, and Hide (or leaving the screen)
  * drops them from memory.
  */
-export function CardDetails({ perfloOrderId, last4, cardLimit, expMonth, expYear }: Props) {
+export function CardDetails({ perfloOrderId, last4, cardLimit, use, expMonth, expYear }: Props) {
   const [card, setCard] = useState<CardDetailsView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -52,13 +56,16 @@ export function CardDetails({ perfloOrderId, last4, cardLimit, expMonth, expYear
 
   const month = card?.expMonth ?? expMonth;
   const year = card?.expYear ?? expYear;
+  const name = cardName(use.reusable);
+  const limit = use.reusable ? (use.openTotal ?? cardLimit) : cardLimit;
 
   return (
-    <div className="card-face" aria-label={`One-time card ending ${last4}`}>
+    <div className="card-face" aria-label={`${name} ending ${last4}`}>
       <div className="card-top">
-        <span>One-time card</span>
-        {cardLimit && <span>up to {money(cardLimit)}</span>}
+        <span>{name}</span>
+        {limit && <span>up to {money(limit)}</span>}
       </div>
+      {use.later && <p className="muted small">{SAME_CARD_TEXT}</p>}
       <p className="card-number">{card ? cardNumber(card.number) : `•••• •••• •••• ${last4}`}</p>
       <div className="card-meta">
         <span>Expires {month && year ? expiry(month, year) : '••/••'}</span>

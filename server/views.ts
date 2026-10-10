@@ -52,6 +52,18 @@ export interface OrderView {
   amountDue?: string;
   declineReason?: DeclineReason;
   declineMessage?: string;
+  /**
+   * The card this order was paid with, from the first time Perflo answered it ready. A partner in
+   * reuse mode answers the same card for every order within the card's 12 hours, so orders with the
+   * same cardId share one card (web/src/cards.ts). An id only: it opens nothing without Tiny's keys.
+   */
+  cardId?: string;
+  /**
+   * Perflo's word on the card mode the order was placed under (one_time on every order answer): true for
+   * a one-time card, false for a card the partner reuses. Absent until Perflo answered, or from a Perflo
+   * that predates the field.
+   */
+  oneTime?: boolean;
   cardLast4?: string;
   cardLimit?: string;
   cardExpiresAt?: string;
@@ -84,7 +96,7 @@ export interface AccountView {
     remaining_this_month: { amount: string; currency: 'USD' };
   };
   identity_check: { required_above: string; status: IdentityStatus };
-  open_cards: Array<{ order_id: string; last4: string; card_limit: string; expires_at: string }>;
+  open_cards: Array<{ order_id: string; card_id?: string; last4: string; card_limit: string; expires_at: string }>;
 }
 
 export interface LogEntry {

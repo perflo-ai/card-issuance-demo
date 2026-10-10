@@ -27,6 +27,7 @@ export const TEST_ORIGIN = `https://${TEST_HOST}`;
 export async function startMock(
   slowIssueMs = 50,
   webhook?: { url: string; secret: string },
+  reuseCards = false,
 ): Promise<{ base: string; close: () => Promise<void> }> {
   let handler: RequestListener = () => undefined;
   const server = createServer((req, res) => handler(req, res));
@@ -34,7 +35,14 @@ export async function startMock(
   const address = server.address();
   if (typeof address !== 'object' || address === null) throw new Error('no port');
   const base = `http://127.0.0.1:${address.port}`;
-  handler = createMockPerflo({ ...CREDS, selfOrigin: base, partnerOrigin: PARTNER_ORIGIN, slowIssueMs, ...(webhook ? { webhook } : {}) });
+  handler = createMockPerflo({
+    ...CREDS,
+    selfOrigin: base,
+    partnerOrigin: PARTNER_ORIGIN,
+    slowIssueMs,
+    reuseCards,
+    ...(webhook ? { webhook } : {}),
+  });
   return { base, close: () => new Promise<void>((done) => server.close(() => done())) };
 }
 
@@ -138,6 +146,7 @@ export function makeDemo(base: string, mode: 'mock' | 'live' = 'mock') {
     listen: { kind: 'local' },
     publicOrigin: TEST_ORIGIN,
     webhookSecret: WEBHOOK_SECRET,
+    mockReuseCards: false,
   };
   const log = new EventLog();
   const store = new Store(dataFile);

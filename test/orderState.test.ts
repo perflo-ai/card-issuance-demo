@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nextStep, TERMINAL_STATUSES, toView, withoutRevealLink } from '../server/orderState.js';
+import { nextStep, recordAnswer, TERMINAL_STATUSES, toView, withoutRevealLink } from '../server/orderState.js';
 import type { OrderResponse } from '../server/perfloApi.js';
 import type { CheckoutSummary, DemoOrder, DemoUser } from '../server/store.js';
 import { redact } from '../server/redact.js';
@@ -49,7 +49,7 @@ const ready: OrderResponse = {
 
 describe('every SPEC 4 order status maps to a browser view', () => {
   const cases: Array<[OrderResponse, Record<string, unknown>]> = [
-    [ready, { phase: 'ready', cardLast4: '4417', cardLimit: '412.80', cardExpiresAt: '2026-10-07T12:00:00Z' }],
+    [ready, { phase: 'ready', cardId: 'card_1', cardLast4: '4417', cardLimit: '412.80', cardExpiresAt: '2026-10-07T12:00:00Z' }],
     [
       { order_id: 'ord_1', status: 'payment_required', frame_url: 'https://p.example/frames/top-up?session=fs_1', amount_due: '417.80' },
       { phase: 'payment_required', frameUrl: 'https://p.example/frames/top-up?session=fs_1', amountDue: '417.80' },
@@ -86,6 +86,44 @@ describe('every SPEC 4 order status maps to a browser view', () => {
     expect(view).not.toContain('ptk_test_secret_token');
     expect(view).not.toContain('single-use');
     expect(view).not.toContain('reveal');
+  });
+});
+
+describe('the card stays known after the order moves on', () => {
+  it('a later answer that names no card keeps the card the ready answer named', () => {
+    const stored = order();
+    recordAnswer(stored, ready);
+    recordAnswer(stored, { order_id: 'ord_1', status: 'completed', amount_spent: '400.00', amount_returned: '0.00' });
+    expect(stored.last).toEqual({ order_id: 'ord_1', status: 'completed', amount_spent: '400.00', amount_returned: '0.00' });
+    expect(toView(stored, user())).toMatchObject({
+      phase: 'completed',
+      cardId: 'card_1',
+      cardLast4: '4417',
+      cardExpiresAt: '2026-10-07T12:00:00Z',
+    });
+  });
+
+  it('never stores the reveal link', () => {
+    const stored = order();
+    recordAnswer(stored, ready);
+    expect(JSON.stringify(stored)).not.toContain('single-use');
+  });
+
+  it("carries payments' word on the card mode, and nothing when payments did not say", () => {
+    const reused = order();
+    recordAnswer(reused, { ...ready, one_time: false });
+    expect(toView(reused, user()).oneTime).toBe(false);
+    recordAnswer(reused, { order_id: 'ord_1', one_time: false, status: 'completed', amount_spent: '1.00', amount_returned: '0.00' });
+    expect(toView(reused, user()).oneTime).toBe(false);
+    const older = order();
+    recordAnswer(older, ready);
+    expect(toView(older, user())).not.toHaveProperty('oneTime');
+  });
+
+  it('an order that never had a card shows none', () => {
+    const stored = order();
+    recordAnswer(stored, { order_id: 'ord_1', status: 'cancelled' });
+    expect(toView(stored, user()).cardId).toBeUndefined();
   });
 });
 

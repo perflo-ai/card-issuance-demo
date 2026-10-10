@@ -38,6 +38,11 @@ export interface DemoConfig {
    * which the mock payments service signs with too.
    */
   webhookSecret: string;
+  /**
+   * Mock mode only (MOCK_REUSE_CARDS=true): the mock answers as a partner in reuse mode does, with
+   * every order within a card's 12 hours on the same card. Off: one card per order, as by default.
+   */
+  mockReuseCards: boolean;
 }
 
 /** Webhook secrets as Perflo Builder shows them: whsec_ then 32 random bytes, base64url. */
@@ -112,6 +117,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DemoConfig {
     );
   }
 
+  const rawReuse = env.MOCK_REUSE_CARDS?.trim();
+  if (rawReuse && rawReuse !== 'true' && rawReuse !== 'false') throw new ConfigError('MOCK_REUSE_CARDS must be "true" or "false"');
+  if (rawReuse && mode !== 'mock') {
+    throw new ConfigError('MOCK_REUSE_CARDS is for mock mode only: in live mode Perflo decides whether a card is reused');
+  }
+
   return {
     mode,
     perfloApiBase: base.toString().replace(/\/$/, ''),
@@ -121,6 +132,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DemoConfig {
     listen,
     publicOrigin: publicOriginFrom(env, listen),
     webhookSecret,
+    mockReuseCards: rawReuse === 'true',
   };
 }
 

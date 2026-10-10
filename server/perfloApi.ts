@@ -58,7 +58,16 @@ export const accountResponse = z.object({
     remaining_this_month: money,
   }),
   identity_check: z.object({ required_above: amount, status: identityStatus }),
-  open_cards: z.array(z.object({ order_id: z.string(), last4: z.string(), card_limit: amount, expires_at: z.string() })),
+  open_cards: z.array(
+    z.object({
+      order_id: z.string(),
+      // The same id the order's ready answer gives; absent from a Perflo that predates it.
+      card_id: z.string().optional(),
+      last4: z.string(),
+      card_limit: amount,
+      expires_at: z.string(),
+    }),
+  ),
 });
 export type AccountResponse = z.infer<typeof accountResponse>;
 
@@ -69,9 +78,16 @@ export type TopUpResponse = z.infer<typeof topUpResponse>;
 export const declineReason = z.enum(['over_order_limit', 'over_monthly_limit', 'partner_limit', 'amount_invalid']);
 export type DeclineReason = z.infer<typeof declineReason>;
 
+/**
+ * The card mode the order was placed under, on every answer: true for a one-time card, false when the
+ * partner reuses one card for the person's orders within its 12 hours. Absent from a Perflo that predates
+ * it; Tiny then works the mode out from the cards it was given (web/src/cards.ts).
+ */
+const orderId = { order_id: z.string(), one_time: z.boolean().optional() };
+
 export const orderResponse = z.discriminatedUnion('status', [
   z.object({
-    order_id: z.string(),
+    ...orderId,
     status: z.literal('ready'),
     card_id: z.string(),
     last4: z.string().regex(/^[0-9]{4}$/),
@@ -81,21 +97,21 @@ export const orderResponse = z.discriminatedUnion('status', [
     reveal_expires_at: z.string().optional(),
     card_expires_at: z.string(),
   }),
-  z.object({ order_id: z.string(), status: z.literal('payment_required'), frame_url: link, amount_due: amount }),
-  z.object({ order_id: z.string(), status: z.literal('login_required'), login_id: z.string(), login_url: link }),
+  z.object({ ...orderId, status: z.literal('payment_required'), frame_url: link, amount_due: amount }),
+  z.object({ ...orderId, status: z.literal('login_required'), login_id: z.string(), login_url: link }),
   z.object({
-    order_id: z.string(),
+    ...orderId,
     status: z.literal('identity_check_required'),
     // null when the link cannot be made right now; absent on an idempotent replay of POST /orders.
     kyc_url: link.nullable().optional(),
     message: z.string().optional(),
   }),
-  z.object({ order_id: z.string(), status: z.literal('issuing') }),
-  z.object({ order_id: z.string(), status: z.literal('declined'), reason: declineReason, message: z.string() }),
-  z.object({ order_id: z.string(), status: z.literal('completed'), amount_spent: amount, amount_returned: amount }),
-  z.object({ order_id: z.string(), status: z.literal('cancelled') }),
-  z.object({ order_id: z.string(), status: z.literal('expired') }),
-  z.object({ order_id: z.string(), status: z.literal('failed') }),
+  z.object({ ...orderId, status: z.literal('issuing') }),
+  z.object({ ...orderId, status: z.literal('declined'), reason: declineReason, message: z.string() }),
+  z.object({ ...orderId, status: z.literal('completed'), amount_spent: amount, amount_returned: amount }),
+  z.object({ ...orderId, status: z.literal('cancelled') }),
+  z.object({ ...orderId, status: z.literal('expired') }),
+  z.object({ ...orderId, status: z.literal('failed') }),
 ]);
 export type OrderResponse = z.infer<typeof orderResponse>;
 

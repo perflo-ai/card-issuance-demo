@@ -37,6 +37,7 @@ function setup(fake: typeof fetch, linked = true) {
     listen: { kind: 'local' },
     publicOrigin: null,
     webhookSecret: WEBHOOK_SECRET,
+    mockReuseCards: false,
   };
   const log = new EventLog();
   const store = new Store(config.dataFile);

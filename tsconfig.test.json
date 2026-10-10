@@ -9,5 +9,13 @@
     "moduleResolution": "Bundler",
     "noUncheckedIndexedAccess": false
   },
-  "include": ["server/**/*.ts", "test/**/*.ts", "web/src/frameEvents.ts", "web/src/api.ts", "web/src/polling.ts", "web/src/progress.ts"]
+  "include": [
+    "server/**/*.ts",
+    "test/**/*.ts",
+    "web/src/frameEvents.ts",
+    "web/src/api.ts",
+    "web/src/polling.ts",
+    "web/src/progress.ts",
+    "web/src/cards.ts"
+  ]
 }

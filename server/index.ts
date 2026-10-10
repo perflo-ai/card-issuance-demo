@@ -58,6 +58,7 @@ async function main(): Promise<void> {
       secret: config.credentials.secret,
       selfOrigin: base.origin,
       partnerOrigin: DEMO_ORIGIN,
+      reuseCards: config.mockReuseCards,
       // Tiny's own webhook address on this computer, signed with the same secret Tiny checks.
       webhook: { url: `${DEMO_ORIGIN}${WEBHOOK_PATH}`, secret: config.webhookSecret },
     });

@@ -7,7 +7,7 @@ import type { DemoConfig } from './config.js';
 import type { EventLog } from './eventLog.js';
 import { centsToApiAmount } from './money.js';
 import { LiveUpdates } from './live.js';
-import { nextStep, TERMINAL_STATUSES, toView, withoutRevealLink } from './orderState.js';
+import { nextStep, recordAnswer, TERMINAL_STATUSES, toView } from './orderState.js';
 import {
   isUserTokenRefused,
   PerfloApiError,
@@ -244,7 +244,7 @@ export class DemoService {
             await this.handle(fresh, order, latest, { checkout: false });
             return;
           }
-          this.store.updateOrder(order, (o) => (o.last = withoutRevealLink(latest)));
+          this.store.updateOrder(order, (o) => recordAnswer(o, latest));
         } catch (error) {
           const reason = error instanceof Error ? error.message : 'unknown error';
           this.log.add(fresh.id, 'demo', `Could not refresh order ${order.perfloOrderId}: ${reason}`);
@@ -340,7 +340,7 @@ export class DemoService {
     this.store.updateOrder(order, (o) => {
       o.perfloOrderId = response.order_id;
       o.state = 'placed';
-      o.last = withoutRevealLink(response);
+      recordAnswer(o, response);
     });
     const step = nextStep(response, order);
 
@@ -392,7 +392,7 @@ export class DemoService {
     if (order.checkout?.outcome === 'charged' && order.perfloOrderId) {
       // The mock merchant spent the card; pick up the order's final state.
       const latest = await this.api.getOrder(user.id, order.perfloOrderId);
-      this.store.updateOrder(order, (o) => (o.last = withoutRevealLink(latest)));
+      this.store.updateOrder(order, (o) => recordAnswer(o, latest));
     }
     return null;
   }
@@ -407,7 +407,7 @@ export class DemoService {
         const latest = await this.api.getOrder(user.id, perfloOrderId);
         this.store.updateOrder(order, (o) => {
           o.amountReturned = result.amount_returned;
-          o.last = withoutRevealLink(latest);
+          recordAnswer(o, latest);
         });
       }
       return { amountReturned: result.amount_returned, order };

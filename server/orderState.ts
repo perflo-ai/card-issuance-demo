@@ -34,6 +34,17 @@ export function withoutRevealLink(response: OrderResponse): OrderResponse {
   return rest;
 }
 
+/**
+ * Stores an order answer: without its reveal link, and with the card it names kept on the order, so
+ * the card is still known once the order has moved on. Every answer goes through here.
+ */
+export function recordAnswer(order: DemoOrder, response: OrderResponse): void {
+  order.last = withoutRevealLink(response);
+  if (response.status === 'ready') {
+    order.card = { cardId: response.card_id, last4: response.last4, expiresAt: response.card_expires_at };
+  }
+}
+
 export function toView(order: DemoOrder, user: DemoUser): OrderView {
   const base: OrderView = {
     id: order.id,
@@ -46,6 +57,10 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
     phase: 'draft',
   };
   if (order.state === 'draft') return base;
+  // The card stays known after the order moves on (see recordAnswer); a ready answer below names it too.
+  const card: Partial<OrderView> = order.card
+    ? { cardId: order.card.cardId, cardLast4: order.card.last4, cardExpiresAt: order.card.expiresAt }
+    : {};
   if (order.state === 'discarded') return { ...base, phase: 'discarded' };
 
   const last = order.last;
@@ -57,11 +72,13 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
     return { ...base, phase: 'placing' };
   }
 
+  if (last.one_time !== undefined) base.oneTime = last.one_time;
   switch (last.status) {
     case 'ready':
       return {
         ...base,
         phase: 'ready',
+        cardId: last.card_id,
         cardLast4: last.last4,
         cardLimit: last.card_limit,
         cardExpiresAt: last.card_expires_at,
@@ -81,6 +98,7 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
     case 'completed':
       return {
         ...base,
+        ...card,
         phase: 'completed',
         amountSpent: last.amount_spent,
         amountReturned: last.amount_returned,
@@ -89,12 +107,13 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
     case 'cancelled':
       return {
         ...base,
+        ...card,
         phase: 'cancelled',
         ...(order.amountReturned ? { amountReturned: order.amountReturned } : {}),
         ...(order.checkout ? { checkout: order.checkout } : {}),
       };
     case 'expired':
-      return { ...base, phase: 'expired', ...(order.checkout ? { checkout: order.checkout } : {}) };
+      return { ...base, ...card, phase: 'expired', ...(order.checkout ? { checkout: order.checkout } : {}) };
     case 'failed':
       return { ...base, phase: 'failed' };
   }

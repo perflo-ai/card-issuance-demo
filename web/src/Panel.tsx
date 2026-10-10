@@ -3,7 +3,8 @@ import { api, onRequestSettled } from './api';
 import { pageVisibility, useFocusWhenClosed, useOnMount, useWhenVisible } from './browser';
 import { cancelUntilDone } from './cancel';
 import { onLive } from './live';
-import { CANCEL_SLOW_TEXT, identityText, money, when } from './copy';
+import { openCardRows } from './cards';
+import { CANCEL_SLOW_TEXT, cancelLabel, identityText, money, when } from './copy';
 import { Orders } from './Orders';
 import { PerfloFrame } from './PerfloFrame';
 import { singleFlight } from './polling';
@@ -243,22 +244,28 @@ export function Panel(props: Props) {
               <>
                 <h3>Open cards</h3>
                 <ul className="cards">
-                  {account.open_cards.map((card) => (
-                    <li key={card.order_id}>
-                      <span>
-                        .... {card.last4} · up to {money(card.card_limit)}
-                        <span className="muted small"> · until {when(card.expires_at)}</span>
-                      </span>
-                      <button className="link" disabled={busy !== null} onClick={() => void cancelCard(card.order_id)}>
-                        {cancellingCard === card.order_id ? 'Cancelling...' : slowCancel === card.order_id ? 'Check again' : 'Cancel card'}
-                      </button>
-                      {slowCancel === card.order_id && cancellingCard === null && (
-                        <p className="muted small" role="status">
-                          {CANCEL_SLOW_TEXT}
-                        </p>
-                      )}
-                    </li>
-                  ))}
+                  {/* One row per card. A card with several open orders has no cancel here: each order is cancelled where it is shown. */}
+                  {openCardRows(account.open_cards, props.orders ?? []).map((card) => {
+                    const only = card.orderIds.length === 1 ? card.orderIds[0] : undefined;
+                    return (
+                      <li key={card.key}>
+                        <span>
+                          .... {card.last4} · up to {money(card.total)}
+                          <span className="muted small"> · until {when(card.expiresAt)}</span>
+                        </span>
+                        {only && (
+                          <button className="link" disabled={busy !== null} onClick={() => void cancelCard(only)}>
+                            {cancellingCard === only ? 'Cancelling...' : slowCancel === only ? 'Check again' : cancelLabel(card.reusable)}
+                          </button>
+                        )}
+                        {only && slowCancel === only && cancellingCard === null && (
+                          <p className="muted small" role="status">
+                            {CANCEL_SLOW_TEXT}
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </>
             )}

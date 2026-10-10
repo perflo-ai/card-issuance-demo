@@ -3,7 +3,8 @@ import { api } from './api';
 import { pageVisibility, useOnMount } from './browser';
 import { cancelUntilDone } from './cancel';
 import { CardDetails } from './CardDetails';
-import { CANCEL_SLOW_TEXT, money, phaseLabel, when } from './copy';
+import { cardUse } from './cards';
+import { CANCEL_SLOW_TEXT, cancelLabel, cardName, money, phaseLabel, when } from './copy';
 import { formatUsd } from '../../server/money';
 import type { OrderView } from '../../server/views';
 
@@ -66,6 +67,7 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
         <ul className="orders">
           {list.map((order) => {
             const last4 = order.checkout?.last4 ?? order.cardLast4;
+            const use = cardUse(order, list);
             return (
               <li key={order.id}>
                 <div className="orders-head">
@@ -76,7 +78,11 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
                   <strong>{formatUsd(order.amountCents)}</strong> {order.description ? `${order.description}, ` : ''}
                   {order.domain}
                 </p>
-                {last4 && order.phase !== 'ready' && <p className="muted small">One-time card .... {last4}</p>}
+                {last4 && order.phase !== 'ready' && (
+                  <p className="muted small">
+                    {cardName(use.reusable)} .... {last4}
+                  </p>
+                )}
                 {order.amountSpent && <p className="muted small">Paid {money(order.amountSpent)}</p>}
                 {order.amountReturned && order.amountReturned !== '0.00' && (
                   <p className="muted small">{money(order.amountReturned)} went back to your balance</p>
@@ -87,6 +93,7 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
                       perfloOrderId={order.perfloOrderId}
                       last4={last4}
                       cardLimit={order.checkout?.cardLimit ?? order.cardLimit}
+                      use={use}
                       expMonth={order.checkout?.expMonth}
                       expYear={order.checkout?.expYear}
                     />
@@ -95,7 +102,7 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
                         ? 'Cancelling...'
                         : slowCancel === order.perfloOrderId
                           ? 'Check again'
-                          : 'Cancel card'}
+                          : cancelLabel(use.reusable)}
                     </button>
                     {slowCancel === order.perfloOrderId && cancelling === null && (
                       <p className="muted small" role="status">

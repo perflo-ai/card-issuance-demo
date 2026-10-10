@@ -13,6 +13,11 @@
  *   GET  /mock-relay/partner-cards/:cardId/sensitive   the reveal link (already decrypted), signed and with
  *                                                     the person's Bearer token, as the real one requires
  *
+ * Card mode: one card per order by default, like a partner with `one_time = true`. With `reuseCards`
+ * set it answers like a partner in reuse mode: a person's later orders go onto their open card (no card
+ * fee), money stays on the card when an order is paid, cancelling one order leaves the card open for the
+ * others, and the card closes at its 12 hours, returning what is left.
+ *
  * Webhooks: with `webhook` set, the mock tells the partner's backend about every order and person
  * status change, signed exactly as Perflo signs them, retried when the partner does not answer 2xx.
  * Like Perflo's own sweep, it also moves orders on by itself (a slow card becoming ready, an order
@@ -103,8 +108,11 @@ interface MCard {
   expMonth: string;
   expYear: string;
   last4: string;
-  loadCents: number;
   expiresAt: number;
+  /** Reuse mode: the card serves every order of the person until it closes at expiresAt. */
+  reusable: boolean;
+  /** Closed: no order can use it any more (a one-time card once its order ends, any card at expiresAt). */
+  closed: boolean;
 }
 
 type OrderStatus =
@@ -126,7 +134,12 @@ interface MOrder {
   amountCents: number;
   status: OrderStatus;
   createdAt: number;
+  /** Shared by several orders in reuse mode. */
   card: MCard | null;
+  /** What this order put on the card (its own top-up). */
+  loadCents: number;
+  /** What the shop's charge took from the card, fees included. */
+  usedCents: number;
   readyAt: number | null;
   loginId: string | null;
   frameId: string | null;
@@ -153,6 +166,8 @@ export interface MockOptions {
   /** The partner website allowed to embed frames and receive postMessage. */
   partnerOrigin: string;
   slowIssueMs?: number;
+  /** Answer as a partner in reuse mode (one card per person for its 12 hours). Default: one card per order. */
+  reuseCards?: boolean;
   /** Where to send webhooks and the secret to sign them with. Unset: no webhooks are sent. */
   webhook?: { url: string; secret: string; fetchImpl?: typeof fetch };
 }
@@ -244,19 +259,44 @@ export function createMockPerflo(options: MockOptions) {
       .filter((o) => o.userId === userId && (o.status === 'issuing' || o.status === 'ready' || o.status === 'completed'))
       .reduce((sum, o) => sum + o.amountCents, 0);
 
-  function issueCard(order: MOrder, loadCents: number): void {
+  /** The person's card that a new order goes onto in reuse mode: open, and not yet at its 12 hours. */
+  function reusableCard(userId: string): MCard | null {
+    for (const o of orders.values()) {
+      if (o.userId === userId && o.card?.reusable && !o.card.closed && o.card.expiresAt > Date.now()) return o.card;
+    }
+    return null;
+  }
+
+  function newCard(): MCard {
     const number = `4${String(randomInt(0, 10 ** 9)).padStart(9, '0')}${String(randomInt(0, 10 ** 6)).padStart(6, '0')}`;
     const expiry = new Date(Date.now() + 3 * 365 * DAY_MS);
-    order.card = {
+    return {
       cardId: id('card_'),
       number,
       cvv: String(randomInt(100, 1000)),
       expMonth: String(expiry.getUTCMonth() + 1).padStart(2, '0'),
       expYear: String(expiry.getUTCFullYear()),
       last4: number.slice(-4),
-      loadCents,
       expiresAt: Date.now() + CARD_TTL_MS,
+      reusable: options.reuseCards === true,
+      closed: false,
     };
+  }
+
+  /**
+   * A card reaches its 12 hours: each order on it gets back what charges left of its own money. An
+   * open order expires, or completes if a charge was put against it; a paid order on a reused card
+   * gets its leftover now (on a one-time card it got it when it was paid).
+   */
+  function closeCard(card: MCard): void {
+    card.closed = true;
+    for (const o of orders.values()) {
+      if (o.card !== card || !(o.status === 'ready' || (o.status === 'completed' && card.reusable))) continue;
+      const back = Math.max(0, o.loadCents - o.usedCents);
+      if (o.status === 'ready') o.status = o.usedCents > 0 ? 'completed' : 'expired';
+      o.returnedCents = back;
+      (users.get(o.userId) as MUser).balanceCents += back;
+    }
   }
 
   /** The checks bapi runs on place and on resume, in SPEC 4 order. */
@@ -286,7 +326,10 @@ export function createMockPerflo(options: MockOptions) {
       order.status = 'identity_check_required';
       return;
     }
-    const { loadCents, totalCents } = quote(order.amountCents);
+    const reused = options.reuseCards ? reusableCard(user.userId) : null;
+    const price = quote(order.amountCents);
+    // A reused card is topped up for this order; only a new card costs the card fee.
+    const totalCents = reused ? price.loadCents : price.totalCents;
     if (user.balanceCents < totalCents) {
       const due = totalCents - user.balanceCents;
       const current = order.frameId ? frames.get(order.frameId) : undefined;
@@ -298,7 +341,8 @@ export function createMockPerflo(options: MockOptions) {
     }
     user.balanceCents -= totalCents;
     spends.push({ userId: user.userId, at: Date.now(), cents: order.amountCents });
-    issueCard(order, loadCents);
+    order.loadCents = price.loadCents;
+    order.card = reused ?? newCard();
     if (order.amountCents > MOCK_SLOW_ISSUE_ABOVE_CENTS) {
       order.status = 'issuing';
       order.readyAt = Date.now() + slowIssueMs;
@@ -317,11 +361,7 @@ export function createMockPerflo(options: MockOptions) {
     if (order.status === 'issuing' && order.readyAt !== null && Date.now() >= order.readyAt) {
       order.status = 'ready';
     }
-    if (order.status === 'ready' && order.card && Date.now() > order.card.expiresAt) {
-      order.status = 'expired';
-      order.returnedCents = order.card.loadCents;
-      (users.get(order.userId) as MUser).balanceCents += order.card.loadCents;
-    }
+    if (order.card && !order.card.closed && Date.now() > order.card.expiresAt) closeCard(order.card);
     if (order.status === 'awaiting_payment' || order.status === 'identity_check_required' || order.status === 'awaiting_login') {
       if (Date.now() - order.createdAt < DAY_MS) evaluate(order);
     }
@@ -340,7 +380,8 @@ export function createMockPerflo(options: MockOptions) {
 
   /** The public order shape (SPEC 4). `withReveal` only on the answer that first hands the card out. */
   function present(order: MOrder, withReveal: boolean): { status: number; body: Record<string, unknown> } {
-    const base = { order_id: order.orderId };
+    // The card mode, on every answer (bapi #356); the mock's mode is fixed for its run.
+    const base = { order_id: order.orderId, one_time: options.reuseCards !== true };
     switch (order.status) {
       case 'ready': {
         const card = order.card as MCard;
@@ -648,6 +689,7 @@ export function createMockPerflo(options: MockOptions) {
       },
       open_cards: open.map((o) => ({
         order_id: o.orderId,
+        card_id: (o.card as MCard).cardId,
         last4: (o.card as MCard).last4,
         card_limit: centsToApiAmount(o.amountCents),
         expires_at: new Date((o.card as MCard).expiresAt).toISOString(),
@@ -724,6 +766,8 @@ export function createMockPerflo(options: MockOptions) {
       status: 'declined',
       createdAt: Date.now(),
       card: null,
+      loadCents: 0,
+      usedCents: 0,
       readyAt: null,
       loginId: null,
       frameId: null,
@@ -773,8 +817,15 @@ export function createMockPerflo(options: MockOptions) {
     const user = userFromToken(req, order.userId);
     refresh(order);
     let returned = 0;
+    if ((order.status === 'ready' || order.status === 'issuing') && order.usedCents > 0) {
+      // On a reused card a charge was put against this order: it is spent, not cancellable.
+      throw new HttpError(409, 'order_not_cancellable', 'This order can no longer be cancelled.');
+    }
     if (order.status === 'ready' || order.status === 'issuing') {
-      returned = (order.card as MCard).loadCents;
+      returned = order.loadCents;
+      // A one-time card closes with its order; a reused card stays open for the person's other orders.
+      const card = order.card as MCard;
+      if (!card.reusable) card.closed = true;
     } else if (!['awaiting_login', 'awaiting_payment', 'identity_check_required'].includes(order.status)) {
       throw new HttpError(409, 'order_not_cancellable', 'This order can no longer be cancelled.');
     }
@@ -1015,26 +1066,44 @@ export function createMockPerflo(options: MockOptions) {
       .object({ card_number: z.string(), cvv: z.string(), exp_month: z.string(), exp_year: z.string(), amount: amountString })
       .safeParse(req.body);
     if (!body.success) return res.status(400).json({ approved: false, reason: 'form_incomplete' });
-    const order = [...orders.values()].find((o) => o.card?.number === body.data.card_number);
-    if (!order) return res.status(402).json({ approved: false, reason: 'declined' });
-    refresh(order);
-    const card = order.card as MCard;
+    const onCard = [...orders.values()].filter((o) => o.card?.number === body.data.card_number);
+    for (const o of onCard) refresh(o);
+    // Orders are kept oldest first.
+    const open = onCard.filter((o) => o.status === 'ready');
+    const card = open[0]?.card;
     const charge = apiAmountToCents(body.data.amount);
-    if (
-      order.status !== 'ready' ||
-      card.cvv !== body.data.cvv ||
-      card.expMonth !== body.data.exp_month ||
-      card.expYear !== body.data.exp_year ||
-      charge > order.amountCents
-    ) {
-      return res.status(402).json({ approved: false, reason: 'declined' });
-    }
-    // First spend closes a one-time card; the leftover goes back to the balance.
     const used = Math.ceil((charge * 1033) / 1000) + 25;
-    order.status = 'completed';
-    order.spentCents = charge;
-    order.returnedCents = Math.max(0, card.loadCents - used);
-    (users.get(order.userId) as MUser).balanceCents += order.returnedCents;
+    const decline = () => res.status(402).json({ approved: false, reason: 'declined' });
+    if (!card || card.cvv !== body.data.cvv || card.expMonth !== body.data.exp_month || card.expYear !== body.data.exp_year) {
+      return decline();
+    }
+    if (!card.reusable) {
+      // First spend closes a one-time card and the leftover goes back to the balance.
+      const order = open[0] as MOrder;
+      if (charge > order.amountCents) return decline();
+      card.closed = true;
+      order.status = 'completed';
+      order.spentCents = charge;
+      order.usedCents = used;
+      order.returnedCents = Math.max(0, order.loadCents - used);
+      (users.get(order.userId) as MUser).balanceCents += order.returnedCents;
+      return res.json({ approved: true });
+    }
+    // A reused card holds the money of all its open orders, and a charge may use any of it. It pays the
+    // oldest open order no charge was put against yet, and its cost is put against the open orders oldest
+    // first, each up to the money it put on the card. The money stays on the card until it closes (closeCard).
+    if (used > open.reduce((sum, o) => sum + o.loadCents - o.usedCents, 0)) return decline();
+    const paid = open.find((o) => o.usedCents === 0);
+    let left = used;
+    for (const o of open) {
+      const take = Math.min(left, o.loadCents - o.usedCents);
+      o.usedCents += take;
+      left -= take;
+    }
+    if (paid) {
+      paid.status = 'completed';
+      paid.spentCents = charge;
+    }
     res.json({ approved: true });
   });
 
