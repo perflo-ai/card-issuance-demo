@@ -14,7 +14,7 @@ import { Store } from './store.js';
 import { WEBHOOK_PATH } from './webhooks.js';
 
 const CERT = resolve('certs/localhost.pem');
-/** On SIGTERM, how long requests already on their way get to finish (a POST /orders can wait up to 90 s). */
+/** On SIGTERM, how long requests already on their way get to finish (a POST /checkout/orders can wait up to 90 s). */
 const SHUTDOWN_GRACE_MS = 25_000;
 const logger = createLogger();
 const KEY = resolve('certs/localhost-key.pem');

@@ -104,7 +104,7 @@ describe('first order, end to end in mock mode', () => {
 
     const setup = await advance(b, draft.id);
     expect(setup.phase).toBe('needs_setup');
-    expect(setup.frameUrl).toContain(`${mock.base}/partner/v2/frames/setup?session=`);
+    expect(setup.frameUrl).toContain(`${mock.base}/v1/frames/setup?session=`);
 
     // While the frame is still on the limits step, the login is pending.
     const loginEvent = await b.post('/demo/frame-events', { type: 'perflo:login_completed', frame_session_id: 'fs_x' });
@@ -137,7 +137,7 @@ describe('first order, end to end in mock mode', () => {
     expect(again.perfloOrderId).toBe(first.perfloOrderId);
     const posts = demo.log
       .forUser(demo.store.ordersFor(Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users)[0])[0].demoUserId)
-      .filter((e) => e.summary.startsWith('POST /partner/v2/orders ->'));
+      .filter((e) => e.summary.startsWith('POST /v1/checkout/orders ->'));
     expect(posts).toHaveLength(1);
   });
 });
@@ -161,14 +161,14 @@ describe('anonymous sessions and setting up payments in the chat', () => {
     expect((await b.post('/demo/link/start')).status).toBe(404);
     const draft = await ask(b, 'buy me $5 worth of stickers on amazon');
     const setup = await advance(b, draft.id);
-    expect(setup).toMatchObject({ phase: 'needs_setup', frameUrl: expect.stringContaining('/partner/v2/frames/setup?session=') });
+    expect(setup).toMatchObject({ phase: 'needs_setup', frameUrl: expect.stringContaining('/v1/frames/setup?session=') });
     // Looking again while the setup link is still open reuses it: no second POST /users.
     expect((await advance(b, draft.id)).frameUrl).toBe(setup.frameUrl);
     await setUp(b, setup.frameUrl as string);
     expect((await b.post('/demo/session')).body.user.linked).toBe(true);
 
     const userId = Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users)[0];
-    const posts = demo.log.forUser(userId).filter((e) => e.summary.startsWith('POST /partner/v2/users'));
+    const posts = demo.log.forUser(userId).filter((e) => e.summary.startsWith('POST /v1/users'));
     expect(posts).toHaveLength(1);
     expect((posts[0].detail as { request: unknown }).request).toEqual({ external_user_id: userId });
 
@@ -265,11 +265,11 @@ describe('other order states through the demo', () => {
       expect(phase).toBe('completed');
       expect(looks).toBeGreaterThan(2);
       const userId = Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users)[0];
-      const reads = demo.log.forUser(userId).filter((e) => e.summary.startsWith('GET /partner/v2/orders/'));
+      const reads = demo.log.forUser(userId).filter((e) => e.summary.startsWith('GET /v1/checkout/orders/'));
       expect(reads.map((e) => e.summary.replace(/ord_[A-Za-z0-9_-]+/, 'ID'))).toEqual([
-        'GET /partner/v2/orders/ID -> 200 issuing',
-        'GET /partner/v2/orders/ID -> 200 ready',
-        'GET /partner/v2/orders/ID -> 200 completed',
+        'GET /v1/checkout/orders/ID -> 200 issuing',
+        'GET /v1/checkout/orders/ID -> 200 ready',
+        'GET /v1/checkout/orders/ID -> 200 completed',
       ]);
     } finally {
       await slow.close();

@@ -51,25 +51,25 @@ function setup(fake: typeof fetch, linked = true) {
 describe('identity_check_required without a link', () => {
   it('a POST replay without kyc_url triggers one GET; a null link there shows the plain retry copy', async () => {
     const { fake, calls } = scripted({
-      'POST /partner/v2/orders': [
+      'POST /v1/checkout/orders': [
         { status: 202, body: { order_id: 'ord_1', status: 'identity_check_required', message: 'Already placed.' } },
       ],
-      'GET /partner/v2/orders/ord_1': [{ status: 200, body: { order_id: 'ord_1', status: 'identity_check_required', kyc_url: null } }],
+      'GET /v1/checkout/orders/ord_1': [{ status: 200, body: { order_id: 'ord_1', status: 'identity_check_required', kyc_url: null } }],
     });
     const { service, user, order } = setup(fake);
     const result = await service.advanceOrder(user, order.id);
     const view = toView(result.order, result.user);
     expect(view.phase).toBe('identity_check_required');
     expect(view).not.toHaveProperty('kycUrl');
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['POST /partner/v2/orders', 'GET /partner/v2/orders/ord_1']);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['POST /v1/checkout/orders', 'GET /v1/checkout/orders/ord_1']);
   });
 
   it('the GET supplies a fresh link when there is one', async () => {
     const { fake } = scripted({
-      'POST /partner/v2/orders': [
+      'POST /v1/checkout/orders': [
         { status: 202, body: { order_id: 'ord_1', status: 'identity_check_required', message: 'Already placed.' } },
       ],
-      'GET /partner/v2/orders/ord_1': [
+      'GET /v1/checkout/orders/ord_1': [
         { status: 200, body: { order_id: 'ord_1', status: 'identity_check_required', kyc_url: 'https://kyc.test/start' } },
       ],
     });
@@ -90,8 +90,8 @@ describe('reveal links are never replayed', () => {
       card_expires_at: '2026-10-08T12:00:00Z',
     };
     const { fake, calls } = scripted({
-      'POST /partner/v2/orders': [{ status: 201, body: ready }],
-      'POST /partner/v2/orders/ord_1/card-reveal': [
+      'POST /v1/checkout/orders': [{ status: 201, body: ready }],
+      'POST /v1/checkout/orders/ord_1/card-reveal': [
         { status: 201, body: { message: 'Already handed out.' } },
         {
           status: 201,
@@ -136,8 +136,8 @@ describe('reveal links are never replayed', () => {
       card_expires_at: '2026-10-08T12:00:00Z',
     };
     const { fake } = scripted({
-      'POST /partner/v2/orders': [{ status: 201, body: ready }],
-      'POST /partner/v2/orders/ord_1/card-reveal': [
+      'POST /v1/checkout/orders': [{ status: 201, body: ready }],
+      'POST /v1/checkout/orders/ord_1/card-reveal': [
         { status: 201, body: { message: 'Already handed out.' } },
         { status: 201, body: { message: 'Already handed out.' } },
       ],
@@ -150,7 +150,7 @@ describe('reveal links are never replayed', () => {
 describe('POST /users replays never carry a token', () => {
   it('approved without a token, then a tokenless reissue replay, then a token: each reissue uses a new key', async () => {
     const { fake, calls } = scripted({
-      'POST /partner/v2/users': [
+      'POST /v1/users': [
         { status: 200, body: { status: 'approved', user_id: 'usr_1' } },
         { status: 200, body: { status: 'approved', user_id: 'usr_1' } },
         { status: 200, body: { status: 'approved', user_id: 'usr_1', user_access_token: 'ptk_test_fresh_token' } },
@@ -180,7 +180,7 @@ describe('the orders list reads moving orders from Perflo', () => {
       reveal_url: 'https://perflo.test/reveal/once',
       reveal_expires_at: '2026-10-08T14:20:00.000Z',
     };
-    const { fake, calls } = scripted({ 'GET /partner/v2/orders/ord_1': [{ status: 200, body: ready }] });
+    const { fake, calls } = scripted({ 'GET /v1/checkout/orders/ord_1': [{ status: 200, body: ready }] });
     const { service, store, user, order } = setup(fake);
     store.updateOrder(order, (o) => {
       o.state = 'placed';
@@ -193,7 +193,7 @@ describe('the orders list reads moving orders from Perflo', () => {
     const view = toView(store.order(user.id, order.id)!, store.user(user.id));
     expect(view.phase).toBe('ready');
     expect(view.cardLast4).toBe('2852');
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /partner/v2/orders/ord_1']);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /v1/checkout/orders/ord_1']);
     // The one-time reveal link is never kept, and a refresh never opens the card.
     expect(JSON.stringify(store.order(user.id, order.id))).not.toContain('reveal/once');
     expect(store.order(user.id, order.id)!.revealUsed).toBe(false);
@@ -201,7 +201,7 @@ describe('the orders list reads moving orders from Perflo', () => {
 
   it('leaves settled orders and orders never sent alone, and keeps the last status when the read fails', async () => {
     const busy = { status: 503, body: { error: { code: 'service_unavailable', message: 'Try again.' } } };
-    const { fake, calls } = scripted({ 'GET /partner/v2/orders/ord_2': [busy, busy, busy] });
+    const { fake, calls } = scripted({ 'GET /v1/checkout/orders/ord_2': [busy, busy, busy] });
     const { service, store, user, order } = setup(fake);
     store.updateOrder(order, (o) => {
       o.state = 'placed';
@@ -224,7 +224,7 @@ describe('the orders list reads moving orders from Perflo', () => {
     await service.refreshOrders(user);
 
     // A read is tried three times when payments says to try again; then the last known status stays.
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(Array(3).fill('GET /partner/v2/orders/ord_2'));
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(Array(3).fill('GET /v1/checkout/orders/ord_2'));
     expect(store.order(user.id, moving.id)!.last?.status).toBe('issuing');
   });
 });

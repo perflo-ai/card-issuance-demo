@@ -85,7 +85,7 @@ describe('PerfloApi retries only reads, and only when told to try again', () => 
     expect(calls).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(await answer).toEqual({ order_id: 'ord_1', status: 'issuing' });
-    expect(calls).toEqual(Array(3).fill('GET /partner/v2/orders/ord_1'));
+    expect(calls).toEqual(Array(3).fill('GET /v1/checkout/orders/ord_1'));
   });
 
   it('gives up after three reads', async () => {
@@ -115,7 +115,7 @@ describe('PerfloApi retries only reads, and only when told to try again', () => 
         currency: 'USD',
       }),
     ).rejects.toBeInstanceOf(PerfloUnavailableError);
-    expect([...calls, ...busy.calls]).toEqual(['POST /partner/v2/orders/ord_1/cancel', 'POST /partner/v2/orders']);
+    expect([...calls, ...busy.calls]).toEqual(['POST /v1/checkout/orders/ord_1/cancel', 'POST /v1/checkout/orders']);
   });
 
   it('a reused card answers null for what went back until it closes, on the order and on the cancel', async () => {
@@ -148,8 +148,8 @@ describe('PerfloApi retries only reads, and only when told to try again', () => 
     expect(await api.cancelOrder('u1', 'ord_1', 'ptk_test_token_value')).toEqual({ status: 'cancelled', amount_returned: '5.42' });
     expect(calls).toHaveLength(3);
     expect(log.forUser('u1').map((e) => e.summary)).toEqual([
-      'POST /partner/v2/orders/ord_1/cancel -> 503',
-      'POST /partner/v2/orders/ord_1/cancel -> 200',
+      'POST /v1/checkout/orders/ord_1/cancel -> 503',
+      'POST /v1/checkout/orders/ord_1/cancel -> 200',
     ]);
   });
 });
