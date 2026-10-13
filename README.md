@@ -142,7 +142,7 @@ A host sets `PORT`, terminates HTTPS itself and has no `.env` file. With `PORT` 
 listens on that port over plain HTTP on every interface; without it, it runs on
 `https://localhost:5174` as above. Mock mode only runs on this computer.
 
-1. **Variables:** `DEMO_MODE=live`, `PERFLO_API_BASE` (`https://builders-api.perflo.ai` in production), `PARTNER_ID`, `PARTNER_KEY_VERSION`,
+1. **Variables:** `DEMO_MODE=live`, `PERFLO_API_BASE` (`https://api.perflo.ai` in production), `PARTNER_ID`, `PARTNER_KEY_VERSION`,
    `PARTNER_SECRET`, `PERFLO_WEBHOOK_SECRET`. A `.env` file is read only when present and never replaces a variable the
    host already set.
 2. **Build and start:** `npm ci --include=dev && npm run build`, then `npm start`. The build needs
@@ -174,7 +174,7 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
 
 ## How it talks to Perflo
 
-Every call goes to `PERFLO_API_BASE` (`https://builders-api.perflo.ai` in production). The shared routes
+Every call goes to `PERFLO_API_BASE` (`https://api.perflo.ai` in production). The shared routes
 (users, logins, frames) are under `/v1`, for example `POST /v1/users`; the checkout routes are under
 `/v1/checkout`, for example `POST /v1/checkout/orders`. The paths below leave out the `/v1` prefix.
 
