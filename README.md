@@ -179,7 +179,7 @@ Every call goes to `PERFLO_API_BASE` (`https://api.perflo.ai` in production). Th
 `/v1/checkout`, for example `POST /v1/checkout/orders`. The paths below leave out the `/v1` prefix.
 
 - **Signing**: `server/signing.ts` mirrors `perflo-backend-api/src/partner/partnerSignature.ts` byte for
-  byte. Headers `X-Partner-Id`, `X-Partner-Key` (the key version), `X-Partner-Timestamp` (unix seconds),
+  byte. Headers `X-Partner-Id`, `X-Partner-Key-Version`, `X-Partner-Timestamp` (unix seconds),
   `X-Partner-Signature` = base64url HMAC-SHA256 of
   `keyVersion\nMETHOD\npath\ntimestamp\nsha256hex(raw body)`, path without the query string, over the exact
   bytes sent (a GET signs the empty body). Test vectors were computed independently in Python.
@@ -227,7 +227,7 @@ Every call goes to `PERFLO_API_BASE` (`https://api.perflo.ai` in production). Th
   minute.
 - **Card reveal** (the contract in perflo-backend-api #345 and ms-card-issuance #94): Tiny reads a card
   with `GET reveal_url` exactly as given, signed like every partner call and carrying that person's
-  access token: `X-Partner-Id`, `X-Partner-Key` (the key version), `X-Partner-Timestamp` (unix seconds,
+  access token: `X-Partner-Id`, `X-Partner-Key-Version`, `X-Partner-Timestamp` (unix seconds,
   within 120 s of Perflo's clock), `X-Partner-Signature` (HMAC-SHA256 with that key version's secret,
   base64url without padding) and `Authorization: Bearer <user_access_token>`. The signed string is the
   usual one: `<key version>\nGET\n<path of reveal_url without origin and without ?t=>\n<timestamp>\n`

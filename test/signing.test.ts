@@ -33,7 +33,7 @@ describe('canonical string and signature', () => {
     );
     expect(headers).toEqual({
       'X-Partner-Id': PARTNER_ID,
-      'X-Partner-Key': 'v1',
+      'X-Partner-Key-Version': 'v1',
       'X-Partner-Timestamp': '1760000000',
       // Same as the POST vector: the query string is not signed.
       'X-Partner-Signature': '2_DVmbO8yqvaFy_umPUnTkcQqLwJeJy2n-xkQjN_VTU',

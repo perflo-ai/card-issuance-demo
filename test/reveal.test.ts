@@ -37,7 +37,7 @@ describe('revealCard follows the reveal contract (bapi #345, ms-card #94)', () =
     expect(call.method).toBe('GET');
     expect(call.headers.Authorization).toBe(`Bearer ${TOKEN}`);
     expect(call.headers['X-Partner-Id']).toBe(CREDS.partnerId);
-    expect(call.headers['X-Partner-Key']).toBe('v1');
+    expect(call.headers['X-Partner-Key-Version']).toBe('v1');
     expect(call.headers['X-Partner-Timestamp']).toMatch(/^[0-9]{10}$/);
     expect(call.headers['X-Partner-Signature']).toMatch(/^[A-Za-z0-9_-]{43}$/);
     // The canonical string from the contract, by hand: the empty body hashes to e3b0c442...b855.
