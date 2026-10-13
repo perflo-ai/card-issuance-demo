@@ -15,7 +15,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 export const HEADER_PARTNER_ID = 'X-Partner-Id';
-export const HEADER_KEY_VERSION = 'X-Partner-Key';
+export const HEADER_KEY_VERSION = 'X-Partner-Key-Version';
 export const HEADER_TIMESTAMP = 'X-Partner-Timestamp';
 export const HEADER_SIGNATURE = 'X-Partner-Signature';
 
