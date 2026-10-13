@@ -40,7 +40,7 @@ const WEBHOOK_RETRY_DELAYS_MS = [2_000, 10_000];
 export class DemoService {
   private readonly locks = new Map<string, Promise<unknown>>();
   /**
-   * Orders being placed right now. POST /orders can take a while, and Perflo may announce a change
+   * Orders being placed right now. POST /checkout/orders can take a while, and Perflo may announce a change
    * to the order before its answer (with the order id) is stored here; such a webhook waits for these.
    */
   private readonly placing = new Set<Promise<unknown>>();

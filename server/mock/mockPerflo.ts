@@ -207,7 +207,7 @@ export function createMockPerflo(options: MockOptions) {
   const spends: Array<{ userId: string; at: number; cents: number }> = [];
 
   const frameUrl = (purpose: Purpose, frameId: string) =>
-    `${options.selfOrigin}/partner/v2/frames/${purpose}?session=${encodeURIComponent(frameId)}`;
+    `${options.selfOrigin}/v1/frames/${purpose}?session=${encodeURIComponent(frameId)}`;
 
   function newFrame(purpose: Purpose, userId: string, extra: Partial<MFrame> = {}): MFrame {
     const frame: MFrame = {
@@ -762,7 +762,7 @@ export function createMockPerflo(options: MockOptions) {
   });
   const DOMAIN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/i;
 
-  v2.post('/orders', (req, res) => {
+  v2.post('/checkout/orders', (req, res) => {
     const key = req.get('idempotency-key');
     if (!key || key.length > 200) throw new HttpError(400, 'idempotency_key_required', 'Idempotency-Key is required.');
     const who = bearerUser(req);
@@ -818,14 +818,14 @@ export function createMockPerflo(options: MockOptions) {
     res.status(out.status).json(out.body);
   });
 
-  v2.get('/orders/:orderId', (req, res) => {
+  v2.get('/checkout/orders/:orderId', (req, res) => {
     const order = orders.get(req.params.orderId);
     if (!order) throw new HttpError(404, 'not_found', 'That order was not found.');
     refresh(order);
     res.status(200).json(present(order, false).body);
   });
 
-  v2.post('/orders/:orderId/card-reveal', (req, res) => {
+  v2.post('/checkout/orders/:orderId/card-reveal', (req, res) => {
     const order = orders.get(req.params.orderId);
     if (!order) throw new HttpError(404, 'not_found', 'That order was not found.');
     userFromToken(req, order.userId);
@@ -841,7 +841,7 @@ export function createMockPerflo(options: MockOptions) {
     res.status(201).json(revealLink(order));
   });
 
-  v2.post('/orders/:orderId/cancel', (req, res) => {
+  v2.post('/checkout/orders/:orderId/cancel', (req, res) => {
     const order = orders.get(req.params.orderId);
     if (!order) throw new HttpError(404, 'not_found', 'That order was not found.');
     const user = userFromToken(req, order.userId);
@@ -866,7 +866,7 @@ export function createMockPerflo(options: MockOptions) {
   });
 
   // Frames: pages and their same-origin JSON actions (SPEC 8 and 8a). Not signed: the session id is the capability,
-  // sent by the frame page in the X-Perflo-Frame-Session header to /partner/v2/frames/session/<action> (as bapi does).
+  // sent by the frame page in the X-Perflo-Frame-Session header to /v1/frames/session/<action> (as bapi does).
   const liveFrame = (req: Request): MFrame => {
     const sessionId = req.get('x-perflo-frame-session') ?? '';
     const frame = /^fs_[A-Za-z0-9_-]{43}$/.test(sessionId) ? frames.get(sessionId) : undefined;
@@ -1034,8 +1034,8 @@ export function createMockPerflo(options: MockOptions) {
   }
 
   // Frames are not signed, so mount them before the signature check.
-  app.use('/partner/v2/frames', framesRouter);
-  app.use('/partner/v2', v2);
+  app.use('/v1/frames', framesRouter);
+  app.use('/v1', v2);
 
   app.get('/mock-assets/:file', (req, res) => {
     const asset = frameAssets[req.params.file];

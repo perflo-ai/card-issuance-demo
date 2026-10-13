@@ -108,7 +108,7 @@ export const orderResponse = z.discriminatedUnion('status', [
   z.object({
     ...orderId,
     status: z.literal('identity_check_required'),
-    // null when the link cannot be made right now; absent on an idempotent replay of POST /orders.
+    // null when the link cannot be made right now; absent on an idempotent replay of POST /checkout/orders.
     kyc_url: link.nullable().optional(),
     message: z.string().optional(),
   }),
@@ -212,7 +212,7 @@ export interface CreateOrderInput {
 
 const TIMEOUT_MS = 30_000;
 /**
- * POST /orders can wait while Perflo pays for and creates the card (it answers
+ * POST /checkout/orders can wait while Perflo pays for and creates the card (it answers
  * `issuing` past its own budget, about 25 s end to end). Giving up earlier
  * leaves an order that went through looking failed; a retry with the same
  * Idempotency-Key is still safe, it only returns the order.
@@ -365,7 +365,7 @@ export class PerfloApi {
     body: { external_user_id: string; reissue?: boolean },
     idempotencyKey?: string,
   ): Promise<UsersResponse> {
-    const r = await this.request(demoUserId, 'POST', '/partner/v2/users', { body, ...(idempotencyKey ? { idempotencyKey } : {}) });
+    const r = await this.request(demoUserId, 'POST', '/v1/users', { body, ...(idempotencyKey ? { idempotencyKey } : {}) });
     const parsed = this.parse(usersResponse, r.status, r.json, [200, 202]);
     const expected = parsed.status === 'approved' ? 200 : 202;
     if (r.status !== expected) throw new PerfloUnavailableError('Payments service answered with a mismatched status');
@@ -373,17 +373,17 @@ export class PerfloApi {
   }
 
   async getLogin(demoUserId: string, loginId: string): Promise<LoginResponse> {
-    const r = await this.request(demoUserId, 'GET', `/partner/v2/logins/${encodeURIComponent(loginId)}`);
+    const r = await this.request(demoUserId, 'GET', `/v1/logins/${encodeURIComponent(loginId)}`);
     return this.parse(loginResponse, r.status, r.json, [200]);
   }
 
   async getAccount(demoUserId: string, userId: string, token: string): Promise<AccountResponse> {
-    const r = await this.request(demoUserId, 'GET', `/partner/v2/users/${encodeURIComponent(userId)}`, { token });
+    const r = await this.request(demoUserId, 'GET', `/v1/users/${encodeURIComponent(userId)}`, { token });
     return this.parse(accountResponse, r.status, r.json, [200]);
   }
 
   async createTopUp(demoUserId: string, userId: string, token: string, amountApi?: string): Promise<TopUpResponse> {
-    const r = await this.request(demoUserId, 'POST', `/partner/v2/users/${encodeURIComponent(userId)}/top-ups`, {
+    const r = await this.request(demoUserId, 'POST', `/v1/users/${encodeURIComponent(userId)}/top-ups`, {
       token,
       body: amountApi === undefined ? {} : { amount: amountApi },
     });
@@ -391,7 +391,7 @@ export class PerfloApi {
   }
 
   async limitsLink(demoUserId: string, userId: string, token: string): Promise<z.infer<typeof frameLinkResponse>> {
-    const r = await this.request(demoUserId, 'POST', `/partner/v2/users/${encodeURIComponent(userId)}/limits-link`, {
+    const r = await this.request(demoUserId, 'POST', `/v1/users/${encodeURIComponent(userId)}/limits-link`, {
       token,
     });
     return this.parse(frameLinkResponse, r.status, r.json, [201]);
@@ -399,13 +399,13 @@ export class PerfloApi {
 
   /** 201 ready, 202 waiting states and 422 declined are all order answers, not errors. */
   async createOrder(demoUserId: string, token: string, idempotencyKey: string, body: CreateOrderInput): Promise<OrderResponse> {
-    const r = await this.request(demoUserId, 'POST', '/partner/v2/orders', { token, idempotencyKey, body, timeoutMs: ORDER_TIMEOUT_MS });
+    const r = await this.request(demoUserId, 'POST', '/v1/checkout/orders', { token, idempotencyKey, body, timeoutMs: ORDER_TIMEOUT_MS });
     return this.parse(orderResponse, r.status, r.json, [201, 202, 422]);
   }
 
   /** Partner signature only: no token on this route (SPEC 4). */
   async getOrder(demoUserId: string, orderId: string): Promise<OrderResponse> {
-    const r = await this.request(demoUserId, 'GET', `/partner/v2/orders/${encodeURIComponent(orderId)}`);
+    const r = await this.request(demoUserId, 'GET', `/v1/checkout/orders/${encodeURIComponent(orderId)}`);
     return this.parse(orderResponse, r.status, r.json, [200]);
   }
 
@@ -415,7 +415,7 @@ export class PerfloApi {
    */
   async cardReveal(demoUserId: string, orderId: string, token: string): Promise<z.infer<typeof revealLinkResponse>> {
     for (let attempt = 0; attempt < 2; attempt++) {
-      const r = await this.request(demoUserId, 'POST', `/partner/v2/orders/${encodeURIComponent(orderId)}/card-reveal`, {
+      const r = await this.request(demoUserId, 'POST', `/v1/checkout/orders/${encodeURIComponent(orderId)}/card-reveal`, {
         token,
         idempotencyKey: randomUUID(),
       });
@@ -430,7 +430,7 @@ export class PerfloApi {
    * so a repeat of the same refusal is logged once.
    */
   async cancelOrder(demoUserId: string, orderId: string, token: string): Promise<z.infer<typeof cancelResponse>> {
-    const r = await this.request(demoUserId, 'POST', `/partner/v2/orders/${encodeURIComponent(orderId)}/cancel`, {
+    const r = await this.request(demoUserId, 'POST', `/v1/checkout/orders/${encodeURIComponent(orderId)}/cancel`, {
       token,
       timeoutMs: CANCEL_TIMEOUT_MS,
       collapse: true,

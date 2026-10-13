@@ -115,8 +115,9 @@ PERFLO_WEBHOOK_SECRET=<whsec_... from Builder>
 4. Point `PERFLO_API_BASE` at the backend:
    - a local `perflo-backend-api` with `PARTNER_V2_ENABLED=true`: `http://localhost:3001`. Its `.env` points
      at production, so run it only with a development or staging configuration.
-   - a staging or develop host that runs the partner v2 build. Check it serves `/partner/v2` before
-     pointing the demo at it. Never point the demo at production.
+   - a staging or develop host that serves the partner API at its current address (`/v1/users`,
+     `/v1/checkout/orders` and so on). Check it answers there before pointing the demo at it. Never point a
+     local demo at production.
 5. `npm run dev`.
 
 **Rotating the webhook secret.** After you rotate it in Builder, Perflo signs every try with the new secret
@@ -141,7 +142,7 @@ A host sets `PORT`, terminates HTTPS itself and has no `.env` file. With `PORT` 
 listens on that port over plain HTTP on every interface; without it, it runs on
 `https://localhost:5174` as above. Mock mode only runs on this computer.
 
-1. **Variables:** `DEMO_MODE=live`, `PERFLO_API_BASE`, `PARTNER_ID`, `PARTNER_KEY_VERSION`,
+1. **Variables:** `DEMO_MODE=live`, `PERFLO_API_BASE` (`https://builders-api.perflo.ai` in production), `PARTNER_ID`, `PARTNER_KEY_VERSION`,
    `PARTNER_SECRET`, `PERFLO_WEBHOOK_SECRET`. A `.env` file is read only when present and never replaces a variable the
    host already set.
 2. **Build and start:** `npm ci --include=dev && npm run build`, then `npm start`. The build needs
@@ -173,6 +174,10 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
 
 ## How it talks to Perflo
 
+Every call goes to `PERFLO_API_BASE` (`https://builders-api.perflo.ai` in production). The shared routes
+(users, logins, frames) are under `/v1`, for example `POST /v1/users`; the checkout routes are under
+`/v1/checkout`, for example `POST /v1/checkout/orders`. The paths below leave out the `/v1` prefix.
+
 - **Signing**: `server/signing.ts` mirrors `perflo-backend-api/src/partner/partnerSignature.ts` byte for
   byte. Headers `X-Partner-Id`, `X-Partner-Key` (the key version), `X-Partner-Timestamp` (unix seconds),
   `X-Partner-Signature` = base64url HMAC-SHA256 of
@@ -182,8 +187,8 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
   Tiny never asks for them. The person types and proves their email in the setup frame. `login_required`
   opens the setup frame in the chat, on the order that needs it (the first order, or the next one after access was removed); on `perflo:setup_completed` the server reads `GET /logins/{id}` and stores the token (it
   is handed out once). If Perflo says `approved` but Tiny holds no token, it asks with `reissue: true`.
-- **Orders**: `POST /orders` with an `Idempotency-Key` fixed per chat order. Every retry is
-  `GET /orders/{id}` (signature only, no token), never a second POST. Each status is handled:
+- **Orders**: `POST /checkout/orders` with an `Idempotency-Key` fixed per chat order. Every retry is
+  `GET /checkout/orders/{id}` (signature only, no token), never a second POST. Each status is handled:
   `ready` (read the card once through `reveal_url`, later reveals through `/card-reveal`), `payment_required`
   (add money frame; the order goes ahead when Perflo's webhook says so), `login_required` (setup frame, the
   order resumes on its own), `identity_check_required` (opens in a new tab; "try again" reads the order once),
@@ -195,7 +200,7 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
   compared in constant time; a timestamp more than 120 s from Tiny's clock is refused. `X-Perflo-Event-Id` is
   remembered in the store for 48 hours, so a retry of an event already handled is answered 200 and not acted
   on twice. A new event is answered 200 at once and acted on after: an `order.*` event reads
-  `GET /orders/{id}` (the source of truth; the event body only says which order), does what that status
+  `GET /checkout/orders/{id}` (the source of truth; the event body only says which order), does what that status
   needs (a ready card is checked out), and pushes the result to the person's open pages. `user.connected`
   tells the page of an account waiting on a sign-in to pick up the access (its own request, so its session
   is rotated as for any link); `user.disconnected` for the Perflo person an account is linked to makes Tiny
@@ -209,7 +214,7 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
   it (nothing in the query is read), it is closed when that session signs out or linking replaces it (the
   page opens it again with its new cookie), the session is checked again before every message, and a
   request another site started (`Sec-Fetch-Site` other than `same-origin`) is refused.
-- **Cancel card**: `POST /orders/{id}/cancel` is safe to send again (a cancelled order answers what was
+- **Cancel card**: `POST /checkout/orders/{id}/cancel` is safe to send again (a cancelled order answers what was
   recorded). While it answers 503 (payments busy, for example the card issuer briefly busy while it closes
   the card), or no answer comes in time, the page stays on "Cancelling..." and sends it again after 3, 6, 12,
   then every 20 seconds (longer if `Retry-After` asks), for about two minutes, then says calmly that it is
@@ -218,7 +223,7 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
 - **Replays**: Perflo never replays a token or a link. A `POST /users` replay has no token, so a reissue is
   asked with a new Idempotency-Key. A `card-reveal` replay (201 with only a message) is asked again with a new
   key, and a ready replay without `reveal_url` goes through `/card-reveal`. An identity check answer without
-  `kyc_url` is followed by one `GET /orders/{id}`; if there is still no link, the chat says to try again in a
+  `kyc_url` is followed by one `GET /checkout/orders/{id}`; if there is still no link, the chat says to try again in a
   minute.
 - **Card reveal** (the contract in perflo-backend-api #345 and ms-card-issuance #94): Tiny reads a card
   with `GET reveal_url` exactly as given, signed like every partner call and carrying that person's
@@ -252,7 +257,7 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
   limits are saved, and when the tab comes back into view. The one loop left is the cancel, which only sends
   the cancel itself again while payments is busy.
 - **Orders tab**: the same list as the chat. Opening the tab reads it once; orders that are still moving are
-  read again from Perflo first (`GET /orders/:id`, never a new order).
+  read again from Perflo first (`GET /checkout/orders/:id`, never a new order).
 
 ## Scripts
 
