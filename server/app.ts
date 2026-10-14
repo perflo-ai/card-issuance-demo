@@ -9,6 +9,7 @@ import { z } from 'zod';
 import type { DemoConfig } from './config.js';
 import type { EventLog } from './eventLog.js';
 import { parseOrderMessage } from './intent.js';
+import { DEFAULT_LOOK } from './looks.js';
 import { formatUsd, parseDecimalToCents } from './money.js';
 import { toView } from './orderState.js';
 import { rateLimit, sameOriginOnly, securityHeaders } from './security.js';
@@ -16,7 +17,7 @@ import { HttpError, toBrowserError } from './errors.js';
 import { requestLog, type Logger } from './logger.js';
 import type { DemoService } from './service.js';
 import { SESSION_TTL_MS, type DemoUser, type Store } from './store.js';
-import { FRAME_EVENT_TYPES, type CardDetailsView, type MeView } from './views.js';
+import { FRAME_EVENT_TYPES, LOOK_IDS, type CardDetailsView, type DemoConfigView, type MeView } from './views.js';
 import { verifyWebhook, WEBHOOK_PATH, webhookEvent } from './webhooks.js';
 
 const SESSION_COOKIE = 'tiny_session';
@@ -27,6 +28,8 @@ const MOCK_CONTROL_TIMEOUT_MS = 5_000;
 const demoOrderId = z.string().uuid();
 const perfloOrderId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const noBody = z.object({}).strict();
+/** A look is named by its id only: the appearance Perflo gets comes from server/looks.ts, never from here. */
+const lookBody = z.object({ look: z.enum(LOOK_IDS) }).strict();
 const eventsQuery = z.object({ after: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0) });
 
 const frameEvent = z.object({
@@ -199,10 +202,17 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
   const meView = (user: DemoUser): MeView => ({
     linked: user.perflo !== null,
     stopAtCheckout: user.testStopAtCheckout === true,
+    look: user.look ?? DEFAULT_LOOK,
   });
 
   app.get('/demo/config', (_req, res) => {
-    res.json({ mode: config.mode, perfloOrigin: config.perfloOrigin });
+    const view: DemoConfigView = {
+      mode: config.mode,
+      perfloOrigin: config.perfloOrigin,
+      // Perflo.js learns where Perflo is from its own address, so it is loaded from exactly the API base.
+      perfloScriptUrl: config.mode === 'live' ? `${config.perfloApiBase}/v1/perflo.js` : null,
+    };
+    res.json(view);
   });
 
   /**
@@ -288,6 +298,24 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     res.json({});
   });
 
+  /** The look Perflo's pages are opened in from now on, picked from Tiny's fixed list by its id. */
+  app.post('/demo/look', (req, res) => {
+    const user = currentUser(req);
+    const body = lookBody.safeParse(req.body);
+    if (!body.success) throw new HttpError(400, 'Pick one of the looks shown.');
+    res.json({ user: meView(service.setLook(user, body.data.look)) });
+  });
+
+  /** The sign-in the UI elements page opens: the one waiting, or a new one. */
+  app.post('/demo/sign-in', async (req, res) => {
+    const user = currentUser(req);
+    parse(noBody, req.body, unreadable);
+    const wasLinked = user.perflo !== null;
+    const result = await service.signIn(user);
+    rotateIfLinked(req, res, user, wasLinked);
+    res.json(result);
+  });
+
   app.post('/demo/link/refresh', async (req, res) => {
     const user = currentUser(req);
     parse(noBody, req.body, unreadable);
@@ -306,7 +334,8 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
   app.post('/demo/limits-link', async (req, res) => {
     const user = currentUser(req);
     parse(noBody, req.body, unreadable);
-    res.json({ frameUrl: await service.limitsLink(user) });
+    const page = await service.limitsLink(user);
+    res.json({ frameUrl: page.url, ...(page.clientSecret ? { clientSecret: page.clientSecret } : {}) });
   });
 
   app.post('/demo/top-ups', async (req, res) => {
@@ -322,7 +351,8 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
       if (parsed === null || parsed <= 0) throw new HttpError(400, 'Enter an amount above $0.00.');
       cents = parsed;
     }
-    res.json({ frameUrl: await service.topUpLink(user, cents) });
+    const page = await service.topUpLink(user, cents);
+    res.json({ frameUrl: page.url, ...(page.clientSecret ? { clientSecret: page.clientSecret } : {}) });
   });
 
   app.post('/demo/orders/:perfloOrderId/card-details', async (req, res) => {

@@ -3,7 +3,7 @@
  * one wording. Plain language: no provider names, no technical words.
  */
 
-import type { DeclineReason, IdentityStatus, OrderPhase } from '../../server/views';
+import type { DeclineReason, IdentityStatus, LookId, OrderPhase } from '../../server/views';
 import { apiAmountToCents, formatUsd } from '../../server/money';
 import type { StepKey } from './progress';
 
@@ -187,3 +187,10 @@ export function stepLabel(step: StepKey, domain: string): string {
 
 /** The steps inside the setup frame, in the order the frame asks for them. */
 export const SETUP_STEPS = ['Verify it is you', 'Allow Tiny to pay for you', 'Add money if needed'] as const;
+
+/** The example looks, as the Look picker names them. */
+export const LOOK_LABELS: Readonly<Record<LookId, string>> = {
+  brand: "Tiny's brand (default)",
+  flat: 'Flat and light',
+  night: 'Dark, with custom inputs',
+};

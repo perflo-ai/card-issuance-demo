@@ -4,13 +4,14 @@ import { useFocusWhenClosed } from './browser';
 import { SETUP_STEPS, stalledText, waitingText } from './copy';
 import { untilConnected } from './live';
 import { PerfloFrame } from './PerfloFrame';
+import { settleSignIn, SIGN_IN_WAIT_MS } from './signIn';
 import { StepList } from './Steps';
-import type { LinkStatus } from '../../server/views';
+import type { LinkStatus, PerfloPageView } from '../../server/views';
 
 interface Props {
   perfloOrigin: string;
-  /** The setup frame to show, or null when there is nothing to open. A throw is shown as the error. */
-  open: () => Promise<string | null>;
+  /** The setup page to show, or null when there is nothing to open. A throw is shown as the error. */
+  open: () => Promise<PerfloPageView | null>;
   onLinked: () => void | Promise<void>;
   /** "Start again" after the setup link expired. Without it, the frame is simply opened again. */
   onExpired?: () => void;
@@ -18,16 +19,13 @@ interface Props {
   disabled?: boolean;
 }
 
-/** After the frame says setup is done, how long Tiny waits for Perflo's word before saying it is slow. */
-const FINISH_BUDGET_MS = 20_000;
-
 /**
  * The one-time setup, shown in the chat on the order that needs payments set
  * up (or turned back on). The step list follows the frame's own events
  * (code verified, limits saved), never a timer.
  */
 export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = false }: Props) {
-  const [frameUrl, setFrameUrl] = useState<string | null>(null);
+  const [page, setPage] = useState<PerfloPageView | null>(null);
   const [opening, setOpening] = useState(false);
   const [step, setStep] = useState(0);
   const [finishing, setFinishing] = useState(false);
@@ -35,7 +33,7 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
   const [error, setError] = useState('');
   const stop = useRef<AbortController | null>(null);
   const box = useRef<HTMLDivElement>(null);
-  useFocusWhenClosed(frameUrl !== null, box);
+  useFocusWhenClosed(page !== null, box);
 
   useEffect(() => () => stop.current?.abort(), []);
 
@@ -44,10 +42,10 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
     setProblem('');
     setOpening(true);
     try {
-      const url = await open();
-      if (url) {
+      const opened = await open();
+      if (opened) {
         setStep(0);
-        setFrameUrl(url);
+        setPage(opened);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
@@ -72,23 +70,20 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
     stop.current?.abort();
     const controller = new AbortController();
     stop.current = controller;
-    setFrameUrl(null);
+    setPage(null);
     setStep(SETUP_STEPS.length);
     setProblem('');
     setFinishing(true);
-    let status: LinkStatus = first ?? 'pending';
     try {
-      if (status === 'pending') {
-        // The frame event already looked once. Perflo's user.connected webhook tells Tiny's server
-        // when the approval lands, and the server says so here; nothing is asked meanwhile.
-        await untilConnected(FINISH_BUDGET_MS, controller.signal);
-        if (controller.signal.aborted) return;
-        // Heard, or not heard in time: one look decides, and picks up Tiny's access token.
-        status = await api
-          .refreshLink()
-          .then((r) => r.link)
-          .catch((): LinkStatus => 'pending');
-      }
+      // The page's event already looked once. Perflo's user.connected webhook tells Tiny's server
+      // when the approval lands, and the server says so here; nothing is asked meanwhile.
+      const status = await settleSignIn(
+        first,
+        () => api.refreshLink().then((r) => r.link),
+        (signal) => untilConnected(SIGN_IN_WAIT_MS, signal),
+        controller.signal,
+      );
+      if (status === null) return;
       setFinishing(false);
       await settle(status);
     } finally {
@@ -98,7 +93,7 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
 
   /** Closed by the person: one look, in case setup was finished before closing. */
   const closed = async () => {
-    setFrameUrl(null);
+    setPage(null);
     if (step === 0) return;
     const status = await api
       .refreshLink()
@@ -114,7 +109,7 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
     if (event.type === 'perflo:closed') void closed();
   };
 
-  const showing = frameUrl !== null || finishing || problem === 'slow';
+  const showing = page !== null || finishing || problem === 'slow';
   const items = SETUP_STEPS.map((label, i) => ({
     label,
     state: !showing ? ('next' as const) : i < step ? ('done' as const) : i === step ? ('current' as const) : ('next' as const),
@@ -123,8 +118,8 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
   return (
     <div className="setup" ref={box} tabIndex={-1}>
       <StepList items={items} active={finishing} />
-      {frameUrl ? (
-        <PerfloFrame src={frameUrl} title="Set up payments" perfloOrigin={perfloOrigin} onEvent={onFrameEvent} />
+      {page ? (
+        <PerfloFrame page={page} title="Set up payments" perfloOrigin={perfloOrigin} onEvent={onFrameEvent} />
       ) : (
         !finishing &&
         problem === '' && (
@@ -162,7 +157,7 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
           </button>
         </div>
       )}
-      {!frameUrl && !finishing && problem === '' && <p className="muted small">About a minute. Only needed once.</p>}
+      {!page && !finishing && problem === '' && <p className="muted small">About a minute. Only needed once.</p>}
       {error && (
         <p className="error" role="alert">
           {error}

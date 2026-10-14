@@ -1,0 +1,105 @@
+import { describe, expect, it } from 'vitest';
+import { canPay, elementProblem, EXPIRED_TEXT, isExpired, isRecording, LOAD_FAILED_TEXT } from '../web/src/elements.js';
+import { settleSignIn } from '../web/src/signIn.js';
+import type { LinkStatus } from '../server/views.js';
+
+describe('Pay on the UI elements page', () => {
+  const ready = { amountComplete: true, paymentComplete: true, paying: false, paid: false, recording: false };
+
+  it('is pressable only when the amount and the payment both say complete', () => {
+    expect(canPay(ready)).toBe(true);
+    expect(canPay({ ...ready, amountComplete: false })).toBe(false);
+    expect(canPay({ ...ready, paymentComplete: false })).toBe(false);
+  });
+
+  it('cannot be pressed twice, nor again once the money was added', () => {
+    expect(canPay({ ...ready, paying: true })).toBe(false);
+    expect(canPay({ ...ready, paid: true })).toBe(false);
+  });
+
+  it('is not offered again while a payment that went through is still being recorded', () => {
+    // Perflo.js's own words for this, from confirmPayment().
+    const words =
+      'Your card payment went through, but it is taking longer than usual to show here. Please wait a few minutes and do not pay again.';
+    const recordingError = { code: 'payment_recording', message: words };
+    expect(isRecording(recordingError)).toBe(true);
+    expect(elementProblem(recordingError)).toBe(words);
+    expect(canPay({ ...ready, recording: true })).toBe(false);
+    expect(isRecording({ code: 'payment_failed', message: 'The payment did not go through.' })).toBe(false);
+  });
+});
+
+describe('what the person reads when an element refuses', () => {
+  it('a part that did not load gets Tiny’s words, never the words meant for whoever built the page', () => {
+    const builderWords = 'This could not load. Check the client secret, and that this website is one of the addresses allowed.';
+    expect(elementProblem({ code: 'load_failed', message: builderWords })).toBe(LOAD_FAILED_TEXT);
+    expect(elementProblem({ code: 'client_secret_mismatch', message: 'This client_secret is for a sign-in.' })).toBe(LOAD_FAILED_TEXT);
+    expect(elementProblem({ code: 'invalid_request', message: 'The field "appearance.theme" is not valid.' })).toBe(LOAD_FAILED_TEXT);
+  });
+
+  it('keeps Perflo’s words about what the person did, which say what to do next', () => {
+    expect(elementProblem({ code: 'email_invalid', message: 'Enter a valid email address.' })).toBe('Enter a valid email address.');
+    expect(elementProblem({ code: 'payment_failed', message: 'The payment did not go through. Check the details and try again.' })).toBe(
+      'The payment did not go through. Check the details and try again.',
+    );
+  });
+
+  it('an expired page asks the person to start again, and empty words never reach them', () => {
+    const expired = { code: 'session_expired', message: 'This page has expired.' };
+    expect(isExpired(expired)).toBe(true);
+    expect(elementProblem(expired)).toBe(EXPIRED_TEXT);
+    expect(elementProblem({ code: 'code_not_sent', message: '  ' })).toBe('Something went wrong. Try again.');
+    // A code that only happens to be an object key is not one of Tiny's.
+    expect(elementProblem({ code: 'constructor', message: 'Try again in a moment.' })).toBe('Try again in a moment.');
+  });
+});
+
+describe('settling a finished sign-in', () => {
+  /** Perflo's word did not come in time. */
+  const wait = () => Promise.resolve(false);
+
+  it('takes what Tiny already found when it is final, without looking again', async () => {
+    let looks = 0;
+    const look = () => {
+      looks++;
+      return Promise.resolve<LinkStatus>('linked');
+    };
+    expect(await settleSignIn('linked', look, wait, new AbortController().signal)).toBe('linked');
+    expect(await settleSignIn('expired', look, wait, new AbortController().signal)).toBe('expired');
+    expect(looks).toBe(0);
+  });
+
+  it('still pending: waits, then looks once; a look that fails counts as pending', async () => {
+    let looks = 0;
+    expect(
+      await settleSignIn(
+        'pending',
+        () => {
+          looks++;
+          return Promise.resolve<LinkStatus>('linked');
+        },
+        wait,
+        new AbortController().signal,
+      ),
+    ).toBe('linked');
+    expect(looks).toBe(1);
+    expect(await settleSignIn(undefined, () => Promise.reject(new Error('offline')), wait, new AbortController().signal)).toBe('pending');
+  });
+
+  it('stopped while waiting: answers null and does not look', async () => {
+    const stop = new AbortController();
+    let looked = false;
+    const settled = settleSignIn(
+      'pending',
+      () => {
+        looked = true;
+        return Promise.resolve<LinkStatus>('linked');
+      },
+      (signal) => new Promise((done) => signal.addEventListener('abort', done, { once: true })),
+      stop.signal,
+    );
+    stop.abort();
+    expect(await settled).toBeNull();
+    expect(looked).toBe(false);
+  });
+});

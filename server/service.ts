@@ -5,6 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DemoConfig } from './config.js';
 import type { EventLog } from './eventLog.js';
+import { DEFAULT_LOOK, lookFields, type LookId } from './looks.js';
 import { centsToApiAmount } from './money.js';
 import { LiveUpdates } from './live.js';
 import { nextStep, recordAnswer, TERMINAL_STATUSES, toView } from './orderState.js';
@@ -20,7 +21,7 @@ import { revealCard, RevealError, simulateCheckout, type RevealedCard } from './
 import type { DemoOrder, DemoUser, Store } from './store.js';
 import { cardClosedData, type WebhookEvent } from './webhooks.js';
 
-import type { LinkStatus, Notice } from './views.js';
+import type { LinkStatus, Notice, PerfloPageView, SignInView } from './views.js';
 
 export type { LinkStatus, Notice } from './views.js';
 
@@ -92,10 +93,29 @@ export class DemoService {
 
   /**
    * Tiny knows nobody's name or email: the person types and proves their email
-   * in Perflo's sign-in frame. So only Tiny's own id is sent.
+   * in Perflo's sign-in page. So only Tiny's own id is sent, with the look the
+   * sign-in page is to be drawn in.
    */
   private userBody(user: DemoUser) {
-    return { external_user_id: user.id };
+    return { external_user_id: user.id, ...lookFields(user.look ?? DEFAULT_LOOK, 'sign_in') };
+  }
+
+  /** The look Perflo's pages are opened in from now on. A page already open keeps the look it was opened with. */
+  setLook(user: DemoUser, look: LookId): DemoUser {
+    const updated = this.store.updateUser(user.id, (u) => (u.look = look));
+    this.log.add(user.id, 'demo', `Look for Perflo pages: ${look}`);
+    return updated;
+  }
+
+  /**
+   * The sign-in to open with UI elements (or an embedded page) outside any order: the one already
+   * waiting, else a new one. Linked already: nothing to open.
+   */
+  async signIn(user: DemoUser): Promise<SignInView> {
+    const { user: fresh, status } = await this.ensureLinked(user);
+    if (status === 'linked' || !fresh.pendingLogin) return { link: 'linked' };
+    const { loginUrl, clientSecret } = fresh.pendingLogin;
+    return { link: 'login_required', page: { url: loginUrl, ...(clientSecret ? { clientSecret } : {}) } };
   }
 
   /** Makes sure we hold an access token for this person, or starts the one-time setup. */
@@ -116,7 +136,12 @@ export class DemoService {
         return { user: await this.reissue(fresh), status: 'linked' };
       }
       const updated = this.store.updateUser(fresh.id, (u) => {
-        u.pendingLogin = { loginId: result.login_id, loginUrl: result.login_url, orderId: null };
+        u.pendingLogin = {
+          loginId: result.login_id,
+          loginUrl: result.login_url,
+          ...(result.client_secret ? { clientSecret: result.client_secret } : {}),
+          orderId: null,
+        };
       });
       return { user: updated, status: 'login_required' };
     });
@@ -156,6 +181,8 @@ export class DemoService {
       currency: 'USD' as const,
       ...(order.intent.description ? { description: order.intent.description } : {}),
       external_order_id: order.id,
+      // The look fixed on the order when it was made, so a second POST with its Idempotency-Key is the same body.
+      ...lookFields(order.look ?? DEFAULT_LOOK, 'payment'),
     };
   }
 
@@ -381,7 +408,12 @@ export class DemoService {
       // The person removed access; the old token is dead. Login completion resumes this order.
       const updated = this.store.updateUser(user.id, (u) => {
         u.perflo = null;
-        u.pendingLogin = { loginId: response.login_id, loginUrl: response.login_url, orderId: order.id };
+        u.pendingLogin = {
+          loginId: response.login_id,
+          loginUrl: response.login_url,
+          ...(response.client_secret ? { clientSecret: response.client_secret } : {}),
+          orderId: order.id,
+        };
       });
       return { order, user: updated, notice: null };
     }
@@ -496,14 +528,27 @@ export class DemoService {
     }
   }
 
-  async limitsLink(user: DemoUser): Promise<string> {
+  async limitsLink(user: DemoUser): Promise<PerfloPageView> {
     if (!user.perflo) throw new DemoError('not_linked', 'Payments are not set up yet');
-    return (await this.api.limitsLink(user.id, user.perflo.userId, user.perflo.token)).frame_url;
+    const link = await this.api.limitsLink(user.id, user.perflo.userId, user.perflo.token, lookFields(user.look ?? DEFAULT_LOOK, 'limits'));
+    return pageOf(link);
   }
 
-  async topUpLink(user: DemoUser, amountCents?: number): Promise<string> {
+  async topUpLink(user: DemoUser, amountCents?: number): Promise<PerfloPageView> {
     if (!user.perflo) throw new DemoError('not_linked', 'Payments are not set up yet');
     const amount = amountCents === undefined ? undefined : centsToApiAmount(amountCents);
-    return (await this.api.createTopUp(user.id, user.perflo.userId, user.perflo.token, amount)).frame_url;
+    const link = await this.api.createTopUp(
+      user.id,
+      user.perflo.userId,
+      user.perflo.token,
+      amount,
+      lookFields(user.look ?? DEFAULT_LOOK, 'payment'),
+    );
+    return pageOf(link);
   }
+}
+
+/** A page Perflo opened, as the person's page gets it: its link, and its client_secret when Perflo sent one. */
+function pageOf(link: { frame_url: string; client_secret?: string }): PerfloPageView {
+  return { url: link.frame_url, ...(link.client_secret ? { clientSecret: link.client_secret } : {}) };
 }

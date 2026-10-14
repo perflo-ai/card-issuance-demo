@@ -2,11 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { useOnMount } from './browser';
 import { Chat } from './Chat';
+import { ElementsPage } from './ElementsPage';
 import { connectLive, onLive, onReconnect } from './live';
 import { Panel } from './Panel';
+import { configurePerflo } from './perflo';
 import { shared } from './polling';
 import { stepOf, type StepKey } from './progress';
 import type { DemoConfigView, MeView, OrderPhase, OrderView } from '../../server/views';
+
+const VIEWS = ['embedded', 'elements'] as const;
+type View = (typeof VIEWS)[number];
 
 function Logo() {
   return (
@@ -27,11 +32,16 @@ export function App() {
   const [signingOut, setSigningOut] = useState(false);
   /** Bumped on sign out, so the chat starts empty for the next person on this browser. */
   const [visit, setVisit] = useState(0);
+  /** How Perflo shows up in Tiny: its embedded pages in the chat, or its UI elements in Tiny's own page. */
+  const [view, setView] = useState<View>('embedded');
 
   useOnMount(() => {
     api
       .config()
-      .then(setConfig)
+      .then((loaded) => {
+        configurePerflo(loaded.perfloScriptUrl);
+        setConfig(loaded);
+      })
       .catch(() => setFatal('Tiny is not reachable. Is the demo server running?'));
     api
       .session()
@@ -73,6 +83,13 @@ export function App() {
       <header className="top">
         <Logo />
         {config.mode === 'mock' && <span className="badge">Test mode</span>}
+        <div className="tabs view-switch" role="group" aria-label="How Perflo shows in Tiny">
+          {VIEWS.map((v) => (
+            <button key={v} className={view === v ? 'tab active' : 'tab'} aria-pressed={view === v} onClick={() => setView(v)}>
+              {v === 'embedded' ? 'Embedded pages' : 'UI elements'}
+            </button>
+          ))}
+        </div>
         {me.linked && (
           <div className="who">
             <button className="link" disabled={signingOut} onClick={() => void signOut()}>
@@ -81,7 +98,7 @@ export function App() {
           </div>
         )}
       </header>
-      <Workspace key={visit} config={config} me={me} onMe={setMe} />
+      <Workspace key={visit} config={config} me={me} onMe={setMe} view={view} />
     </div>
   );
 }
@@ -92,7 +109,7 @@ export function App() {
  * chat and the Orders tab read the same list, so an order is never fetched
  * twice to show it in two places.
  */
-function Workspace({ config, me, onMe }: { config: DemoConfigView; me: MeView; onMe: (me: MeView) => void }) {
+function Workspace({ config, me, onMe, view }: { config: DemoConfigView; me: MeView; onMe: (me: MeView) => void; view: View }) {
   const [orders, setOrders] = useState<Record<string, OrderView>>({});
   const [seen, setSeen] = useState<Record<string, StepKey[]>>({});
   const [loaded, setLoaded] = useState(false);
@@ -181,16 +198,30 @@ function Workspace({ config, me, onMe }: { config: DemoConfigView; me: MeView; o
 
   return (
     <div className="layout">
-      <Chat
-        perfloOrigin={config.perfloOrigin}
-        orders={orders}
-        seen={seen}
-        loaded={loaded}
-        onOrder={putOrder}
-        onAccountChanged={accountChanged}
-        onChangeLimits={() => setLimitsRequest((n) => n + 1)}
-        onLinked={() => onMe({ ...me, linked: true })}
-      />
+      {view === 'elements' && (
+        <ElementsPage
+          linked={me.linked}
+          onLinked={() => {
+            onMe({ ...me, linked: true });
+            // The Payments panel reads the balance and limits the person just set.
+            accountChanged();
+          }}
+          onAccountChanged={accountChanged}
+        />
+      )}
+      {/* Kept while UI elements are shown, so the conversation is still there on the way back. */}
+      <div className="chat-slot" hidden={view === 'elements'}>
+        <Chat
+          perfloOrigin={config.perfloOrigin}
+          orders={orders}
+          seen={seen}
+          loaded={loaded}
+          onOrder={putOrder}
+          onAccountChanged={accountChanged}
+          onChangeLimits={() => setLimitsRequest((n) => n + 1)}
+          onLinked={() => onMe({ ...me, linked: true })}
+        />
+      </div>
       <Panel
         perfloOrigin={config.perfloOrigin}
         mode={config.mode}

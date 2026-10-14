@@ -570,3 +570,96 @@ button:disabled {
   width: 18px;
   height: 18px;
 }
+
+/* How Perflo shows in Tiny: embedded pages in the chat, or UI elements in Tiny's own page. */
+.view-switch {
+  margin-left: 8px;
+}
+.view-switch .tab {
+  flex: none;
+  height: 36px;
+  padding: 0 14px;
+}
+@media (max-width: 560px) {
+  header.top {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 64px;
+    padding: 10px 16px;
+  }
+  .view-switch {
+    order: 10;
+    margin-left: 0;
+    width: 100%;
+  }
+  .view-switch .tab {
+    flex: 1;
+  }
+}
+.chat-slot {
+  min-width: 0;
+}
+select {
+  font: inherit;
+}
+select.select {
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+}
+.embedded-page {
+  overflow: hidden;
+}
+
+/* The UI elements page. */
+.elements-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+.elements-body h2 {
+  font-size: 17px;
+  margin: 0;
+}
+.elements-body p {
+  margin: 0;
+}
+.elements-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.theme-switch {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--soft);
+  border-radius: 14px;
+}
+.theme-switch .tab {
+  flex: none;
+  height: 34px;
+  padding: 0 14px;
+}
+.elements-steps {
+  display: grid;
+  gap: 20px;
+  margin-top: 8px;
+}
+.elements-steps section {
+  display: grid;
+  gap: 10px;
+}
+.elements-steps h3 {
+  font-size: 15px;
+  margin: 0;
+}
