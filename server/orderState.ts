@@ -67,7 +67,8 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
   if (last === null) {
     // Not yet with Perflo: either waiting for the one-time setup or about to send.
     if (user.perflo === null && user.pendingLogin !== null) {
-      return { ...base, phase: 'needs_setup', frameUrl: user.pendingLogin.loginUrl };
+      const { loginUrl, clientSecret } = user.pendingLogin;
+      return { ...base, phase: 'needs_setup', frameUrl: loginUrl, ...(clientSecret ? { clientSecret } : {}) };
     }
     return { ...base, phase: 'placing' };
   }
@@ -85,9 +86,20 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
         ...(order.checkout ? { checkout: order.checkout } : {}),
       };
     case 'payment_required':
-      return { ...base, phase: 'payment_required', frameUrl: last.frame_url, amountDue: last.amount_due };
+      return {
+        ...base,
+        phase: 'payment_required',
+        frameUrl: last.frame_url,
+        ...(last.client_secret ? { clientSecret: last.client_secret } : {}),
+        amountDue: last.amount_due,
+      };
     case 'login_required':
-      return { ...base, phase: 'login_required', frameUrl: last.login_url };
+      return {
+        ...base,
+        phase: 'login_required',
+        frameUrl: last.login_url,
+        ...(last.client_secret ? { clientSecret: last.client_secret } : {}),
+      };
     case 'identity_check_required':
       // No link means Perflo could not make one right now; the browser says so and offers a retry.
       return { ...base, phase: 'identity_check_required', ...(last.kyc_url ? { kycUrl: last.kyc_url } : {}) };

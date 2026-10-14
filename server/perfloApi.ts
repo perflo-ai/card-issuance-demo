@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { signatureHeaders, type PartnerCredentials } from './signing.js';
 import type { EventLog } from './eventLog.js';
+import type { lookFields } from './looks.js';
 import type { AccountView, DeclineReason as DeclineReasonView, IdentityStatus as IdentityStatusView } from './views.js';
 
 const amount = z.string().regex(/^(0|[1-9][0-9]{0,8})\.[0-9]{2}$/);
@@ -26,6 +27,13 @@ const link = z
     return url.protocol === 'https:' || (url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1'));
   });
 const money = z.object({ amount, currency: z.literal('USD') });
+/**
+ * The `client_secret` Perflo returns beside a page's link: the value Perflo.js opens that page, or its UI
+ * elements, with. The same capability the link carries, so it is treated like the link: passed to the
+ * person's own page only, never logged (redact.ts). Opaque here; Perflo.js checks its shape. Optional:
+ * a Perflo that predates Perflo.js does not send it, and the page then says it cannot open there.
+ */
+const clientSecret = z.string().regex(/^[A-Za-z0-9_.-]{1,256}$/);
 
 export const usersResponse = z.discriminatedUnion('status', [
   z.object({ status: z.literal('approved'), user_id: z.string().min(1), user_access_token: z.string().min(1).optional() }),
@@ -33,6 +41,7 @@ export const usersResponse = z.discriminatedUnion('status', [
     status: z.literal('login_required'),
     login_id: z.string().min(1),
     login_url: link,
+    client_secret: clientSecret.optional(),
     expires_at: z.string(),
   }),
 ]);
@@ -71,7 +80,7 @@ export const accountResponse = z.object({
 });
 export type AccountResponse = z.infer<typeof accountResponse>;
 
-export const frameLinkResponse = z.object({ frame_url: link, expires_at: z.string() });
+export const frameLinkResponse = z.object({ frame_url: link, client_secret: clientSecret.optional(), expires_at: z.string() });
 export const topUpResponse = frameLinkResponse.extend({ top_up_id: z.string(), amount: amount.nullable().optional() });
 export type TopUpResponse = z.infer<typeof topUpResponse>;
 
@@ -103,8 +112,21 @@ export const orderResponse = z.discriminatedUnion('status', [
     reveal_expires_at: z.string().optional(),
     card_expires_at: z.string(),
   }),
-  z.object({ ...orderId, status: z.literal('payment_required'), frame_url: link, amount_due: amount }),
-  z.object({ ...orderId, status: z.literal('login_required'), login_id: z.string(), login_url: link }),
+  z.object({
+    ...orderId,
+    status: z.literal('payment_required'),
+    frame_url: link,
+    // null only when Perflo has no link to give, which frame_url being required already rules out.
+    client_secret: clientSecret.nullable().optional(),
+    amount_due: amount,
+  }),
+  z.object({
+    ...orderId,
+    status: z.literal('login_required'),
+    login_id: z.string(),
+    login_url: link,
+    client_secret: clientSecret.nullable().optional(),
+  }),
   z.object({
     ...orderId,
     status: z.literal('identity_check_required'),
@@ -201,7 +223,10 @@ interface RequestOptions {
   collapse?: boolean;
 }
 
-export interface CreateOrderInput {
+/** How the pages a request opens look (server/looks.ts): only ever a fixed example look, never the browser's. */
+export type LookFields = ReturnType<typeof lookFields>;
+
+export interface CreateOrderInput extends LookFields {
   user_id: string;
   merchant: { name: string; domain: string };
   amount: string;
@@ -362,7 +387,7 @@ export class PerfloApi {
 
   async createUser(
     demoUserId: string,
-    body: { external_user_id: string; reissue?: boolean },
+    body: { external_user_id: string; reissue?: boolean } & LookFields,
     idempotencyKey?: string,
   ): Promise<UsersResponse> {
     const r = await this.request(demoUserId, 'POST', '/v1/users', { body, ...(idempotencyKey ? { idempotencyKey } : {}) });
@@ -382,17 +407,19 @@ export class PerfloApi {
     return this.parse(accountResponse, r.status, r.json, [200]);
   }
 
-  async createTopUp(demoUserId: string, userId: string, token: string, amountApi?: string): Promise<TopUpResponse> {
+  async createTopUp(demoUserId: string, userId: string, token: string, amountApi?: string, look: LookFields = {}): Promise<TopUpResponse> {
     const r = await this.request(demoUserId, 'POST', `/v1/users/${encodeURIComponent(userId)}/top-ups`, {
       token,
-      body: amountApi === undefined ? {} : { amount: amountApi },
+      body: amountApi === undefined ? { ...look } : { amount: amountApi, ...look },
     });
     return this.parse(topUpResponse, r.status, r.json, [201]);
   }
 
-  async limitsLink(demoUserId: string, userId: string, token: string): Promise<z.infer<typeof frameLinkResponse>> {
+  async limitsLink(demoUserId: string, userId: string, token: string, look: LookFields = {}): Promise<z.infer<typeof frameLinkResponse>> {
+    // No body at all for the brand default, exactly as before looks existed.
     const r = await this.request(demoUserId, 'POST', `/v1/users/${encodeURIComponent(userId)}/limits-link`, {
       token,
+      ...(Object.keys(look).length > 0 ? { body: look } : {}),
     });
     return this.parse(frameLinkResponse, r.status, r.json, [201]);
   }

@@ -189,3 +189,32 @@ describe('writes happen only on real changes', () => {
     expect(() => store.updateOrder({ ...order }, () => undefined)).toThrow('unknown demo order');
   });
 });
+
+describe('the chosen look', () => {
+  it('is kept on the account and fixed on each order when it is made, across a restart', () => {
+    const file = fileIn('look');
+    const store = new Store(file);
+    const { user } = store.createUser();
+    const plain = store.createOrder(user.id, intent);
+    store.updateUser(user.id, (u) => (u.look = 'night'));
+    const dark = store.createOrder(user.id, intent);
+    store.updateUser(user.id, (u) => (u.look = 'flat'));
+    const reopened = new Store(file);
+    expect(reopened.user(user.id).look).toBe('flat');
+    expect(reopened.order(user.id, plain.id)?.look).toBeUndefined();
+    expect(reopened.order(user.id, dark.id)?.look).toBe('night');
+  });
+
+  it('a look that is not one of Tiny’s stops the server rather than being sent', () => {
+    const file = fileIn('look-bad');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        sessions: {},
+        users: { u1: { id: 'u1', createdAt: '2026-10-09T00:00:00Z', perflo: null, pendingLogin: null, look: 'neon' } },
+        orders: {},
+      }),
+    );
+    expect(() => new Store(file)).toThrow(StoreError);
+  });
+});

@@ -146,8 +146,8 @@ describe('anonymous sessions and setting up payments in the chat', () => {
   it('a first visit makes an anonymous account; the same browser keeps it', async () => {
     const demo = makeDemo(mock.base);
     const b = browser(demo);
-    expect(await signUp(b)).toEqual({ linked: false, stopAtCheckout: false });
-    expect(await signUp(b)).toEqual({ linked: false, stopAtCheckout: false });
+    expect(await signUp(b)).toEqual({ linked: false, stopAtCheckout: false, look: 'brand' });
+    expect(await signUp(b)).toEqual({ linked: false, stopAtCheckout: false, look: 'brand' });
     const store = JSON.parse(readFileSync(demo.dataFile, 'utf8'));
     expect(Object.keys(store.users)).toHaveLength(1);
     expect(Object.keys(Object.values(store.users)[0] as object).sort()).toEqual(['createdAt', 'id', 'pendingLogin', 'perflo']);

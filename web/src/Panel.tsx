@@ -4,11 +4,20 @@ import { pageVisibility, useFocusWhenClosed, useOnMount, useWhenVisible } from '
 import { cancelUntilDone } from './cancel';
 import { onLive } from './live';
 import { openCardRows } from './cards';
-import { CANCEL_SLOW_TEXT, cancelLabel, identityText, money, when } from './copy';
+import { CANCEL_SLOW_TEXT, cancelLabel, identityText, LOOK_LABELS, money, when } from './copy';
 import { Orders } from './Orders';
+import { hasPerfloJs } from './perflo';
 import { PerfloFrame } from './PerfloFrame';
 import { singleFlight } from './polling';
-import type { AccountView, LogEntry, MeView, OrderView } from '../../server/views';
+import {
+  LOOK_IDS,
+  type AccountView,
+  type LogEntry,
+  type LookId,
+  type MeView,
+  type OrderView,
+  type PerfloPageView,
+} from '../../server/views';
 
 interface Props {
   perfloOrigin: string;
@@ -27,7 +36,12 @@ interface Props {
   onMe: (me: MeView) => void;
 }
 
-type OpenFrame = { kind: 'limits' | 'top_up'; url: string } | null;
+type OpenFrame = { kind: 'limits' | 'top_up'; page: PerfloPageView } | null;
+
+/** A page link answer from Tiny's server, as the page to open. */
+function pageOf(link: { frameUrl: string; clientSecret?: string }): PerfloPageView {
+  return { url: link.frameUrl, ...(link.clientSecret ? { clientSecret: link.clientSecret } : {}) };
+}
 const TABS = ['payments', 'orders'] as const;
 type Tab = (typeof TABS)[number];
 /** What the payments box is doing right now; one thing at a time. */
@@ -41,6 +55,7 @@ export function Panel(props: Props) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<Busy>(null);
   const [savingStop, setSavingStop] = useState(false);
+  const [savingLook, setSavingLook] = useState(false);
   /** The card whose cancel has not gone through yet after Tiny kept trying. */
   const [slowCancel, setSlowCancel] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('payments');
@@ -79,7 +94,7 @@ export function Panel(props: Props) {
     setError('');
     setBusy('limits');
     try {
-      setFrame({ kind: 'limits', url: (await api.limitsLink()).frameUrl });
+      setFrame({ kind: 'limits', page: pageOf(await api.limitsLink()) });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
     } finally {
@@ -98,7 +113,7 @@ export function Panel(props: Props) {
     setError('');
     setBusy('top_up');
     try {
-      setFrame({ kind: 'top_up', url: (await api.topUp()).frameUrl });
+      setFrame({ kind: 'top_up', page: pageOf(await api.topUp()) });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
     } finally {
@@ -145,6 +160,18 @@ export function Panel(props: Props) {
       setError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
     } finally {
       setSavingStop(false);
+    }
+  };
+
+  const setLook = async (look: LookId) => {
+    setError('');
+    setSavingLook(true);
+    try {
+      onMe((await api.look(look)).user);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
+    } finally {
+      setSavingLook(false);
     }
   };
 
@@ -274,7 +301,7 @@ export function Panel(props: Props) {
         {frame && (
           <div className="panel-frame">
             <PerfloFrame
-              src={frame.url}
+              page={frame.page}
               title={frame.kind === 'limits' ? 'Change limits' : 'Add money'}
               perfloOrigin={perfloOrigin}
               onEvent={(event) => {
@@ -295,6 +322,35 @@ export function Panel(props: Props) {
           </p>
         )}
       </section>
+
+      {hasPerfloJs() && (
+        <section className="box">
+          <h2>Look</h2>
+          <p className="muted small">
+            How Perflo&apos;s pages and UI elements look in Tiny. Tiny&apos;s server sends the look when it opens a page, so it shows on the
+            next one opened; a page already open keeps its look.
+          </p>
+          <label className="visually-hidden" htmlFor="look">
+            Look
+          </label>
+          <select
+            id="look"
+            className="select"
+            value={me.look}
+            disabled={savingLook}
+            onChange={(e) => {
+              const next = LOOK_IDS.find((id) => id === e.target.value);
+              if (next) void setLook(next);
+            }}
+          >
+            {LOOK_IDS.map((id) => (
+              <option key={id} value={id}>
+                {LOOK_LABELS[id]}
+              </option>
+            ))}
+          </select>
+        </section>
+      )}
 
       {mode === 'mock' && (
         <section className="box">

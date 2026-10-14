@@ -46,8 +46,10 @@ export interface OrderView {
   amountCents: number;
   description: string;
   phase: OrderPhase;
-  /** Perflo frame to embed: the setup or sign-in frame, or the add money frame. */
+  /** Perflo page to embed: the setup or sign-in page, or the add money page. */
   frameUrl?: string;
+  /** The same page's client_secret, for Perflo.js; absent when Perflo did not send one. */
+  clientSecret?: string;
   kycUrl?: string;
   amountDue?: string;
   declineReason?: DeclineReason;
@@ -122,18 +124,42 @@ export const FRAME_EVENT_TYPES = [
 
 export type LinkStatus = 'linked' | 'login_required' | 'pending' | 'expired';
 
+/**
+ * A Perflo page Tiny opened for the person: its link, and its client_secret, which Perflo.js opens the
+ * same page (or its UI elements) with. Both are the same capability, for this person's page only.
+ */
+export interface PerfloPageView {
+  url: string;
+  clientSecret?: string;
+}
+
+/** POST /demo/sign-in: linked already, or the sign-in to open. */
+export type SignInView = { link: 'linked' } | { link: 'login_required'; page: PerfloPageView };
+
 export type Notice = 'reveal_failed' | 'card_locked' | null;
 
 export interface DemoConfigView {
   mode: 'live' | 'mock';
   perfloOrigin: string;
+  /**
+   * Where the page loads Perflo.js from (live mode), to open embedded pages and UI elements with a
+   * client_secret. null in mock mode: the test payments service has no Perflo.js, so its pages are
+   * opened from their links.
+   */
+  perfloScriptUrl: string | null;
 }
+
+/** The example looks Tiny can ask Perflo to draw its pages in (server/looks.ts holds what each sends). */
+export const LOOK_IDS = ['brand', 'flat', 'night'] as const;
+export type LookId = (typeof LOOK_IDS)[number];
 
 /** The browser's Tiny account. Anonymous: no name or email is ever asked for or shown. */
 export interface MeView {
   linked: boolean;
   /** Mock mode test control. */
   stopAtCheckout: boolean;
+  /** The look Perflo's pages are opened in from now on. */
+  look: LookId;
 }
 
 /**

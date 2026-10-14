@@ -24,7 +24,7 @@ import { orderSteps, stepOf, type StepKey } from './progress';
 import { SetupFlow } from './Setup';
 import { StepList } from './Steps';
 import { formatUsd } from '../../server/money';
-import type { Notice, OrderPhase, OrderView } from '../../server/views';
+import type { Notice, OrderPhase, OrderView, PerfloPageView } from '../../server/views';
 
 type Message = { id: string; kind: 'user' | 'assistant'; text: string } | { id: string; kind: 'order'; orderId: string };
 
@@ -329,6 +329,12 @@ interface CardProps {
   onLinked: () => void;
 }
 
+/** The Perflo page this order asks the person to open, or null when it has none. */
+function pageOf(order: OrderView): PerfloPageView | null {
+  if (!order.frameUrl) return null;
+  return { url: order.frameUrl, ...(order.clientSecret ? { clientSecret: order.clientSecret } : {}) };
+}
+
 export function OrderCard(props: CardProps) {
   const { order, action, waiting, note, error, perfloOrigin, onAdvance, onExpect } = props;
   const reusable = props.cardUse.reusable;
@@ -339,6 +345,7 @@ export function OrderCard(props: CardProps) {
   useFocusWhenClosed(frameOpen, card);
   const amount = formatUsd(order.amountCents);
   const busy = action !== null;
+  const page = pageOf(order);
 
   // A card being made finishes on its own, and Perflo says so: wait for it without asking.
   const expectLatest = useRef(onExpect);
@@ -412,7 +419,7 @@ export function OrderCard(props: CardProps) {
           <SetupFlow
             perfloOrigin={perfloOrigin}
             disabled={busy}
-            open={() => Promise.resolve(order.frameUrl ?? null)}
+            open={() => Promise.resolve(page)}
             onLinked={async () => {
               props.onLinked();
               props.onAccountChanged();
@@ -446,8 +453,8 @@ export function OrderCard(props: CardProps) {
       body = (
         <>
           <p>Your balance does not cover this yet. Add {money(order.amountDue ?? '0.00')} and I will place the order right away.</p>
-          {frameOpen && order.frameUrl ? (
-            <PerfloFrame src={order.frameUrl} title="Add money" perfloOrigin={perfloOrigin} onEvent={onFrameEvent} />
+          {frameOpen && page ? (
+            <PerfloFrame page={page} title="Add money" perfloOrigin={perfloOrigin} onEvent={onFrameEvent} />
           ) : (
             <div className="row">
               <button className="primary" disabled={busy} onClick={() => setFrameOpen(true)}>

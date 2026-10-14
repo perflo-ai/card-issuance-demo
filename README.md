@@ -136,6 +136,50 @@ card itself (number and security code hidden until "Show card details") and a Ca
 Frames from an `http://localhost` backend embedded in the https demo page are mixed content. Chrome and
 Firefox treat `localhost` as trustworthy; Safari may block them. This was not verified in a browser.
 
+## Customizing how Perflo looks: embedded pages and UI elements (live mode)
+
+The header switches between two ways of showing Perflo inside Tiny. Both load Perflo.js from
+`<PERFLO_API_BASE>/v1/perflo.js` and open Perflo with the `client_secret` Perflo returns beside each page link.
+
+**Needs a Perflo with Checkout customization.** The API the demo points at must run perflo-backend-api #368, #369,
+#370 and #371 (the brand on every page, `appearance` on the API, the payment form on Stripe's elements, Perflo.js and
+the UI elements). The payment element also needs ms-fiat-payments #191 (the card checkout opened as Checkout elements).
+Do not deploy this version of the demo before those are deployed to the API it points at. Against a Perflo without
+them, Perflo.js does not load and pages that came with no `client_secret` open from their link as before.
+
+- **Embedded pages** (the chat). The flow above, unchanged, with every Perflo page opened through
+  `perflo.embeddedPage({ clientSecret }).mount(...)`: the sign-in page in the chat, the add money page on an order, and
+  Add money and Change limits in the Payments panel. The page sends the same events as before (`perflo:setup_completed`
+  and the rest), and Tiny accepts them only from the window Perflo.js placed, from the Perflo origin.
+- **UI elements** (Tiny's own page). Tiny's own headings and buttons around Perflo's elements:
+  1. **Sign in**: the code element, with Tiny's **Send code** and **Verify** buttons (`elements.sendCode()`,
+     `elements.verifyCode()`). The code is typed inside the element and never reaches Tiny's page.
+  2. **Allow Tiny to pay**: the limits element, shown once the code is verified. The person picks limits and presses
+     Allow inside it. When it reports complete, Tiny's server picks up the access token as it does for the embedded page.
+  3. **Add money**: the amount and payment elements, with Tiny's **Pay** button (`elements.confirmPayment()`), enabled
+     only while both report `complete`. The button does not show an amount: the person types it inside the amount
+     element, and it never passes through Tiny's page (the total shows inside the payment element).
+
+  Element errors and load failures are shown in plain words (`web/src/elements.ts`). **Light** and **Dark** call
+  `elements.update({ appearance: { theme } })` on every open element group, live. Embedded pages have no `update()`,
+  so the switch is on the UI elements page only.
+
+**Look.** The Payments panel has a **Look** picker with three example looks: Tiny's brand (the brand saved in Perflo
+Builder, nothing sent), a flat light look (variables, condensed inputs, tabs on the payment form) and a dark look
+(variables plus `rules` for inputs, labels and buttons, an accordion on the payment form). The browser sends only the
+look's id; the `appearance` and `payment_element_options` Perflo gets come from the fixed list in `server/looks.ts`,
+on the request that opens the page: `POST /v1/users`, `POST /v1/users/{id}/top-ups`, `POST /v1/users/{id}/limits-link`
+and `POST /v1/checkout/orders` (`payment_element_options` only on the two that take a payment). They are signed like
+every other request (`X-Partner-Key-Version` and the rest). A page already open keeps the look it was opened with,
+and an order keeps the look it was made with, so a retry with its Idempotency-Key sends the same body.
+
+**Content Security Policy.** The built app allows `script-src` and `frame-src` for the origin of `PERFLO_API_BASE` and
+nothing else: `https://api.perflo.ai` in production, or whichever develop or staging host the demo is pointed at. No
+host is written into the code. Perflo.js makes no network calls, so `connect-src` stays `'self'`.
+
+**Mock mode** has no Perflo.js: pages open from their links as before, the Look picker is hidden and the UI elements
+page says it needs live mode.
+
 ## Hosting (Railway or similar)
 
 A host sets `PORT`, terminates HTTPS itself and has no `.env` file. With `PORT` set the demo
@@ -286,6 +330,7 @@ server/
   checkout.ts     card reveal (revealCard) and the simulated checkout
   errors.ts       what the browser is told for each failure
   security.ts     response headers, same-origin check, rate limit
+  looks.ts        the example looks (appearance, payment_element_options) Tiny sends Perflo
   logger.ts       JSON logs with request ids
   orderState.ts   pure status handling and the browser view
   intent.ts       the scripted assistant's parser
@@ -293,7 +338,8 @@ server/
   redact.ts       the one redactor for logs
   views.ts        shapes shared with the web app
   mock/           mock Perflo API, frames, identity check, card relay, shop
-web/src/          chat, order cards, Perflo frame wrapper, payments panel
+web/src/          chat, order cards, Perflo page wrapper (PerfloFrame), UI elements page (ElementsPage),
+                  Perflo.js loader (perflo.ts), payments panel
 test/             vitest suites
 ```
 

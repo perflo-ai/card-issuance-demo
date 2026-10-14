@@ -26,7 +26,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, re
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import { orderResponse, type OrderResponse } from './perfloApi.js';
-import type { CheckoutSummary } from './views.js';
+import { LOOK_IDS, type CheckoutSummary, type LookId } from './views.js';
 
 export type { CheckoutSummary } from './views.js';
 
@@ -44,10 +44,15 @@ export interface DemoUser {
   id: string;
   createdAt: string;
   perflo: PerfloLink | null;
-  /** The login we are waiting on, from POST /users or an order's login_required. */
-  pendingLogin: { loginId: string; loginUrl: string; orderId: string | null } | null;
+  /**
+   * The login we are waiting on, from POST /users or an order's login_required. `clientSecret` opens the
+   * same sign-in with Perflo.js; absent when Perflo did not send one (or stored by an earlier version).
+   */
+  pendingLogin: { loginId: string; loginUrl: string; clientSecret?: string; orderId: string | null } | null;
   /** Mock mode test control: fill the checkout but do not buy, so the card stays open. */
   testStopAtCheckout?: boolean;
+  /** The example look Perflo's pages are opened in from now on (server/looks.ts). Absent: the brand default. */
+  look?: LookId;
 }
 
 export interface OrderIntent {
@@ -70,6 +75,12 @@ export interface DemoOrder {
   checkout: CheckoutSummary | null;
   amountReturned: string | null;
   createdAt: string;
+  /**
+   * The look the order was made with, fixed when it was made: every POST of this order carries the same
+   * Idempotency-Key, so its body must not change when the person picks another look later. Absent: the
+   * brand default (also every order stored before looks existed, which were sent without one).
+   */
+  look?: LookId;
   /**
    * The card Perflo answered when the order was ready, kept after the order moves on: a later
    * answer (completed, cancelled) no longer names the card, and a card can serve several orders.
@@ -117,7 +128,15 @@ export class StoreError extends Error {
 
 const isoTime = z.string().refine((value) => !Number.isNaN(Date.parse(value)));
 const perfloLink = z.object({ userId: z.string().min(1), token: z.string().min(1) }).strict();
-const pendingLogin = z.object({ loginId: z.string().min(1), loginUrl: z.string().url(), orderId: z.string().nullable() }).strict();
+const pendingLogin = z
+  .object({
+    loginId: z.string().min(1),
+    loginUrl: z.string().url(),
+    clientSecret: z.string().min(1).optional(),
+    orderId: z.string().nullable(),
+  })
+  .strict();
+const look = z.enum(LOOK_IDS);
 const userRecord = z
   .object({
     id: z.string().min(1),
@@ -125,6 +144,7 @@ const userRecord = z
     perflo: perfloLink.nullable(),
     pendingLogin: pendingLogin.nullable(),
     testStopAtCheckout: z.boolean().optional(),
+    look: look.optional(),
     // Kept by versions that asked for a name and email at sign-up; read only to be dropped.
     firstName: z.unknown().optional(),
     lastName: z.unknown().optional(),
@@ -156,6 +176,7 @@ const orderRecord = z
     checkout: checkoutSummary.nullable(),
     amountReturned: z.string().nullable(),
     createdAt: isoTime,
+    look: look.optional(),
     card: z
       .object({ cardId: z.string().min(1), last4: z.string(), expiresAt: z.string() })
       .strict()
@@ -388,6 +409,7 @@ export class Store {
   }
 
   createOrder(demoUserId: string, intent: OrderIntent): DemoOrder {
+    const look = this.users.get(demoUserId)?.look;
     const order: DemoOrder = {
       id: randomUUID(),
       demoUserId,
@@ -400,6 +422,7 @@ export class Store {
       checkout: null,
       amountReturned: null,
       createdAt: new Date().toISOString(),
+      ...(look ? { look } : {}),
     };
     this.orders.set(order.id, order);
     this.save();

@@ -9,7 +9,7 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 export interface HeaderOptions {
-  /** Origin of the payments service: the only place frames may load from. */
+  /** Origin of the payments service: the only place Perflo.js and Perflo's pages may load from. */
   perfloOrigin: string;
   /** The built web app is served (strict script policy). Off while Vite serves the page in development. */
   production: boolean;
@@ -18,16 +18,19 @@ export interface HeaderOptions {
 }
 
 /**
- * Headers on every response. The page embeds Perflo's frames and nothing else:
- * frame-src names that one origin, scripts and connections stay on Tiny's own
- * origin, and no one may frame Tiny itself. Development keeps only the framing
- * rule, because Vite injects inline scripts for hot reload.
+ * Headers on every response. The page embeds Perflo's pages and nothing else:
+ * frame-src names that one origin, scripts come from Tiny's own origin and
+ * Perflo.js from that same Perflo origin (PERFLO_API_BASE, so production's
+ * https://api.perflo.ai or whichever host the demo points at, never a list
+ * written here), connections stay on Tiny's own origin (Perflo.js makes none),
+ * and no one may frame Tiny itself. Development keeps only the framing rule,
+ * because Vite injects inline scripts for hot reload.
  */
 export function securityHeaders({ perfloOrigin, production, hosted }: HeaderOptions): RequestHandler {
   const csp = production
     ? [
         "default-src 'self'",
-        "script-src 'self'",
+        `script-src 'self' ${perfloOrigin}`,
         "style-src 'self' https://fonts.googleapis.com",
         'font-src https://fonts.gstatic.com',
         "img-src 'self' data:",

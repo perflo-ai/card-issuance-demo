@@ -433,6 +433,7 @@ export function createMockPerflo(options: MockOptions) {
             ...base,
             status: 'payment_required',
             frame_url: frameUrl('top-up', frame.id),
+            client_secret: frame.id,
             amount_due: centsToApiAmount(frame.amountCents as number),
           },
         };
@@ -441,7 +442,13 @@ export function createMockPerflo(options: MockOptions) {
         const login = logins.get(order.loginId as string) as MLogin;
         return {
           status: 202,
-          body: { ...base, status: 'login_required', login_id: login.loginId, login_url: frameUrl('setup', login.frameId) },
+          body: {
+            ...base,
+            status: 'login_required',
+            login_id: login.loginId,
+            login_url: frameUrl('setup', login.frameId),
+            client_secret: login.frameId,
+          },
         };
       }
       case 'identity_check_required': {
@@ -677,6 +684,7 @@ export function createMockPerflo(options: MockOptions) {
       status: 'login_required',
       login_id: login.loginId,
       login_url: frameUrl('setup', login.frameId),
+      client_secret: login.frameId,
       expires_at: new Date(login.expiresAt).toISOString(),
     });
   });
@@ -741,6 +749,7 @@ export function createMockPerflo(options: MockOptions) {
     res.status(201).json({
       top_up_id: topUpId,
       frame_url: frameUrl('top-up', frame.id),
+      client_secret: frame.id,
       amount: cents === null ? null : centsToApiAmount(cents),
       expires_at: new Date(frame.expiresAt).toISOString(),
     });
@@ -749,7 +758,11 @@ export function createMockPerflo(options: MockOptions) {
   v2.post('/users/:userId/limits-link', (req, res) => {
     const user = userFromToken(req, req.params.userId);
     const frame = newFrame('limits', user.userId);
-    res.status(201).json({ frame_url: frameUrl('limits', frame.id), expires_at: new Date(frame.expiresAt).toISOString() });
+    res.status(201).json({
+      frame_url: frameUrl('limits', frame.id),
+      client_secret: frame.id,
+      expires_at: new Date(frame.expiresAt).toISOString(),
+    });
   });
 
   const orderBody = z.object({

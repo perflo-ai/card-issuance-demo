@@ -1,4 +1,18 @@
-import type { AccountView, CardDetailsView, DemoConfigView, LinkStatus, LogEntry, MeView, Notice, OrderView } from '../../server/views';
+import type {
+  AccountView,
+  CardDetailsView,
+  DemoConfigView,
+  LinkStatus,
+  LogEntry,
+  LookId,
+  MeView,
+  Notice,
+  OrderView,
+  SignInView,
+} from '../../server/views';
+
+/** A page link answer: the link, and the client_secret Perflo.js opens it with when Perflo sent one. */
+type PageLink = { frameUrl: string; clientSecret?: string };
 
 export class ApiError extends Error {
   constructor(
@@ -79,8 +93,11 @@ export const api = {
   frameEvent: (event: FrameEventPayload) => request<{ link?: LinkStatus }>('POST', '/demo/frame-events', event),
   refreshLink: () => request<{ link: LinkStatus }>('POST', '/demo/link/refresh'),
   account: () => request<{ linked: false } | { linked: true; account: AccountView }>('GET', '/demo/account'),
-  limitsLink: () => request<{ frameUrl: string }>('POST', '/demo/limits-link'),
-  topUp: (amount?: string) => request<{ frameUrl: string }>('POST', '/demo/top-ups', amount ? { amount } : {}),
+  limitsLink: () => request<PageLink>('POST', '/demo/limits-link'),
+  topUp: (amount?: string) => request<PageLink>('POST', '/demo/top-ups', amount ? { amount } : {}),
+  /** Only the look's id goes to Tiny's server; what Perflo is sent for it is decided there. */
+  look: (look: LookId) => request<{ user: MeView }>('POST', '/demo/look', { look }),
+  signIn: () => request<SignInView>('POST', '/demo/sign-in'),
   cardDetails: (perfloOrderId: string) =>
     request<{ card: CardDetailsView }>('POST', `/demo/orders/${encodeURIComponent(perfloOrderId)}/card-details`),
   cancelCard: (perfloOrderId: string) =>
