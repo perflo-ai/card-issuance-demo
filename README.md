@@ -59,26 +59,15 @@ Things to try, in order:
    right there in the chat: the frame asks for your email and the code (test code **123456**), then for your
    limits.
 3. Your balance is empty, so the order asks you to add money. Pay in the frame (test payment, no card).
-4. The one-time card is created and Tiny checks out. You see only the last 4 digits, the expiry and the card
+4. The card is ready and Tiny checks out. You see only the last 4 digits, the expiry and the card
    limit; the card is spent at the mock shop and the order shows as paid.
 5. `book the 150.00 hotel on united.com`: orders above $100 show "Getting your card ready" first.
 6. Once your orders pass $200 in total, an identity check is asked for: open it, finish it, then "try again".
 7. `buy me $2600 worth of chairs on amazon` is declined in plain words, and so is anything above your per-order limit.
 8. Test controls in the side panel:
-   - **Stop at the checkout page**: the card stays open, so you can **Cancel card** and see the money return.
+   - **Stop at the checkout page**: the order stays open, so you can **Cancel order** and see the money return.
    - **Turn off Tiny's access**: your next order asks you to sign in again, then continues by itself.
 9. **Add money** and **Change limits** in the side panel open Perflo's frames directly.
-10. Card reuse: restart with `MOCK_REUSE_CARDS=true` and the mock answers like a partner in reuse mode. Every
-    order within a card's 12 hours comes back on the same card (no second card fee). A charge may use the money
-    of every open order on the card and pays the oldest open order first, so with **Stop at the checkout page**
-    on for the first order, the next checkout shows as paid on that first order. Paying leaves the money on the
-    card, cancelling one order leaves the card open for the others, and the card closes at its 12 hours,
-    returning what is left. Every order answer says which mode it was placed under (`one_time`), so the
-    card is "Card" from the first order on, not "One-time card"; later orders say "Same card as your last
-    order", the Payments panel shows the card once (grouped by its `card_id`) with what its open orders are
-    for together, and each order's cancel button says **Cancel order**. Against a Perflo that does not send
-    `one_time` or the open cards' `card_id` yet, Tiny falls back to reading the cards it was given: the first
-    order on a card shows "One-time card" until a second one lands on it.
 
 Each order in the chat lists its steps (identity check and adding money only when the order asked for them)
 and says what Tiny is doing or waiting for right now, from the statuses payments returned.
@@ -89,7 +78,7 @@ lines after each request the page makes and when the server says it wrote some, 
 
 Mock rules (illustrative numbers from the SPEC, not production values): card load = max($15, order x 1.033 +
 $0.25), card fee $1; orders above $100 issue after about 3 seconds; identity check above $200 of total card
-spending; cards up to $2,500; partner cap $10,000 per rolling 24 hours; cards expire after 12 hours.
+spending; cards up to $2,500; partner cap $10,000 per rolling 24 hours.
 
 ## Live mode (a real Perflo backend)
 
@@ -125,13 +114,12 @@ only, retries included. Put the new one in `PERFLO_WEBHOOK_SECRET` and restart. 
 are not lost: Perflo keeps trying each one for 24 hours, and Tiny recognises any it already handled.
 
 In live mode Tiny never buys anything: there is no real shop. After the card details are read, it fills a
-checkout form in memory and stops, and says so in the chat. The card stays open until you cancel it or it
-expires after 12 hours, and unused money goes back to the balance either way. A live order still moves
-real money from the balance onto the card, so use test accounts.
+checkout form in memory and stops, and says so in the chat. Cancel the order to send its unspent money back
+to the balance. A live order still moves real money from the balance onto the card, so use test accounts.
 
 The right panel has two tabs. **Payments** is the balance, limits and money controls. **Orders** lists every
 order sent to payments, newest first, with its status, what was paid or returned, and for an open card the
-card itself (number and security code hidden until "Show card details") and a Cancel card button.
+card itself (number and security code hidden until "Show card details") and a Cancel order button.
 
 Frames from an `http://localhost` backend embedded in the https demo page are mixed content. Chrome and
 Firefox treat `localhost` as trustworthy; Safari may block them. This was not verified in a browser.
@@ -258,9 +246,9 @@ Every call goes to `PERFLO_API_BASE` (`https://api.perflo.ai` in production). Th
   it (nothing in the query is read), it is closed when that session signs out or linking replaces it (the
   page opens it again with its new cookie), the session is checked again before every message, and a
   request another site started (`Sec-Fetch-Site` other than `same-origin`) is refused.
-- **Cancel card**: `POST /checkout/orders/{id}/cancel` is safe to send again (a cancelled order answers what was
-  recorded). While it answers 503 (payments busy, for example the card issuer briefly busy while it closes
-  the card), or no answer comes in time, the page stays on "Cancelling..." and sends it again after 3, 6, 12,
+- **Cancel order**: `POST /checkout/orders/{id}/cancel` is safe to send again (a cancelled order answers what was
+  recorded). While it answers 503 (payments busy, for example the card issuer briefly busy), or no answer
+  comes in time, the page stays on "Cancelling..." and sends it again after 3, 6, 12,
   then every 20 seconds (longer if `Retry-After` asks), for about two minutes, then says calmly that it is
   taking longer and offers "Check again". The log shows a repeated refusal once. Any other refusal (the
   order already finished) is shown as it is. Logic in `web/src/cancel.ts`.

@@ -4,7 +4,7 @@ import { pageVisibility, useOnMount } from './browser';
 import { cancelUntilDone } from './cancel';
 import { CardDetails } from './CardDetails';
 import { cardUse } from './cards';
-import { CANCEL_SLOW_TEXT, cancelLabel, cardName, money, phaseLabel, returnedLine, when } from './copy';
+import { CANCEL_LABEL, CANCEL_SLOW_TEXT, CARD_NAME, money, phaseLabel, returnedLine, when } from './copy';
 import { formatUsd } from '../../server/money';
 import type { OrderView } from '../../server/views';
 
@@ -80,7 +80,7 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
                 </p>
                 {last4 && order.phase !== 'ready' && (
                   <p className="muted small">
-                    {cardName(use.reusable)} .... {last4}
+                    {CARD_NAME} .... {last4}
                   </p>
                 )}
                 {order.amountSpent && <p className="muted small">Paid {money(order.amountSpent)}</p>}
@@ -100,7 +100,7 @@ export function Orders({ orders, error, onRefresh, onOrder, onAccountChanged }: 
                         ? 'Cancelling...'
                         : slowCancel === order.perfloOrderId
                           ? 'Check again'
-                          : cancelLabel(use.reusable)}
+                          : CANCEL_LABEL}
                     </button>
                     {slowCancel === order.perfloOrderId && cancelling === null && (
                       <p className="muted small" role="status">

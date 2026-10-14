@@ -39,8 +39,6 @@ export interface OpenCardRow {
   last4: string;
   /** What its open orders are for together (API amount). */
   total: string;
-  /** The latest end of its orders. */
-  expiresAt: string;
   /** Payments' ids of its open orders, as payments listed them. */
   orderIds: string[];
   /** Not a one-time card: cancelling one of its orders leaves it open. */
@@ -67,7 +65,6 @@ export function openCardRows(openCards: AccountView['open_cards'], orders: reado
         key,
         last4: open.last4,
         total: open.card_limit,
-        expiresAt: open.expires_at,
         orderIds: [open.order_id],
         reusable,
         limits: [open.card_limit],
@@ -79,7 +76,6 @@ export function openCardRows(openCards: AccountView['open_cards'], orders: reado
     row.total = total(row.limits);
     // Two open orders on one card: it is not a one-time card, whatever is known about either order.
     row.reusable = true;
-    if (Date.parse(open.expires_at) > Date.parse(row.expiresAt)) row.expiresAt = open.expires_at;
   }
   return [...rows.values()].map(({ limits: _limits, ...row }) => row);
 }

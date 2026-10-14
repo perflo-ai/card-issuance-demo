@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { nextStep, recordAnswer, TERMINAL_STATUSES, toView, withoutRevealLink } from '../server/orderState.js';
-import type { OrderResponse } from '../server/perfloApi.js';
+import { accountResponse, orderResponse, type OrderResponse } from '../server/perfloApi.js';
 import type { CheckoutSummary, DemoOrder, DemoUser } from '../server/store.js';
 import { redact } from '../server/redact.js';
 
@@ -49,7 +49,7 @@ const ready: OrderResponse = {
 
 describe('every SPEC 4 order status maps to a browser view', () => {
   const cases: Array<[OrderResponse, Record<string, unknown>]> = [
-    [ready, { phase: 'ready', cardId: 'card_1', cardLast4: '4417', cardLimit: '412.80', cardExpiresAt: '2026-10-07T12:00:00Z' }],
+    [ready, { phase: 'ready', cardId: 'card_1', cardLast4: '4417', cardLimit: '412.80' }],
     [
       { order_id: 'ord_1', status: 'payment_required', frame_url: 'https://p.example/frames/top-up?session=fs_1', amount_due: '417.80' },
       { phase: 'payment_required', frameUrl: 'https://p.example/frames/top-up?session=fs_1', amountDue: '417.80' },
@@ -106,6 +106,27 @@ describe('every SPEC 4 order status maps to a browser view', () => {
   });
 });
 
+describe('expiry fields Perflo sends as null', () => {
+  it('a ready answer with card_expires_at null is read like any other', () => {
+    const parsed = orderResponse.parse({ ...ready, card_expires_at: null });
+    const stored = order();
+    recordAnswer(stored, parsed);
+    expect(toView(stored, user())).toMatchObject({ phase: 'ready', cardId: 'card_1', cardLast4: '4417', cardLimit: '412.80' });
+  });
+
+  it('an open card with expires_at null is read like any other', () => {
+    const money = { amount: '10.00', currency: 'USD' };
+    const account = {
+      user_id: 'usr_1',
+      balance: money,
+      limits: { per_order: money, per_month: money, spent_this_month: money, remaining_this_month: money },
+      identity_check: { required_above: '200.00', status: 'not_required' },
+      open_cards: [{ order_id: 'ord_1', card_id: 'card_1', last4: '4417', card_limit: '10.00', expires_at: null }],
+    };
+    expect(accountResponse.safeParse(account).success).toBe(true);
+  });
+});
+
 describe('the card stays known after the order moves on', () => {
   it('a later answer that names no card keeps the card the ready answer named', () => {
     const stored = order();
@@ -116,7 +137,6 @@ describe('the card stays known after the order moves on', () => {
       phase: 'completed',
       cardId: 'card_1',
       cardLast4: '4417',
-      cardExpiresAt: '2026-10-07T12:00:00Z',
     });
   });
 

@@ -58,9 +58,7 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
   };
   if (order.state === 'draft') return base;
   // The card stays known after the order moves on (see recordAnswer); a ready answer below names it too.
-  const card: Partial<OrderView> = order.card
-    ? { cardId: order.card.cardId, cardLast4: order.card.last4, cardExpiresAt: order.card.expiresAt }
-    : {};
+  const card: Partial<OrderView> = order.card ? { cardId: order.card.cardId, cardLast4: order.card.last4 } : {};
   if (order.state === 'discarded') return { ...base, phase: 'discarded' };
 
   const last = order.last;
@@ -82,7 +80,6 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
         cardId: last.card_id,
         cardLast4: last.last4,
         cardLimit: last.card_limit,
-        cardExpiresAt: last.card_expires_at,
         ...(order.checkout ? { checkout: order.checkout } : {}),
       };
     case 'payment_required':

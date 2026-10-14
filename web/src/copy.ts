@@ -16,12 +16,8 @@ export function money(amount: string): string {
   }
 }
 
-/**
- * What went back to the balance after an order: the amount once it is known, or, while a reused card is
- * still open (null), that its unused money comes back when the card closes. Nothing for nothing returned.
- */
+/** What went back to the balance after an order, once Perflo states an amount. Nothing for nothing returned. */
 export function returnedLine(amountReturned: string | null | undefined): string | null {
-  if (amountReturned === null) return 'Unused money comes back when the card closes.';
   return amountReturned && amountReturned !== '0.00' ? `${money(amountReturned)} went back to your balance.` : null;
 }
 
@@ -150,21 +146,14 @@ export function stalledText(waiting: Waiting): string {
   }
 }
 
-/**
- * What a card is called: "One-time card", or just "Card" for one the partner reuses for the person's
- * orders until it expires (see cards.ts).
- */
-export function cardName(reusable: boolean): string {
-  return reusable ? 'Card' : 'One-time card';
-}
+/** What a card is called, wherever it is shown. */
+export const CARD_NAME = 'Card';
 
 /** On the card, for an order placed on the same card as an earlier one. */
 export const SAME_CARD_TEXT = 'Same card as your last order';
 
-/** The cancel button next to an open order. On a reused card it cancels this order only; the card stays open. */
-export function cancelLabel(reusable: boolean): string {
-  return reusable ? 'Cancel order' : 'Cancel card';
-}
+/** The cancel button next to an open order. It cancels this order; the card stays open. */
+export const CANCEL_LABEL = 'Cancel order';
 
 /** Said when a card's cancel has not gone through after about two minutes of trying, next to "Check again". */
 export const CANCEL_SLOW_TEXT = 'Cancelling is taking longer than usual. Your money will come back on its own; check again in a minute.';
