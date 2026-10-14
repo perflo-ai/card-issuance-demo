@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { canPay, elementProblem, EXPIRED_TEXT, isExpired, LOAD_FAILED_TEXT } from '../web/src/elements.js';
+import { canPay, elementProblem, EXPIRED_TEXT, isExpired, isRecording, LOAD_FAILED_TEXT } from '../web/src/elements.js';
 import { settleSignIn } from '../web/src/signIn.js';
 import type { LinkStatus } from '../server/views.js';
 
 describe('Pay on the UI elements page', () => {
-  const ready = { amountComplete: true, paymentComplete: true, paying: false, paid: false };
+  const ready = { amountComplete: true, paymentComplete: true, paying: false, paid: false, recording: false };
 
   it('is pressable only when the amount and the payment both say complete', () => {
     expect(canPay(ready)).toBe(true);
@@ -15,6 +15,17 @@ describe('Pay on the UI elements page', () => {
   it('cannot be pressed twice, nor again once the money was added', () => {
     expect(canPay({ ...ready, paying: true })).toBe(false);
     expect(canPay({ ...ready, paid: true })).toBe(false);
+  });
+
+  it('is not offered again while a payment that went through is still being recorded', () => {
+    // Perflo.js's own words for this, from confirmPayment().
+    const words =
+      'Your card payment went through, but it is taking longer than usual to show here. Please wait a few minutes and do not pay again.';
+    const recordingError = { code: 'payment_recording', message: words };
+    expect(isRecording(recordingError)).toBe(true);
+    expect(elementProblem(recordingError)).toBe(words);
+    expect(canPay({ ...ready, recording: true })).toBe(false);
+    expect(isRecording({ code: 'payment_failed', message: 'The payment did not go through.' })).toBe(false);
   });
 });
 

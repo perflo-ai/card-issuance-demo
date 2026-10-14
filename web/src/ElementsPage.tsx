@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { api } from './api';
 import { useOnMount } from './browser';
-import { canPay, elementProblem, isExpired, LOAD_FAILED_TEXT, NOT_OFFERED_TEXT } from './elements';
+import { canPay, elementProblem, isExpired, isRecording, LOAD_FAILED_TEXT, NOT_OFFERED_TEXT } from './elements';
 import { untilConnected } from './live';
 import { hasPerfloJs, loadPerflo, type ElementError, type PerfloElement, type PerfloElements, type Theme } from './perflo';
 import { stalledText } from './copy';
@@ -338,6 +338,8 @@ function AddMoney({ themeNow, register, onAccountChanged }: PartProps & { onAcco
   const [paymentComplete, setPaymentComplete] = useState(false);
   const [paying, setPaying] = useState(false);
   const [paid, setPaid] = useState(false);
+  /** Perflo's words while a card payment that went through has not shown up yet; null otherwise. */
+  const [recording, setRecording] = useState<string | null>(null);
   const [problem, setProblem] = useState('');
   const amountBox = useRef<HTMLDivElement>(null);
   const paymentBox = useRef<HTMLDivElement>(null);
@@ -351,6 +353,7 @@ function AddMoney({ themeNow, register, onAccountChanged }: PartProps & { onAcco
     setAmountComplete(false);
     setPaymentComplete(false);
     setPaid(false);
+    setRecording(null);
     try {
       const link = await api.topUp();
       if (link.clientSecret) setSecret(link.clientSecret);
@@ -400,6 +403,12 @@ function AddMoney({ themeNow, register, onAccountChanged }: PartProps & { onAcco
     setPaying(true);
     const result = await group.current.confirmPayment();
     setPaying(false);
+    if (result.error && isRecording(result.error)) {
+      // The card was charged; Perflo is still recording it. No Pay again: the live feed updates the
+      // balance once it lands, as for any other top-up.
+      setRecording(elementProblem(result.error));
+      return;
+    }
     if (result.error) {
       refused(result.error);
       return;
@@ -409,6 +418,7 @@ function AddMoney({ themeNow, register, onAccountChanged }: PartProps & { onAcco
   };
 
   const showing = secret !== null && !expired;
+  const payState = { amountComplete, paymentComplete, paying, paid, recording: recording !== null };
   return (
     <div className="elements-steps">
       <section aria-labelledby="add-money-title">
@@ -418,10 +428,15 @@ function AddMoney({ themeNow, register, onAccountChanged }: PartProps & { onAcco
         {unavailable && <p className="muted">{NOT_OFFERED_TEXT}</p>}
         <div ref={amountBox} hidden={!showing} />
         <div ref={paymentBox} hidden={!showing || paid} />
-        {showing && !paid && (
-          <button className="primary" disabled={!canPay({ amountComplete, paymentComplete, paying, paid })} onClick={() => void pay()}>
+        {showing && !paid && !payState.recording && (
+          <button className="primary" disabled={!canPay(payState)} onClick={() => void pay()}>
             {paying ? 'Paying...' : 'Pay'}
           </button>
+        )}
+        {recording !== null && (
+          <p className="working" role="status">
+            {recording}
+          </p>
         )}
         {paid && (
           <div className="row">

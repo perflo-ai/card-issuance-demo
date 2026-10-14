@@ -19,11 +19,13 @@ export interface PayState {
   paying: boolean;
   /** The money was added; a new payment needs a new page. */
   paid: boolean;
+  /** The card payment went through but has not shown up yet: paying again would pay twice. */
+  recording: boolean;
 }
 
 /** Pay only when both elements say they are complete, and once per press. */
 export function canPay(state: PayState): boolean {
-  return state.amountComplete && state.paymentComplete && !state.paying && !state.paid;
+  return state.amountComplete && state.paymentComplete && !state.paying && !state.paid && !state.recording;
 }
 
 export const LOAD_FAILED_TEXT = 'This part of the page could not load. Reload the page and try again.';
@@ -67,4 +69,12 @@ export function elementProblem(error: ElementError): string {
 /** True when the refusal means the page's session is over, so the person starts again. */
 export function isExpired(error: ElementError): boolean {
   return error.code === 'session_expired';
+}
+
+/**
+ * True when the card payment went through but Perflo has not shown it yet. Not a failure: the person
+ * reads Perflo's words (wait, do not pay again) and is not offered Pay again.
+ */
+export function isRecording(error: ElementError): boolean {
+  return error.code === 'payment_recording';
 }
