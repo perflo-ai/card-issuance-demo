@@ -52,6 +52,8 @@ export interface PerfloElements {
 export interface PerfloEmbeddedPage {
   mount(target: HTMLElement): PerfloEmbeddedPage;
   destroy(): void;
+  /** The page could not open, for example `session_expired` once its client_secret is past its 30 minutes. */
+  on(event: 'loaderror', handler: (event: { error: ElementError }) => void): PerfloEmbeddedPage;
 }
 
 export interface PerfloInstance {

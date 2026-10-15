@@ -170,6 +170,11 @@ export interface MockOptions {
   reuseCards?: boolean;
   /** Where to send webhooks and the secret to sign them with. Unset: no webhooks are sent. */
   webhook?: { url: string; secret: string; fetchImpl?: typeof fetch };
+  /**
+   * The mock's clock (epoch ms), which every lifetime it keeps is measured on: sign-ins and pages (30
+   * minutes, like Perflo), cards, card links, orders. Tests move it forward; default: the real time.
+   */
+  now?: () => number;
 }
 
 /** How often the mock moves orders on by itself and announces changes (stands in for bapi's sweep). */
@@ -192,6 +197,7 @@ const amountString = z.string().refine(isApiAmount, 'amount must have two decima
 
 export function createMockPerflo(options: MockOptions) {
   const slowIssueMs = options.slowIssueMs ?? 3000;
+  const now = options.now ?? (() => Date.now());
   const users = new Map<string, MUser>();
   const tokens = new Map<string, string>();
   /** Tokens whose grant the person revoked: orders with them answer login_required (SPEC 4). */
@@ -220,7 +226,7 @@ export function createMockPerflo(options: MockOptions) {
       step: purpose === 'setup' ? 'login' : purpose === 'limits' ? 'limits' : 'top_up',
       loggedIn: false,
       topUpId: null,
-      expiresAt: Date.now() + FRAME_TTL_MS,
+      expiresAt: now() + FRAME_TTL_MS,
       ...extra,
     };
     frames.set(frame.id, frame);
@@ -235,7 +241,7 @@ export function createMockPerflo(options: MockOptions) {
       userId: user.userId,
       status: 'pending',
       tokenDelivered: false,
-      expiresAt: Date.now() + LOGIN_TTL_MS,
+      expiresAt: now() + LOGIN_TTL_MS,
       frameId: frame.id,
       orderId,
     };
@@ -252,8 +258,8 @@ export function createMockPerflo(options: MockOptions) {
   }
 
   const monthSpent = (userId: string) =>
-    spends.filter((s) => s.userId === userId && s.at > Date.now() - MONTH_MS).reduce((sum, s) => sum + s.cents, 0);
-  const partnerDaySpent = () => spends.filter((s) => s.at > Date.now() - DAY_MS).reduce((sum, s) => sum + s.cents, 0);
+    spends.filter((s) => s.userId === userId && s.at > now() - MONTH_MS).reduce((sum, s) => sum + s.cents, 0);
+  const partnerDaySpent = () => spends.filter((s) => s.at > now() - DAY_MS).reduce((sum, s) => sum + s.cents, 0);
   const cardSpendTotal = (userId: string) =>
     [...orders.values()]
       .filter((o) => o.userId === userId && (o.status === 'issuing' || o.status === 'ready' || o.status === 'completed'))
@@ -262,14 +268,14 @@ export function createMockPerflo(options: MockOptions) {
   /** The person's card that a new order goes onto in reuse mode: open, and not yet at its 12 hours. */
   function reusableCard(userId: string): MCard | null {
     for (const o of orders.values()) {
-      if (o.userId === userId && o.card?.reusable && !o.card.closed && o.card.expiresAt > Date.now()) return o.card;
+      if (o.userId === userId && o.card?.reusable && !o.card.closed && o.card.expiresAt > now()) return o.card;
     }
     return null;
   }
 
   function newCard(): MCard {
     const number = `4${String(randomInt(0, 10 ** 9)).padStart(9, '0')}${String(randomInt(0, 10 ** 6)).padStart(6, '0')}`;
-    const expiry = new Date(Date.now() + 3 * 365 * DAY_MS);
+    const expiry = new Date(now() + 3 * 365 * DAY_MS);
     return {
       cardId: id('card_'),
       number,
@@ -277,7 +283,7 @@ export function createMockPerflo(options: MockOptions) {
       expMonth: String(expiry.getUTCMonth() + 1).padStart(2, '0'),
       expYear: String(expiry.getUTCFullYear()),
       last4: number.slice(-4),
-      expiresAt: Date.now() + CARD_TTL_MS,
+      expiresAt: now() + CARD_TTL_MS,
       reusable: options.reuseCards === true,
       closed: false,
     };
@@ -304,7 +310,7 @@ export function createMockPerflo(options: MockOptions) {
         card_id: card.cardId,
         last4: card.last4,
         card_expires_at: new Date(card.expiresAt).toISOString(),
-        closed_at: new Date().toISOString(),
+        closed_at: new Date(now()).toISOString(),
         orders: onCard.map((o) => {
           const done = o.status === 'completed' || o.status === 'cancelled' || o.status === 'expired';
           return {
@@ -330,7 +336,9 @@ export function createMockPerflo(options: MockOptions) {
   function evaluate(order: MOrder): void {
     const user = users.get(order.userId) as MUser;
     if (!user.grant || !user.token) {
-      if (order.status !== 'awaiting_login' || !order.loginId || !isLoginLive(order.loginId)) {
+      // Like bapi: an order opens one sign-in when it starts waiting, and keeps naming it after it has
+      // ended (bapi's GET and sweep never renew it). Signing in on any new sign-in moves the order on.
+      if (order.status !== 'awaiting_login' || !order.loginId) {
         order.loginId = newLogin(user, order.orderId).loginId;
       }
       order.status = 'awaiting_login';
@@ -360,44 +368,39 @@ export function createMockPerflo(options: MockOptions) {
     if (user.balanceCents < totalCents) {
       const due = totalCents - user.balanceCents;
       const current = order.frameId ? frames.get(order.frameId) : undefined;
-      if (!current || current.expiresAt < Date.now() || current.step === 'done' || current.amountCents !== due) {
+      if (!current || current.expiresAt < now() || current.step === 'done' || current.amountCents !== due) {
         order.frameId = newFrame('top-up', user.userId, { orderId: order.orderId, amountCents: due }).id;
       }
       order.status = 'awaiting_payment';
       return;
     }
     user.balanceCents -= totalCents;
-    spends.push({ userId: user.userId, at: Date.now(), cents: order.amountCents });
+    spends.push({ userId: user.userId, at: now(), cents: order.amountCents });
     order.loadCents = price.loadCents;
     order.card = reused ?? newCard();
     if (order.amountCents > MOCK_SLOW_ISSUE_ABOVE_CENTS) {
       order.status = 'issuing';
-      order.readyAt = Date.now() + slowIssueMs;
+      order.readyAt = now() + slowIssueMs;
     } else {
       order.status = 'ready';
     }
   }
 
-  function isLoginLive(loginId: string): boolean {
-    const login = logins.get(loginId);
-    return !!login && login.status === 'pending' && login.expiresAt > Date.now();
-  }
-
   /** Time-driven changes, applied whenever an order is read (stands in for bapi's sweep and ms-card's cron). */
   function refresh(order: MOrder): void {
-    if (order.status === 'issuing' && order.readyAt !== null && Date.now() >= order.readyAt) {
+    if (order.status === 'issuing' && order.readyAt !== null && now() >= order.readyAt) {
       order.status = 'ready';
     }
-    if (order.card && !order.card.closed && Date.now() > order.card.expiresAt) closeCard(order.card);
+    if (order.card && !order.card.closed && now() > order.card.expiresAt) closeCard(order.card);
     if (order.status === 'awaiting_payment' || order.status === 'identity_check_required' || order.status === 'awaiting_login') {
-      if (Date.now() - order.createdAt < DAY_MS) evaluate(order);
+      if (now() - order.createdAt < DAY_MS) evaluate(order);
     }
   }
 
   function revealLink(order: MOrder): { reveal_url: string; reveal_expires_at: string } {
     const card = order.card as MCard;
     const token = randomBytes(32).toString('base64url');
-    const expiresAt = Date.now() + REVEAL_TTL_MS;
+    const expiresAt = now() + REVEAL_TTL_MS;
     reveals.set(token, { orderId: order.orderId, expiresAt, consumed: false });
     return {
       reveal_url: `${options.selfOrigin}/mock-relay/partner-cards/${card.cardId}/sensitive?t=${token}`,
@@ -561,12 +564,12 @@ export function createMockPerflo(options: MockOptions) {
       const connected = user.grant !== null && user.token !== null;
       const key = `user:${user.userId}`;
       const before = announced.get(key);
-      const now = connected ? 'connected' : 'disconnected';
-      if (before === now) continue;
-      announced.set(key, now);
+      const state = connected ? 'connected' : 'disconnected';
+      if (before === state) continue;
+      announced.set(key, state);
       // A person who was never connected is not announced as disconnected.
       if (before === undefined && !connected) continue;
-      enqueue(`user.${now}`, { user_id: user.userId, external_user_id: user.externalUserId, status: now });
+      enqueue(`user.${state}`, { user_id: user.userId, external_user_id: user.externalUserId, status: state });
     }
   }
 
@@ -693,7 +696,7 @@ export function createMockPerflo(options: MockOptions) {
     const login = logins.get(req.params.loginId);
     if (!login) throw new HttpError(404, 'not_found', 'That sign-in was not found.');
     if (login.status === 'pending') {
-      return res.json({ status: login.expiresAt > Date.now() ? 'pending' : 'expired' });
+      return res.json({ status: login.expiresAt > now() ? 'pending' : 'expired' });
     }
     const user = users.get(login.userId) as MUser;
     if (!login.tokenDelivered && user.token) {
@@ -807,7 +810,7 @@ export function createMockPerflo(options: MockOptions) {
       merchant: body.data.merchant,
       amountCents: valid ? apiAmountToCents(body.data.amount) : 0,
       status: 'declined',
-      createdAt: Date.now(),
+      createdAt: now(),
       card: null,
       loadCents: 0,
       usedCents: 0,
@@ -884,7 +887,7 @@ export function createMockPerflo(options: MockOptions) {
     const sessionId = req.get('x-perflo-frame-session') ?? '';
     const frame = /^fs_[A-Za-z0-9_-]{43}$/.test(sessionId) ? frames.get(sessionId) : undefined;
     if (!frame) throw new HttpError(404, 'not_found', 'This link is not valid.');
-    if (frame.expiresAt < Date.now()) throw new HttpError(410, 'frame_expired', 'This link has expired. Go back and ask for a new one.');
+    if (frame.expiresAt < now()) throw new HttpError(410, 'frame_expired', 'This link has expired. Go back and ask for a new one.');
     return frame;
   };
 
@@ -1077,7 +1080,7 @@ export function createMockPerflo(options: MockOptions) {
     const t = typeof req.query.t === 'string' ? req.query.t : '';
     const entry = reveals.get(t);
     const order = entry ? orders.get(entry.orderId) : undefined;
-    if (!entry || entry.consumed || entry.expiresAt < Date.now() || !order || order.card?.cardId !== req.params.cardId) return refuse();
+    if (!entry || entry.consumed || entry.expiresAt < now() || !order || order.card?.cardId !== req.params.cardId) return refuse();
     const signature = verifySignature(req.headers, 'GET', req.originalUrl, Buffer.alloc(0), (partnerId) =>
       partnerId === options.partnerId ? { [options.keyVersion]: options.secret } : null,
     );

@@ -17,3 +17,12 @@ export function readFrameEvent(data: unknown): FrameEventPayload | null {
   }
   return event;
 }
+
+/**
+ * True when a Perflo page says its time is over: its link and client_secret work for 30 minutes. The
+ * page then shows only its own "This page has expired" and Close, so Tiny takes it away and offers to
+ * start again with a fresh one from its server.
+ */
+export function pageExpired(event: FrameEventPayload): boolean {
+  return event.type === 'perflo:error' && event.code === 'frame_expired';
+}

@@ -183,3 +183,8 @@ export const LOOK_LABELS: Readonly<Record<LookId, string>> = {
   flat: 'Flat and light',
   night: 'Dark, with custom inputs',
 };
+
+/** Said when a Perflo page that was open ran out of time (it lasts 30 minutes), beside "Start again". */
+export function pageExpiredText(page: 'payment' | 'limits'): string {
+  return page === 'payment' ? 'This payment page expired.' : 'The page to change your limits expired.';
+}
