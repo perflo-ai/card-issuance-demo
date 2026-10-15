@@ -4,7 +4,7 @@ import { pageVisibility, useFocusWhenClosed, useOnMount, useWhenVisible } from '
 import { cancelUntilDone } from './cancel';
 import { onLive } from './live';
 import { openCardRows } from './cards';
-import { CANCEL_SLOW_TEXT, cancelLabel, identityText, LOOK_LABELS, money, when } from './copy';
+import { CANCEL_SLOW_TEXT, cancelLabel, identityText, LOOK_LABELS, money, pageExpiredText, when } from './copy';
 import { Orders } from './Orders';
 import { hasPerfloJs } from './perflo';
 import { PerfloFrame } from './PerfloFrame';
@@ -52,6 +52,8 @@ export function Panel(props: Props) {
   const [account, setAccount] = useState<AccountView | null>(null);
   const [linked, setLinked] = useState<boolean | null>(null);
   const [frame, setFrame] = useState<OpenFrame>(null);
+  /** The page that ran out of time while it was open (its link lasts 30 minutes), to start again. */
+  const [expired, setExpired] = useState<'limits' | 'top_up' | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<Busy>(null);
   const [savingStop, setSavingStop] = useState(false);
@@ -92,6 +94,7 @@ export function Panel(props: Props) {
 
   const openLimits = async () => {
     setError('');
+    setExpired(null);
     setBusy('limits');
     try {
       setFrame({ kind: 'limits', page: pageOf(await api.limitsLink()) });
@@ -111,6 +114,7 @@ export function Panel(props: Props) {
 
   const openTopUp = async () => {
     setError('');
+    setExpired(null);
     setBusy('top_up');
     try {
       setFrame({ kind: 'top_up', page: pageOf(await api.topUp()) });
@@ -310,9 +314,21 @@ export function Panel(props: Props) {
                   onAccountChanged();
                 }
               }}
+              onExpired={() => {
+                setExpired(frame.kind);
+                setFrame(null);
+              }}
             />
             <button className="link" onClick={() => setFrame(null)}>
               Close
+            </button>
+          </div>
+        )}
+        {expired && !frame && (
+          <div className="problem">
+            <p>{pageExpiredText(expired === 'limits' ? 'limits' : 'payment')}</p>
+            <button className="secondary" disabled={busy !== null} onClick={() => void (expired === 'limits' ? openLimits() : openTopUp())}>
+              Start again
             </button>
           </div>
         )}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFrameEvent } from '../web/src/frameEvents.js';
+import { pageExpired, readFrameEvent } from '../web/src/frameEvents.js';
 
 describe('readFrameEvent (browser side of SPEC 8 postMessage)', () => {
   it('accepts the object payload and keeps only known id fields', () => {
@@ -24,5 +24,14 @@ describe('readFrameEvent (browser side of SPEC 8 postMessage)', () => {
     expect(readFrameEvent({ type: 'perflo:hacked', frame_session_id: 'fs_1' })).toBeNull();
     expect(readFrameEvent({ type: 'perflo:setup_completed' })).toBeNull();
     expect(readFrameEvent(null)).toBeNull();
+  });
+});
+
+describe('pageExpired: a Perflo page says its time is over', () => {
+  it('is true only for the error a page sends when its session ran out', () => {
+    expect(pageExpired({ type: 'perflo:error', frame_session_id: 'fs_1', code: 'frame_expired' })).toBe(true);
+    expect(pageExpired({ type: 'perflo:error', frame_session_id: 'fs_1', code: 'sign_in_failed' })).toBe(false);
+    expect(pageExpired({ type: 'perflo:error', frame_session_id: 'fs_1' })).toBe(false);
+    expect(pageExpired({ type: 'perflo:closed', frame_session_id: 'fs_1', code: 'frame_expired' })).toBe(false);
   });
 });
