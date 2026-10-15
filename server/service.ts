@@ -566,17 +566,20 @@ export class DemoService {
     return pageOf(link);
   }
 
-  async topUpLink(user: DemoUser, amountCents?: number): Promise<PerfloPageView> {
+  /**
+   * Perflo's add money page for exactly the amount the person typed in Tiny (Perflo asks for no amount
+   * on its page), with the amount Perflo says it is for.
+   */
+  async topUpLink(user: DemoUser, amountCents: number): Promise<PerfloPageView & { amount: string }> {
     if (!user.perflo) throw new DemoError('not_linked', 'Payments are not set up yet');
-    const amount = amountCents === undefined ? undefined : centsToApiAmount(amountCents);
     const link = await this.api.createTopUp(
       user.id,
       user.perflo.userId,
       user.perflo.token,
-      amount,
+      centsToApiAmount(amountCents),
       lookFields(user.look ?? DEFAULT_LOOK, 'payment'),
     );
-    return pageOf(link);
+    return { ...pageOf(link), amount: link.amount };
   }
 }
 

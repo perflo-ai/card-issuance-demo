@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type SubmitEvent, type ReactNode } from 'react';
-import { api, type FrameEventPayload } from './api';
-import { pageVisibility, useFocusWhenClosed } from './browser';
+import { usePaymentTab } from './AddMoney';
+import { api } from './api';
+import { pageVisibility } from './browser';
 import { cancelUntilDone } from './cancel';
 import { CardDetails } from './CardDetails';
 import { cardUse, type CardUse } from './cards';
@@ -11,7 +12,6 @@ import {
   declineFallback,
   declineHint,
   money,
-  pageExpiredText,
   returnedLine,
   stalledText,
   stepLabel,
@@ -20,7 +20,6 @@ import {
   type Waiting,
 } from './copy';
 import { onLive } from './live';
-import { PerfloFrame } from './PerfloFrame';
 import { orderSteps, stepOf, type StepKey } from './progress';
 import { SetupFlow } from './Setup';
 import { StepList } from './Steps';
@@ -330,25 +329,14 @@ interface CardProps {
   onLinked: () => void;
 }
 
-/** The Perflo page this order asks the person to open, or null when it has none. */
-function pageOf(order: OrderView): PerfloPageView | null {
-  if (!order.frameUrl) return null;
-  return { url: order.frameUrl, ...(order.clientSecret ? { clientSecret: order.clientSecret } : {}) };
-}
-
 export function OrderCard(props: CardProps) {
   const { order, action, waiting, note, error, perfloOrigin, onAdvance, onExpect } = props;
   const reusable = props.cardUse.reusable;
   /** A reused card is still open while Perflo has no final figure for what goes back (null). */
   const cardOpen = reusable && order.amountReturned === null;
-  const [frameOpen, setFrameOpen] = useState(false);
-  /** The add money page ran out of time while it was open. */
-  const [frameExpired, setFrameExpired] = useState(false);
   const card = useRef<HTMLElement>(null);
-  useFocusWhenClosed(frameOpen, card);
   const amount = formatUsd(order.amountCents);
   const busy = action !== null;
-  const page = pageOf(order);
 
   // A card being made finishes on its own, and Perflo says so: wait for it without asking.
   const expectLatest = useRef(onExpect);
@@ -378,21 +366,23 @@ export function OrderCard(props: CardProps) {
     } else await onAdvance('place');
   };
 
-  /** The add money page: the order is read again first, so the page opened is one Perflo says still works. */
-  const openPayment = async () => {
-    setFrameExpired(false);
-    const latest = await onAdvance('check');
-    if (latest?.phase === 'payment_required' && latest.frameUrl) setFrameOpen(true);
-  };
-
-  const onFrameEvent = (event: FrameEventPayload) => {
-    if (event.type === 'perflo:closed') setFrameOpen(false);
-    if (event.type === 'perflo:top_up_completed' && (!event.order_id || event.order_id === order.perfloOrderId)) {
-      setFrameOpen(false);
+  /**
+   * Adding the money this order is missing, on Perflo's page in a new tab. Paid: Perflo's webhook moves
+   * the order on. A tab closed without a word: the order is read once.
+   */
+  const payment = usePaymentTab({
+    paid: () => {
       props.onAccountChanged();
       onExpect('payment_required', 'money');
-    }
-  };
+    },
+    closed: () => void onAdvance('check'),
+  });
+  /** The order is read again first, so the page opened is one Perflo says still works, for what is still missing. */
+  const openPayment = () =>
+    payment.start(async () => {
+      const latest = await onAdvance('check');
+      return latest?.phase === 'payment_required' && latest.frameUrl ? { url: latest.frameUrl, amount: latest.amountDue ?? '0.00' } : null;
+    });
 
   const header = (
     <div className="order-head">
@@ -470,33 +460,21 @@ export function OrderCard(props: CardProps) {
       body = (
         <>
           <p>Your balance does not cover this yet. Add {money(order.amountDue ?? '0.00')} and I will place the order right away.</p>
-          {frameOpen && page ? (
-            <PerfloFrame
-              page={page}
-              title="Add money"
-              perfloOrigin={perfloOrigin}
-              onEvent={onFrameEvent}
-              onExpired={() => {
-                setFrameOpen(false);
-                setFrameExpired(true);
-              }}
-            />
-          ) : frameExpired ? (
-            <div className="problem">
-              <p>{pageExpiredText('payment')}</p>
-              <button className="secondary" disabled={busy} onClick={() => void openPayment()}>
-                Start again
-              </button>
-            </div>
-          ) : (
+          {payment.spot.kind === 'idle' ? (
             <div className="row">
-              <button className="primary" disabled={busy} onClick={() => void openPayment()}>
+              <button className="primary" disabled={busy} onClick={openPayment}>
                 Add {money(order.amountDue ?? '0.00')}
               </button>
               <button className="secondary" disabled={busy} onClick={() => void onAdvance('check')}>
                 {action === 'check' ? 'Checking...' : 'I already added money'}
               </button>
             </div>
+          ) : null}
+          {payment.view()}
+          {payment.error && (
+            <p className="error" role="alert">
+              {payment.error}
+            </p>
           )}
         </>
       );

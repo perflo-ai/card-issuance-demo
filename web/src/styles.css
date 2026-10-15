@@ -602,6 +602,57 @@ button:disabled {
 select {
   font: inherit;
 }
+/* Add money: Tiny's own amount field. The payment itself opens on Perflo's page in a new tab. */
+.add-money {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+.add-money label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.amount-field {
+  flex: 1;
+  min-width: 120px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+.amount-field:focus-within {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.amount-field input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+}
+.tab-spot {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+.tab-spot p {
+  margin: 0;
+}
+.tab-spot > button {
+  justify-self: start;
+}
+.tab-spot-title {
+  font-weight: 600;
+}
 select.select {
   width: 100%;
   height: 44px;

@@ -274,11 +274,17 @@ describe('no polling left', () => {
     );
 
   it('nothing in Tiny runs on a repeating timer except the live feed keepalive (the mock stands in for Perflo)', () => {
+    const tabCheck = join('web', 'src', 'browser.ts');
     const offenders = [...read('server'), ...read('web/src')]
-      .filter(({ file }) => !file.startsWith(join('server', 'mock')) && file !== join('server', 'live.ts'))
+      .filter(({ file }) => !file.startsWith(join('server', 'mock')) && file !== join('server', 'live.ts') && file !== tabCheck)
       .filter(({ text }) => /setInterval\(/.test(text))
       .map(({ file }) => file);
     expect(offenders).toEqual([]);
+    // The one other timer looks whether the payment tab Tiny opened is still open: the browser's own
+    // state, never a request (a tab closed without a word sends nothing).
+    const check = read('web/src').find(({ file }) => file === tabCheck)?.text ?? '';
+    expect(check).toContain('setInterval(');
+    expect(check).not.toMatch(/\bfetch\(|\bapi\.|^import \{[^}]*\} from '\.\/api'/m);
   });
 
   it('the page never loops reads of an order; the one retry loop left is the cancel, which only repeats the cancel itself', () => {

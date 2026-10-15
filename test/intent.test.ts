@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseOrderMessage } from '../server/intent.js';
-import { apiAmountToCents, centsToApiAmount, formatUsd, parseDecimalToCents } from '../server/money.js';
+import { apiAmountToCents, centsToApiAmount, formatUsd, parseDecimalToCents, readTypedAmount } from '../server/money.js';
 import { chatReply } from '../server/app.js';
 
 describe('parseOrderMessage', () => {
@@ -62,5 +62,19 @@ describe('money', () => {
     expect(() => apiAmountToCents('412.8')).toThrow();
     expect(() => centsToApiAmount(1.5)).toThrow();
     expect(formatUsd(125000)).toBe('$1,250.00');
+  });
+});
+
+describe('readTypedAmount: the amount a person types to add money, in Tiny and on its server', () => {
+  it('takes plain dollar amounts, with or without a dollar sign or cents', () => {
+    expect(readTypedAmount('10')).toEqual({ cents: 1000 });
+    expect(readTypedAmount(' 10.5 ')).toEqual({ cents: 1050 });
+    expect(readTypedAmount('$1,250.00')).toEqual({ cents: 125000 });
+  });
+
+  it('says what is wrong in plain words', () => {
+    for (const empty of ['', '   ', '$']) expect(readTypedAmount(empty)).toEqual({ problem: 'Enter an amount.' });
+    for (const bad of ['0', '0.00', '-5', 'ten', '10.001'])
+      expect(readTypedAmount(bad)).toEqual({ problem: 'Enter an amount above $0.00.' });
   });
 });

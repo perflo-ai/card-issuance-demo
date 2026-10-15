@@ -10,7 +10,7 @@ backends end to end. Local only: this repository has no remote.
   card: each press reads them fresh through a new single-use reveal link, the answer is `no-store`, and
   they are never stored or logged.
 - **Tiny's web app** (`web/`, Vite + React) is a chat in the spirit of the partner's screens 1 to 9. Perflo
-  appears only inside its own frames, embedded in the chat.
+  appears only inside its own frames, embedded in the chat, and on its add money page, which opens in a tab of its own.
 - **A mock Perflo** (`server/mock/`) for `DEMO_MODE=mock`, so the demo runs before the real backends are
   up. It verifies signatures exactly like the backend and follows SPEC sections 3, 4, 8 and 8a.
 
@@ -58,7 +58,8 @@ Things to try, in order:
 2. `buy me $50 worth of headphones on amazon`, then confirm. The first order asks you to **Set up payments**,
    right there in the chat: the frame asks for your email and the code (test code **123456**), then for your
    limits.
-3. Your balance is empty, so the order asks you to add money. Pay in the frame (test payment, no card).
+3. Your balance is empty, so the order asks you to add money for exactly what it is missing. The payment page opens
+   in a new tab (test payment, no card); the order goes ahead when you pay there.
 4. The one-time card is created and Tiny checks out. You see only the last 4 digits, the expiry and the card
    limit; the card is spent at the mock shop and the order shows as paid.
 5. `book the 150.00 hotel on united.com`: orders above $100 show "Getting your card ready" first.
@@ -67,7 +68,8 @@ Things to try, in order:
 8. Test controls in the side panel:
    - **Stop at the checkout page**: the card stays open, so you can **Cancel card** and see the money return.
    - **Turn off Tiny's access**: your next order asks you to sign in again, then continues by itself.
-9. **Add money** and **Change limits** in the side panel open Perflo's frames directly.
+9. **Add money** in the side panel: type the amount in Tiny's own field, and Perflo's payment page for that amount
+   opens in a new tab. **Change limits** opens Perflo's frame in the panel.
 10. Card reuse: restart with `MOCK_REUSE_CARDS=true` and the mock answers like a partner in reuse mode. Every
     order within a card's 12 hours comes back on the same card (no second card fee). A charge may use the money
     of every open order on the card and pays the oldest open order first, so with **Stop at the checkout page**
@@ -148,17 +150,16 @@ Do not deploy this version of the demo before those are deployed to the API it p
 them, Perflo.js does not load and pages that came with no `client_secret` open from their link as before.
 
 - **Embedded pages** (the chat). The flow above, unchanged, with every Perflo page opened through
-  `perflo.embeddedPage({ clientSecret }).mount(...)`: the sign-in page in the chat, the add money page on an order, and
-  Add money and Change limits in the Payments panel. The page sends the same events as before (`perflo:setup_completed`
+  `perflo.embeddedPage({ clientSecret }).mount(...)`: the sign-in page in the chat and Change limits in the Payments
+  panel. Add money is never framed (see "Adding money" below). The page sends the same events as before (`perflo:setup_completed`
   and the rest), and Tiny accepts them only from the window Perflo.js placed, from the Perflo origin.
 - **UI elements** (Tiny's own page). Tiny's own headings and buttons around Perflo's elements:
   1. **Sign in**: the code element, with Tiny's **Send code** and **Verify** buttons (`elements.sendCode()`,
      `elements.verifyCode()`). The code is typed inside the element and never reaches Tiny's page.
   2. **Allow Tiny to pay**: the limits element, shown once the code is verified. The person picks limits and presses
      Allow inside it. When it reports complete, Tiny's server picks up the access token as it does for the embedded page.
-  3. **Add money**: the amount and payment elements, with Tiny's **Pay** button (`elements.confirmPayment()`), enabled
-     only while both report `complete`. The button does not show an amount: the person types it inside the amount
-     element, and it never passes through Tiny's page (the total shows inside the payment element).
+  3. **Add money**: Tiny's own amount field, then Perflo's payment page for that amount in a new tab, exactly as in
+     the Payments panel. Perflo.js has no amount or payment element (it refuses those kinds).
 
   Element errors and load failures are shown in plain words (`web/src/elements.ts`). **Light** and **Dark** call
   `elements.update({ appearance: { theme } })` on every open element group, live. Embedded pages have no `update()`,
@@ -175,10 +176,30 @@ and an order keeps the look it was made with, so a retry with its Idempotency-Ke
 
 **Content Security Policy.** The built app allows `script-src` and `frame-src` for the origin of `PERFLO_API_BASE` and
 nothing else: `https://api.perflo.ai` in production, or whichever develop or staging host the demo is pointed at. No
-host is written into the code. Perflo.js makes no network calls, so `connect-src` stays `'self'`.
+host is written into the code. Perflo.js makes no network calls, so `connect-src` stays `'self'`. `frame-src` is for
+the sign-in and limits pages; the add money page opens in its own tab, so it needs no entry here.
+
+**Adding money** (`web/src/paymentTab.ts`, the one hand-off every top-up goes through). Tiny never builds a money
+input inside Perflo: the person types the amount in Tiny's own field, Tiny's server sends it as `amount` on
+`POST /v1/users/{id}/top-ups` (Perflo answers 422 `amount_required` without one), and the `frame_url` Perflo returns is a
+page for exactly that amount. An order waiting on money hands back its own `frame_url` for exactly what is missing.
+That page refuses to be framed, so Tiny opens it as a tab of its own: a blank tab is opened in the click itself (pop-up
+blockers allow that), then sent to the link once it arrives, and closed if the request fails. If the browser stops
+the tab, Tiny says so and shows an **Open the payment page** link. Meanwhile Tiny shows "Finish adding money in the new
+tab", with **Open the payment page again** and **Cancel**. The page tells Tiny through `window.opener` (which is why
+Tiny sends `Cross-Origin-Opener-Policy: same-origin-allow-popups`): `perflo:top_up_completed` is money added (the
+balance is read again), `perflo:top_up_cancelled` is cancelled, and `perflo:closed` with neither before it is treated
+like a tab closed without a word (it also follows a cancel, and "Back to" on a paid page, so it does not mean
+cancelled); the first of these wins. Messages count only from that tab and from the origin of the link
+Perflo returned (production's add money page is not on the API's host). A tab closed without a word is noticed by
+looking at the tab itself every half second (no request), and the balance, or the order, is then read once. Perflo
+offers a partner no way to cancel a top-up, so Tiny's **Cancel** closes the tab it opened; the page stops its own
+payment.
 
 **Mock mode** has no Perflo.js: pages open from their links as before, the Look picker is hidden and the UI elements
-page says it needs live mode.
+page says it needs live mode. The mock's add money page follows the same rules as Perflo's: it needs an amount, opens
+straight on the payment for it, refuses to be framed, tells the window that opened it, and its X and Cancel ask before
+they cancel.
 
 ## Hosting (Railway or similar)
 

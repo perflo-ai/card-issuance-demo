@@ -86,7 +86,8 @@ interface MLogin {
 }
 
 type Purpose = 'setup' | 'top-up' | 'limits';
-type Step = 'login' | 'limits' | 'top_up' | 'done';
+/** `cancelled`: the person stopped an add money payment on its page; that page takes no payment any more. */
+type Step = 'login' | 'limits' | 'top_up' | 'done' | 'cancelled';
 
 interface MFrame {
   id: string;
@@ -155,6 +156,8 @@ interface MTopUp {
   amountCents: number;
   clientSecret: string;
   paid: boolean;
+  /** Stopped on its page before it was paid: it can no longer be paid. */
+  cancelled: boolean;
 }
 
 export interface MockOptions {
@@ -738,12 +741,17 @@ export function createMockPerflo(options: MockOptions) {
     });
   });
 
+  /**
+   * Like bapi after the add money change: the partner always sends the amount the person typed on its
+   * side, and the page is for exactly that amount (it asks for none). It opens in a tab of its own.
+   */
   v2.post('/users/:userId/top-ups', (req, res) => {
     const user = userFromToken(req, req.params.userId);
     const body = z.object({ amount: amountString.optional() }).safeParse(req.body ?? {});
     if (!body.success) throw new HttpError(400, 'invalid_request', 'The amount is not valid.');
-    const cents = body.data.amount === undefined ? null : apiAmountToCents(body.data.amount);
-    if (cents !== null && (cents <= 0 || cents > MAX_TOP_UP_CENTS)) {
+    if (body.data.amount === undefined) throw new HttpError(422, 'amount_required', 'Say how much money to add.');
+    const cents = apiAmountToCents(body.data.amount);
+    if (cents <= 0 || cents > MAX_TOP_UP_CENTS) {
       throw new HttpError(400, 'invalid_request', 'The amount is not valid.');
     }
     const frame = newFrame('top-up', user.userId, { amountCents: cents });
@@ -753,7 +761,7 @@ export function createMockPerflo(options: MockOptions) {
       top_up_id: topUpId,
       frame_url: frameUrl('top-up', frame.id),
       client_secret: frame.id,
-      amount: cents === null ? null : centsToApiAmount(cents),
+      amount: centsToApiAmount(cents),
       expires_at: new Date(frame.expiresAt).toISOString(),
     });
   });
@@ -905,8 +913,10 @@ export function createMockPerflo(options: MockOptions) {
     if (purpose !== 'setup' && purpose !== 'top-up' && purpose !== 'limits') {
       return res.status(404).type('text/plain').send('Not found');
     }
+    // The add money page opens in a tab of its own and refuses to be framed; sign-in and limits are placed in the partner's page.
+    const ancestors = purpose === 'top-up' ? "'none'" : options.partnerOrigin;
     res
-      .set('Content-Security-Policy', `default-src 'self'; frame-ancestors ${options.partnerOrigin}; base-uri 'none'; form-action 'self'`)
+      .set('Content-Security-Policy', `default-src 'self'; frame-ancestors ${ancestors}; base-uri 'none'; form-action 'self'`)
       .set('Cache-Control', 'no-store')
       .set('Referrer-Policy', 'no-referrer')
       .type('html')
@@ -983,15 +993,21 @@ export function createMockPerflo(options: MockOptions) {
     res.json({ next: frame.step, limits: body.data });
   });
 
+  /** Starts the payment for the page's own amount: the page asks for no amount, and none is accepted here. */
   framesRouter.post('/session/top-up', (req, res) => {
     const frame = liveFrame(req);
+    if (frame.step === 'cancelled') throw new HttpError(409, 'frame_step_invalid', 'This payment was cancelled.');
     if (frame.step !== 'top_up') throw new HttpError(409, 'frame_step_invalid', 'This step is already done.');
-    const body = z.object({ amount: amountString }).safeParse(req.body);
-    const cents = body.success ? apiAmountToCents(body.data.amount) : 0;
-    if (cents <= 0 || cents > MAX_TOP_UP_CENTS) throw new HttpError(400, 'amount_invalid', 'Enter an amount between $0.01 and $10,000.00.');
-    if (frame.amountCents !== null && frame.orderId && cents < frame.amountCents) {
-      throw new HttpError(400, 'amount_too_low', `This order needs at least ${centsToApiAmount(frame.amountCents)}.`);
+    if (
+      !z
+        .object({})
+        .strict()
+        .safeParse(req.body ?? {}).success
+    ) {
+      throw new HttpError(400, 'invalid_request', 'This page is for one amount only.');
     }
+    const cents = frame.amountCents;
+    if (cents === null) throw new HttpError(409, 'frame_step_invalid', 'This page has no amount to pay.');
     const topUp: MTopUp = {
       topUpId: frame.topUpId ?? id('tu_'),
       frameId: frame.id,
@@ -999,6 +1015,7 @@ export function createMockPerflo(options: MockOptions) {
       amountCents: cents,
       clientSecret: `mock_cs_${randomBytes(24).toString('base64url')}`,
       paid: false,
+      cancelled: false,
     };
     frame.topUpId = topUp.topUpId;
     topUps.set(topUp.topUpId, topUp);
@@ -1008,6 +1025,20 @@ export function createMockPerflo(options: MockOptions) {
       amount: centsToApiAmount(cents),
       publishable_key: 'pk_test_mock',
     });
+  });
+
+  /**
+   * The person stopped the payment on its page (its X or Cancel, after they confirm), as bapi's
+   * /frames/session/top-up/cancel. A payment that already went through is not undone: it answers paid.
+   */
+  framesRouter.post('/session/top-up/cancel', (req, res) => {
+    const frame = liveFrame(req);
+    const topUp = frame.topUpId ? topUps.get(frame.topUpId) : undefined;
+    if (topUp?.paid) return res.json({ status: 'paid' });
+    if (frame.step !== 'top_up' && frame.step !== 'cancelled') throw new HttpError(409, 'frame_step_invalid', 'This step is already done.');
+    if (topUp) topUp.cancelled = true;
+    frame.step = 'cancelled';
+    res.json({ status: 'cancelled' });
   });
 
   framesRouter.post('/session/complete', (req, res) => {
@@ -1063,6 +1094,7 @@ export function createMockPerflo(options: MockOptions) {
     const body = z.object({ client_secret: z.string() }).safeParse(req.body);
     const topUp = body.success ? [...topUps.values()].find((t) => t.clientSecret === body.data.client_secret) : undefined;
     if (!topUp) throw new HttpError(404, 'not_found', 'Payment not found.');
+    if (topUp.cancelled) throw new HttpError(409, 'payment_cancelled', 'This payment was cancelled.');
     if (!topUp.paid) {
       topUp.paid = true;
       (users.get(topUp.userId) as MUser).balanceCents += topUp.amountCents;

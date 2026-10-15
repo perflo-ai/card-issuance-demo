@@ -10,7 +10,7 @@ import type { DemoConfig } from './config.js';
 import type { EventLog } from './eventLog.js';
 import { parseOrderMessage } from './intent.js';
 import { DEFAULT_LOOK } from './looks.js';
-import { formatUsd, parseDecimalToCents } from './money.js';
+import { formatUsd, readTypedAmount } from './money.js';
 import { toView } from './orderState.js';
 import { rateLimit, sameOriginOnly, securityHeaders } from './security.js';
 import { HttpError, toBrowserError } from './errors.js';
@@ -338,21 +338,17 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     res.json({ frameUrl: page.url, ...(page.clientSecret ? { clientSecret: page.clientSecret } : {}) });
   });
 
+  /** Add money: always the amount the person typed in Tiny's own field. Perflo's page asks for none. */
   app.post('/demo/top-ups', async (req, res) => {
     const user = currentUser(req);
     const body = z
       .object({ amount: z.string().max(20).optional() })
       .strict()
       .safeParse(req.body);
-    if (!body.success) throw new HttpError(400, 'Enter an amount.');
-    let cents: number | undefined;
-    if (body.data.amount !== undefined && body.data.amount !== '') {
-      const parsed = parseDecimalToCents(body.data.amount);
-      if (parsed === null || parsed <= 0) throw new HttpError(400, 'Enter an amount above $0.00.');
-      cents = parsed;
-    }
-    const page = await service.topUpLink(user, cents);
-    res.json({ frameUrl: page.url, ...(page.clientSecret ? { clientSecret: page.clientSecret } : {}) });
+    const typed = readTypedAmount(body.success ? (body.data.amount ?? '') : '');
+    if ('problem' in typed) throw new HttpError(400, typed.problem);
+    const page = await service.topUpLink(user, typed.cents);
+    res.json({ frameUrl: page.url, ...(page.clientSecret ? { clientSecret: page.clientSecret } : {}), amount: page.amount });
   });
 
   app.post('/demo/orders/:perfloOrderId/card-details', async (req, res) => {

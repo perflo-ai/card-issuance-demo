@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { AddMoney } from './AddMoney';
 import { api, onRequestSettled } from './api';
 import { pageVisibility, useFocusWhenClosed, useOnMount, useWhenVisible } from './browser';
 import { cancelUntilDone } from './cancel';
@@ -36,7 +37,8 @@ interface Props {
   onMe: (me: MeView) => void;
 }
 
-type OpenFrame = { kind: 'limits' | 'top_up'; page: PerfloPageView } | null;
+/** The one Perflo page placed in the panel: change limits. Add money opens in a tab of its own. */
+type OpenFrame = { kind: 'limits'; page: PerfloPageView } | null;
 
 /** A page link answer from Tiny's server, as the page to open. */
 function pageOf(link: { frameUrl: string; clientSecret?: string }): PerfloPageView {
@@ -45,15 +47,15 @@ function pageOf(link: { frameUrl: string; clientSecret?: string }): PerfloPageVi
 const TABS = ['payments', 'orders'] as const;
 type Tab = (typeof TABS)[number];
 /** What the payments box is doing right now; one thing at a time. */
-type Busy = 'top_up' | 'limits' | 'revoke' | { cancel: string } | null;
+type Busy = 'limits' | 'revoke' | { cancel: string } | null;
 
 export function Panel(props: Props) {
   const { perfloOrigin, mode, refreshKey, limitsRequest, onAccountChanged, me, onMe } = props;
   const [account, setAccount] = useState<AccountView | null>(null);
   const [linked, setLinked] = useState<boolean | null>(null);
   const [frame, setFrame] = useState<OpenFrame>(null);
-  /** The page that ran out of time while it was open (its link lasts 30 minutes), to start again. */
-  const [expired, setExpired] = useState<'limits' | 'top_up' | null>(null);
+  /** The limits page ran out of time while it was open (its link lasts 30 minutes), to start again. */
+  const [expired, setExpired] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<Busy>(null);
   const [savingStop, setSavingStop] = useState(false);
@@ -94,7 +96,7 @@ export function Panel(props: Props) {
 
   const openLimits = async () => {
     setError('');
-    setExpired(null);
+    setExpired(false);
     setBusy('limits');
     try {
       setFrame({ kind: 'limits', page: pageOf(await api.limitsLink()) });
@@ -111,19 +113,6 @@ export function Panel(props: Props) {
     lastLimitsRequest.current = limitsRequest;
     if (linked) void openLimits();
   }, [limitsRequest, linked]);
-
-  const openTopUp = async () => {
-    setError('');
-    setExpired(null);
-    setBusy('top_up');
-    try {
-      setFrame({ kind: 'top_up', page: pageOf(await api.topUp()) });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong. Try again.');
-    } finally {
-      setBusy(null);
-    }
-  };
 
   const cancelCard = async (perfloOrderId: string) => {
     setError('');
@@ -263,10 +252,8 @@ export function Panel(props: Props) {
               <dt>Identity check</dt>
               <dd>{identityText(account.identity_check.status, account.identity_check.required_above)}</dd>
             </dl>
+            <AddMoney id="panel-amount" onAccountChanged={onAccountChanged} />
             <div className="row">
-              <button className="secondary" disabled={busy !== null} onClick={() => void openTopUp()}>
-                {busy === 'top_up' ? 'Opening...' : 'Add money'}
-              </button>
               <button className="secondary" disabled={busy !== null} onClick={() => void openLimits()}>
                 {busy === 'limits' ? 'Opening...' : 'Change limits'}
               </button>
@@ -306,16 +293,14 @@ export function Panel(props: Props) {
           <div className="panel-frame">
             <PerfloFrame
               page={frame.page}
-              title={frame.kind === 'limits' ? 'Change limits' : 'Add money'}
+              title="Change limits"
               perfloOrigin={perfloOrigin}
               onEvent={(event) => {
                 if (event.type === 'perflo:closed') setFrame(null);
-                if (event.type === 'perflo:limits_saved' || event.type === 'perflo:top_up_completed') {
-                  onAccountChanged();
-                }
+                if (event.type === 'perflo:limits_saved') onAccountChanged();
               }}
               onExpired={() => {
-                setExpired(frame.kind);
+                setExpired(true);
                 setFrame(null);
               }}
             />
@@ -326,8 +311,8 @@ export function Panel(props: Props) {
         )}
         {expired && !frame && (
           <div className="problem">
-            <p>{pageExpiredText(expired === 'limits' ? 'limits' : 'payment')}</p>
-            <button className="secondary" disabled={busy !== null} onClick={() => void (expired === 'limits' ? openLimits() : openTopUp())}>
+            <p>{pageExpiredText('limits')}</p>
+            <button className="secondary" disabled={busy !== null} onClick={() => void openLimits()}>
               Start again
             </button>
           </div>

@@ -210,6 +210,9 @@ describe('response headers', () => {
     expect(dev.headers['x-content-type-options']).toBe('nosniff');
     expect(dev.headers['x-frame-options']).toBe('DENY');
     expect(dev.headers['referrer-policy']).toBe('no-referrer');
+    // The add money page opens in a tab of its own and tells Tiny's page when it is done, so the tabs
+    // Tiny opens keep their link back to it. Any other site's window still gets none.
+    expect(dev.headers['cross-origin-opener-policy']).toBe('same-origin-allow-popups');
     expect(dev.headers['content-security-policy']).toBe("frame-ancestors 'none'");
     expect(dev.headers['strict-transport-security']).toBeUndefined();
 

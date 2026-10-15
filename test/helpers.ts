@@ -125,9 +125,11 @@ export async function finishSetup(
   return frameCall(base, frameUrl, 'complete', { step: 'setup' });
 }
 
+/** Pays on an add money page. The page is for one amount (`amount`, checked here); none is typed on it. */
 export async function payInFrame(base: string, frameUrl: string, amount: string) {
-  const topUp = await frameCall(base, frameUrl, 'top-up', { amount });
+  const topUp = await frameCall(base, frameUrl, 'top-up', {});
   if (topUp.status !== 201) throw new Error(`top-up ${topUp.status} ${JSON.stringify(topUp.json)}`);
+  if (topUp.json.amount !== amount) throw new Error(`the page is for ${topUp.json.amount}, not ${amount}`);
   const paid = await fetch(`${base}/mock-stripe/pay`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

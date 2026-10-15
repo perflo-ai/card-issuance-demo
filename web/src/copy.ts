@@ -199,3 +199,17 @@ export const LOOK_LABELS: Readonly<Record<LookId, string>> = {
 export function pageExpiredText(page: 'payment' | 'limits'): string {
   return page === 'payment' ? 'This payment page expired.' : 'The page to change your limits expired.';
 }
+
+/** Add money happens on Perflo's page in a tab of its own; this is what Tiny's page says meanwhile. */
+export const PAYMENT_TAB_TEXT = {
+  opening: 'Opening the payment page...',
+  waitingTitle: 'Finish adding money in the new tab',
+  waiting: (amount: string) => `Adding ${money(amount)}. This updates by itself when you are done.`,
+  reopen: 'Open the payment page again',
+  cancel: 'Cancel',
+  blockedTitle: 'Your browser stopped the new tab',
+  blockedLink: 'Open the payment page',
+  done: 'Money added',
+  cancelled: 'Payment cancelled.',
+  closed: 'The payment page was closed. If you paid, the money shows in your balance.',
+} as const;
