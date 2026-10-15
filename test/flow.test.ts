@@ -6,7 +6,7 @@ import { quote } from '../server/mock/mockPerflo.js';
 import { centsToApiAmount } from '../server/money.js';
 import { PerfloApiError } from '../server/perfloApi.js';
 import type { MeView, OrderView } from '../server/views.js';
-import { finishSetup, makeDemo, payInFrame, startMock, wait } from './helpers.js';
+import { finishSetup, frameCall, makeDemo, payInFrame, startMock, wait } from './helpers.js';
 
 let mock: { base: string; close: () => Promise<void> };
 beforeEach(async () => {
@@ -456,5 +456,42 @@ describe('demo API guards', () => {
     await signUp(b);
     expect((await b.post('/demo/frame-events', { type: 'perflo:something_else', frame_session_id: 'x' })).status).toBe(400);
     expect((await b.post('/demo/orders/nope/advance')).status).toBe(404);
+  });
+});
+
+describe('Add money: the amount is always the one typed in Tiny', () => {
+  it('refuses a missing, empty or zero amount in plain words, before asking payments', async () => {
+    const demo = makeDemo(mock.base);
+    const b = browser(demo);
+    await signUp(b);
+    for (const body of [{}, { amount: '' }, { amount: '   ' }]) {
+      const res = await b.post('/demo/top-ups', body);
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: { message: 'Enter an amount.' } });
+    }
+    for (const amount of ['0', '0.00', '-5', 'ten', '10.001']) {
+      const res = await b.post('/demo/top-ups', { amount });
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: { message: 'Enter an amount above $0.00.' } });
+    }
+    const userId = Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users)[0];
+    expect(demo.log.forUser(userId).some((e) => e.summary.includes('/top-ups'))).toBe(false);
+  });
+
+  it('asks payments for exactly that amount and hands back its page link and the amount', async () => {
+    const demo = makeDemo(mock.base);
+    const b = browser(demo);
+    await signUp(b);
+    const draft = await ask(b, 'buy me $50 worth of headphones on amazon');
+    await setUp(b, (await advance(b, draft.id)).frameUrl as string);
+    const res = await b.post('/demo/top-ups', { amount: '10' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      frameUrl: expect.stringContaining(`${mock.base}/v1/frames/top-up?session=`),
+      clientSecret: expect.any(String),
+      amount: '10.00',
+    });
+    const state = await frameCall(mock.base, res.body.frameUrl, 'state');
+    expect(state.json).toMatchObject({ purpose: 'top-up', amount: '10.00' });
   });
 });

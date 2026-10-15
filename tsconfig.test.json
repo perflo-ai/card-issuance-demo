@@ -18,6 +18,7 @@
     "web/src/progress.ts",
     "web/src/cards.ts",
     "web/src/elements.ts",
-    "web/src/signIn.ts"
+    "web/src/signIn.ts",
+    "web/src/paymentTab.ts"
   ]
 }

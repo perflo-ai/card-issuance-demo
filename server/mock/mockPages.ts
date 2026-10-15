@@ -87,11 +87,17 @@ const js = String.raw`(function () {
   var state = null;
   var typedEmail = '';
 
+  // Like Perflo's pages: to the page this one is placed in, and to the window that opened it (the add
+  // money page opens in a tab of its own). Only ever to the partner's origin.
   function send(type, extra) {
     var message = { type: type, frame_session_id: session };
     if (extra) Object.keys(extra).forEach(function (k) { if (extra[k]) message[k] = extra[k]; });
-    window.parent.postMessage(message, partnerOrigin);
+    if (window.parent && window.parent !== window) window.parent.postMessage(message, partnerOrigin);
+    if (window.opener && !window.opener.closed) window.opener.postMessage(message, partnerOrigin);
   }
+
+  /** The add money page in its own tab: its X asks before it stops the payment. */
+  var onClose = function () { send('perflo:closed'); };
 
   function call(path, body) {
     var headers = { 'X-Perflo-Frame-Session': session };
@@ -137,7 +143,7 @@ const js = String.raw`(function () {
     app.textContent = '';
     var top = el('div', { class: 'top' }, [
       el('span', { class: 'brand', text: state && state.partner && state.partner.brand ? state.partner.brand.name : '' }),
-      el('button', { class: 'close', 'aria-label': 'Close', text: '×', on: { click: function () { send('perflo:closed'); } } })
+      el('button', { class: 'close', 'aria-label': 'Close', text: '×', on: { click: function () { onClose(); } } })
     ]);
     app.appendChild(top);
     app.appendChild(el('h1', { text: title }));
@@ -158,6 +164,8 @@ const js = String.raw`(function () {
   }
 
   function render() {
+    onClose = function () { send('perflo:closed'); };
+    if (state.step === 'cancelled') return renderCancelled();
     if (state.step === 'login') return renderLogin();
     if (state.step === 'limits') return renderLimits();
     if (state.step === 'top_up') return renderTopUp();
@@ -237,49 +245,63 @@ const js = String.raw`(function () {
     ], perOrder.nodes.concat(perMonth.nodes, [save, el('p', { class: 'muted', text: 'You can change these limits anytime.' })]));
   }
 
+  // The page is for one amount, set by the partner: it opens straight on the payment.
   function renderTopUp() {
-    var forOrder = state.order ? 'For your order at ' + state.order.merchant.domain + ' (' + money(state.order.amount) + ').' : null;
-    var needs = state.amount && state.order ? 'This order needs ' + money(state.amount) + ', including fees.' : null;
-    var input = el('input', { type: 'text', inputmode: 'decimal', id: 'amount', value: state.amount || '' });
-    var presets = state.order ? [] : ['100.00', '250.00', '500.00'].map(function (p) {
-      return el('button', { class: 'chip', type: 'button', text: money(p), on: { click: function () { input.value = p; } } });
+    screen('Add money', [{ text: 'Loading...', muted: true }], []);
+    call('top-up', {}).then(function (result) {
+      ids.top_up_id = result.top_up_id;
+      renderPay(result);
+    }).catch(showError);
+  }
+
+  /** Asks first, then stops the payment. One that already went through is finished instead. */
+  function askToCancel(topUp, back) {
+    onClose = function () {};
+    var yes = el('button', { class: 'primary', text: 'Yes, cancel' });
+    var keep = el('button', { class: 'link', text: 'Keep paying', on: { click: back } });
+    yes.addEventListener('click', function () {
+      busy(yes, true, 'Cancelling...');
+      call('top-up/cancel', {}).then(function (answer) {
+        if (answer.status === 'paid') return paid(topUp);
+        send('perflo:closed');
+        state.step = 'cancelled';
+        render();
+        window.close();
+      }).catch(function (error) { busy(yes, false, 'Yes, cancel'); showError(error); });
     });
-    var next = el('button', { class: 'primary', text: 'Continue' });
-    next.addEventListener('click', function () {
-      var amount = toAmount(input.value);
-      if (!amount) return showError({ message: 'Enter an amount.', code: 'amount_invalid' });
-      busy(next, true);
-      call('top-up', { amount: amount }).then(function (result) {
-        ids.top_up_id = result.top_up_id;
-        renderPay(result);
-      }).catch(function (error) { busy(next, false); showError(error); });
-    });
-    screen('Add money', [forOrder, needs].filter(Boolean), [
-      el('label', { for: 'amount', text: 'Amount in US dollars' }), input,
-      presets.length ? el('div', { class: 'chips mt' }, presets) : null, next
-    ]);
+    screen('Cancel this payment?', ['Nothing has been charged. You can add money again later.'], [yes, keep]);
+  }
+
+  function paid(topUp) {
+    send('perflo:top_up_completed', { top_up_id: topUp.top_up_id, order_id: ids.order_id });
+    if (state.purpose === 'setup') return finishSetup();
+    state.step = 'done';
+    render();
+  }
+
+  function renderCancelled() {
+    screen('Payment cancelled', ['Nothing was charged. You can close this tab and go back to Tiny.'], []);
   }
 
   function renderPay(topUp) {
+    var inTab = state.purpose === 'top-up';
+    if (inTab) onClose = function () { askToCancel(topUp, function () { renderPay(topUp); }); };
     var pay = el('button', { class: 'primary', text: 'Pay ' + money(topUp.amount) });
     pay.addEventListener('click', function () {
       busy(pay, true, 'Paying...');
       fetch('/mock-stripe/pay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_secret: topUp.client_secret }) })
         .then(function (res) { if (!res.ok) throw new Error('The payment did not go through. Try again.'); return call('complete', { step: 'top_up' }); })
-        .then(function () {
-          send('perflo:top_up_completed', { top_up_id: topUp.top_up_id, order_id: ids.order_id });
-          if (state.purpose === 'setup') return finishSetup();
-          state.step = 'done';
-          render();
-        })
+        .then(function () { paid(topUp); })
         .catch(function (error) { busy(pay, false, 'Pay ' + money(topUp.amount)); showError(error); });
     });
-    screen('Add money', ['Adding ' + money(topUp.amount) + ' to your balance.'], [
+    var forOrder = state.order ? 'For your order at ' + state.order.merchant.domain + ' (' + money(state.order.amount) + '), fees included.' : null;
+    screen('Add money', ['Adding ' + money(topUp.amount) + ' to your balance.', forOrder ? { text: forOrder, muted: true } : null].filter(Boolean), [
       el('div', { class: 'box' }, [
         el('p', { text: 'Test payment' }),
         el('p', { class: 'muted', text: 'No real card is charged in test mode.' })
       ]),
-      pay
+      pay,
+      inTab ? el('button', { class: 'link', text: 'Cancel', on: { click: function () { onClose(); } } }) : null
     ]);
   }
 
@@ -295,7 +317,7 @@ const js = String.raw`(function () {
   function renderDone() {
     if (state.purpose === 'setup' && !state.finished) return finishSetup();
     var title = state.purpose === 'limits' ? 'Limits saved' : state.purpose === 'top-up' ? 'Money added' : 'You are all set';
-    screen(title, ['You can go back to Tiny.'], []);
+    screen(title, [state.purpose === 'top-up' ? 'You can close this tab and go back to Tiny.' : 'You can go back to Tiny.'], []);
   }
 
   if (!session) { app.textContent = 'This link is not valid.'; return; }

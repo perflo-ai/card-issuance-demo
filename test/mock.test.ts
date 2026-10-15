@@ -325,6 +325,70 @@ describe('frames', () => {
   });
 });
 
+describe('add money pages: one amount each, opened in their own tab', () => {
+  it('a top-up needs an amount: 422 amount_required, in plain words', async () => {
+    const { token, userId } = await linkedUser();
+    for (const options of [{ token, body: {} }, { token }]) {
+      const answer = await signedFetch(mock.base, 'POST', `/v1/users/${userId}/top-ups`, options);
+      expect(answer.status).toBe(422);
+      expect(answer.json).toEqual({ error: { code: 'amount_required', message: 'Say how much money to add.' } });
+    }
+  });
+
+  it('answers the amount, and its page refuses to be framed by anyone', async () => {
+    const { token, userId } = await linkedUser();
+    const link = await signedFetch(mock.base, 'POST', `/v1/users/${userId}/top-ups`, { token, body: { amount: '25.00' } });
+    expect(link.status).toBe(201);
+    expect(link.json).toMatchObject({ amount: '25.00', top_up_id: expect.stringMatching(/^tu_/) });
+    const page = await fetch(link.json.frame_url);
+    expect(page.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(page.headers.get('content-security-policy')).not.toContain('https://localhost:5174');
+    // Sign-in and limits pages are still placed in the partner's page.
+    const limits = await signedFetch(mock.base, 'POST', `/v1/users/${userId}/limits-link`, { token });
+    expect((await fetch(limits.json.frame_url)).headers.get('content-security-policy')).toContain('frame-ancestors https://localhost:5174');
+  });
+
+  it('opens straight on the payment for its own amount: no amount can be typed there', async () => {
+    const { token, userId } = await linkedUser();
+    const link = await signedFetch(mock.base, 'POST', `/v1/users/${userId}/top-ups`, { token, body: { amount: '25.00' } });
+    expect((await frameCall(mock.base, link.json.frame_url, 'state')).json).toMatchObject({ purpose: 'top-up', amount: '25.00' });
+    expect((await frameCall(mock.base, link.json.frame_url, 'top-up', { amount: '5.00' })).status).toBe(400);
+    const started = await frameCall(mock.base, link.json.frame_url, 'top-up', {});
+    expect(started.status).toBe(201);
+    expect(started.json.amount).toBe('25.00');
+  });
+
+  it('cancel: the payment cannot be made after it, and a payment already made is not undone', async () => {
+    const { token, userId } = await linkedUser();
+    const open = async () =>
+      (await signedFetch(mock.base, 'POST', `/v1/users/${userId}/top-ups`, { token, body: { amount: '25.00' } })).json.frame_url as string;
+    const pay = (clientSecret: string) =>
+      fetch(`${mock.base}/mock-stripe/pay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_secret: clientSecret }),
+      });
+
+    const first = await open();
+    const started = await frameCall(mock.base, first, 'top-up', {});
+    expect((await frameCall(mock.base, first, 'top-up/cancel', {})).json).toEqual({ status: 'cancelled' });
+    expect((await pay(started.json.client_secret as string)).status).toBe(409);
+    expect((await frameCall(mock.base, first, 'top-up', {})).status).toBe(409);
+
+    const second = await open();
+    await payInFrame(mock.base, second, '25.00');
+    expect((await frameCall(mock.base, second, 'top-up/cancel', {})).json).toEqual({ status: 'paid' });
+    const account = await signedFetch(mock.base, 'GET', `/v1/users/${userId}`, { token });
+    expect(account.json.balance.amount).toBe('25.00');
+  });
+
+  it('the page tells the window that opened it, as well as a page it is placed in', async () => {
+    const script = await (await fetch(`${mock.base}/mock-assets/frame.js`)).text();
+    expect(script).toContain('window.opener');
+    expect(script).toContain('window.parent');
+  });
+});
+
 describe('replays and frame sessions (bapi final behaviour)', () => {
   it('an order replay drops the ID check link and adds a message; GET has the link', async () => {
     const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '400.00');

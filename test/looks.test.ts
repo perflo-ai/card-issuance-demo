@@ -149,7 +149,11 @@ describe('requests Perflo gets carry the chosen look, signed as before', () => {
     const { user } = store.createUser();
     store.updateUser(user.id, (u) => (u.perflo = { userId: 'usr_1', token: 'ptk_test_token_value' }));
     const chosen = service.setLook(user, 'flat');
-    expect(await service.topUpLink(chosen, 2500)).toEqual({ url: `${BASE}/v1/frames/top-up?session=y`, clientSecret: SECRET });
+    expect(await service.topUpLink(chosen, 2500)).toEqual({
+      url: `${BASE}/v1/frames/top-up?session=y`,
+      clientSecret: SECRET,
+      amount: '25.00',
+    });
     expect(await service.limitsLink(chosen)).toEqual({ url: `${BASE}/v1/frames/limits?session=z`, clientSecret: SECRET });
     expect(calls[0].body).toEqual({ amount: '25.00', ...lookFields('flat', 'payment') });
     expect(calls[0].body.payment_element_options).toEqual({ layout: 'tabs' });

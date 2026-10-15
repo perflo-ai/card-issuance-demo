@@ -45,3 +45,14 @@ export function formatUsd(cents: number): string {
   const whole = Math.floor(cents / 100).toLocaleString('en-US');
   return `$${whole}.${String(cents % 100).padStart(2, '0')}`;
 }
+
+/**
+ * The amount a person typed to add money, read the same way by Tiny's own field and by Tiny's server
+ * (which has the last word): whole cents above zero, or what to tell them. A leading "$" is fine.
+ */
+export function readTypedAmount(typed: string): { cents: number } | { problem: string } {
+  const text = typed.trim().replace(/^\$\s*/, '');
+  if (text === '') return { problem: 'Enter an amount.' };
+  const cents = parseDecimalToCents(text);
+  return cents === null || cents <= 0 ? { problem: 'Enter an amount above $0.00.' } : { cents };
+}

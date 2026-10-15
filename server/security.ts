@@ -48,7 +48,9 @@ export function securityHeaders({ perfloOrigin, production, hosted }: HeaderOpti
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
       'Referrer-Policy': 'no-referrer',
-      'Cross-Origin-Opener-Policy': 'same-origin',
+      // Not plain same-origin: Perflo's add money page opens in a tab Tiny's page opens, and tells this
+      // page when the person is done (window.opener). Windows from anywhere else still get no link here.
+      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
       // The add money frame takes card payments, so it alone may use the Payment Request API.
       'Permissions-Policy': `camera=(), microphone=(), geolocation=(), payment=(self "${perfloOrigin}")`,
     });

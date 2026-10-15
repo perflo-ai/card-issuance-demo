@@ -26,6 +26,10 @@ describe('toBrowserError: every failure reaches the browser in plain words with 
     expect(signature.status).toBe(502);
     expect(signature.message).toBe('Payments could not do that right now. Try again in a few minutes.');
     expect(signature.operatorNote).toContain('PARTNER_SECRET');
+    // Tiny always sends the amount the person typed, so payments asking for one is Tiny's own bug.
+    const noAmount = toBrowserError(new PerfloApiError(422, 'amount_required', 'Say how much money to add.'));
+    expect(noAmount.status).toBe(502);
+    expect(noAmount.operatorNote).toContain('amount');
     const reused = toBrowserError(new PerfloApiError(409, 'idempotency_key_reused', 'This key was already used.'));
     expect(reused.message).not.toContain('key');
   });

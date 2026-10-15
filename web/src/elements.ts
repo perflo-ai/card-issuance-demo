@@ -1,6 +1,6 @@
 /**
- * The UI elements page's decisions, kept apart from React so they are tested on their own: when Pay
- * may be pressed, and what a person is told when an element or an action refuses.
+ * The UI elements page's decisions, kept apart from React so they are tested on their own: what a
+ * person is told when an element or an action refuses.
  */
 
 /** An error as Perflo.js passes it on: a code, plain words, and the path of a bad field. */
@@ -8,24 +8,6 @@ export interface ElementError {
   code: string;
   message: string;
   path?: string;
-}
-
-export interface PayState {
-  /** The amount element said complete: an amount it accepts, its payment ready for it. */
-  amountComplete: boolean;
-  /** The payment element said complete: payment details it accepts, ready to confirm. */
-  paymentComplete: boolean;
-  /** A press of Pay is on its way. */
-  paying: boolean;
-  /** The money was added; a new payment needs a new page. */
-  paid: boolean;
-  /** The card payment went through but has not shown up yet: paying again would pay twice. */
-  recording: boolean;
-}
-
-/** Pay only when both elements say they are complete, and once per press. */
-export function canPay(state: PayState): boolean {
-  return state.amountComplete && state.paymentComplete && !state.paying && !state.paid && !state.recording;
 }
 
 export const LOAD_FAILED_TEXT = 'This part of the page could not load. Reload the page and try again.';
@@ -56,7 +38,7 @@ const TINY_WORDS: ReadonlyMap<string, string> = new Map([
 
 /**
  * What the person reads for an element's refusal. Perflo's own words are kept for refusals about
- * what the person did (a code that did not match, a payment the bank declined), since they say
+ * what the person did (a code that did not match), since they say
  * what to do next; anything else gets Tiny's words.
  */
 export function elementProblem(error: ElementError): string {
@@ -69,12 +51,4 @@ export function elementProblem(error: ElementError): string {
 /** True when the refusal means the page's session is over, so the person starts again. */
 export function isExpired(error: ElementError): boolean {
   return error.code === 'session_expired';
-}
-
-/**
- * True when the card payment went through but Perflo has not shown it yet. Not a failure: the person
- * reads Perflo's words (wait, do not pay again) and is not offered Pay again.
- */
-export function isRecording(error: ElementError): boolean {
-  return error.code === 'payment_recording';
 }
