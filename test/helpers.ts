@@ -28,6 +28,7 @@ export async function startMock(
   slowIssueMs = 50,
   webhook?: { url: string; secret: string },
   reuseCards = false,
+  now?: () => number,
 ): Promise<{ base: string; close: () => Promise<void> }> {
   let handler: RequestListener = () => undefined;
   const server = createServer((req, res) => handler(req, res));
@@ -42,6 +43,7 @@ export async function startMock(
     slowIssueMs,
     reuseCards,
     ...(webhook ? { webhook } : {}),
+    ...(now ? { now } : {}),
   });
   return { base, close: () => new Promise<void>((done) => server.close(() => done())) };
 }

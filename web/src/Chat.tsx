@@ -11,6 +11,7 @@ import {
   declineFallback,
   declineHint,
   money,
+  pageExpiredText,
   returnedLine,
   stalledText,
   stepLabel,
@@ -341,6 +342,8 @@ export function OrderCard(props: CardProps) {
   /** A reused card is still open while Perflo has no final figure for what goes back (null). */
   const cardOpen = reusable && order.amountReturned === null;
   const [frameOpen, setFrameOpen] = useState(false);
+  /** The add money page ran out of time while it was open. */
+  const [frameExpired, setFrameExpired] = useState(false);
   const card = useRef<HTMLElement>(null);
   useFocusWhenClosed(frameOpen, card);
   const amount = formatUsd(order.amountCents);
@@ -353,6 +356,34 @@ export function OrderCard(props: CardProps) {
   useEffect(() => {
     if (order.phase === 'issuing') expectLatest.current('issuing', 'card');
   }, [order.phase]);
+
+  /**
+   * The setup or sign-in page, asked of Tiny's server each time it is opened: it checks with Perflo that
+   * the sign-in still works and opens a new one when it does not. Already linked: carry on with the order.
+   */
+  const openSignIn = async (): Promise<PerfloPageView | null> => {
+    const result = await api.signIn();
+    if (result.link === 'login_required') return result.page;
+    await linked();
+    return null;
+  };
+
+  const linked = async () => {
+    props.onLinked();
+    props.onAccountChanged();
+    if (order.phase === 'login_required') {
+      onExpect('login_required', 'placing');
+      // One look now: the order may already have gone ahead while the frame was closing.
+      await onAdvance('check');
+    } else await onAdvance('place');
+  };
+
+  /** The add money page: the order is read again first, so the page opened is one Perflo says still works. */
+  const openPayment = async () => {
+    setFrameExpired(false);
+    const latest = await onAdvance('check');
+    if (latest?.phase === 'payment_required' && latest.frameUrl) setFrameOpen(true);
+  };
 
   const onFrameEvent = (event: FrameEventPayload) => {
     if (event.type === 'perflo:closed') setFrameOpen(false);
@@ -416,21 +447,7 @@ export function OrderCard(props: CardProps) {
           ) : (
             <p className="muted">Payments for Tiny were turned off. Sign in again to allow this order.</p>
           )}
-          <SetupFlow
-            perfloOrigin={perfloOrigin}
-            disabled={busy}
-            open={() => Promise.resolve(page)}
-            onLinked={async () => {
-              props.onLinked();
-              props.onAccountChanged();
-              if (order.phase === 'login_required') {
-                onExpect('login_required', 'placing');
-                // One look now: the order may already have gone ahead while the frame was closing.
-                await onAdvance('check');
-              } else await onAdvance('place');
-            }}
-            onExpired={() => void onAdvance('check')}
-          />
+          <SetupFlow perfloOrigin={perfloOrigin} disabled={busy} open={openSignIn} onLinked={linked} />
           {action === 'place' && (
             <p className="working" role="status">
               {waitingText('placing')}
@@ -454,10 +471,26 @@ export function OrderCard(props: CardProps) {
         <>
           <p>Your balance does not cover this yet. Add {money(order.amountDue ?? '0.00')} and I will place the order right away.</p>
           {frameOpen && page ? (
-            <PerfloFrame page={page} title="Add money" perfloOrigin={perfloOrigin} onEvent={onFrameEvent} />
+            <PerfloFrame
+              page={page}
+              title="Add money"
+              perfloOrigin={perfloOrigin}
+              onEvent={onFrameEvent}
+              onExpired={() => {
+                setFrameOpen(false);
+                setFrameExpired(true);
+              }}
+            />
+          ) : frameExpired ? (
+            <div className="problem">
+              <p>{pageExpiredText('payment')}</p>
+              <button className="secondary" disabled={busy} onClick={() => void openPayment()}>
+                Start again
+              </button>
+            </div>
           ) : (
             <div className="row">
-              <button className="primary" disabled={busy} onClick={() => setFrameOpen(true)}>
+              <button className="primary" disabled={busy} onClick={() => void openPayment()}>
                 Add {money(order.amountDue ?? '0.00')}
               </button>
               <button className="secondary" disabled={busy} onClick={() => void onAdvance('check')}>

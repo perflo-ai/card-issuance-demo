@@ -10,11 +10,12 @@ import type { LinkStatus, PerfloPageView } from '../../server/views';
 
 interface Props {
   perfloOrigin: string;
-  /** The setup page to show, or null when there is nothing to open. A throw is shown as the error. */
+  /**
+   * The setup page to show, asked of Tiny's server each time (it checks with Perflo that the sign-in
+   * still works), or null when there is nothing to open. A throw is shown as the error.
+   */
   open: () => Promise<PerfloPageView | null>;
   onLinked: () => void | Promise<void>;
-  /** "Start again" after the setup link expired. Without it, the frame is simply opened again. */
-  onExpired?: () => void;
   /** The caller is busy with this account right now. */
   disabled?: boolean;
 }
@@ -24,7 +25,7 @@ interface Props {
  * up (or turned back on). The step list follows the frame's own events
  * (code verified, limits saved), never a timer.
  */
-export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = false }: Props) {
+export function SetupFlow({ perfloOrigin, open, onLinked, disabled = false }: Props) {
   const [page, setPage] = useState<PerfloPageView | null>(null);
   const [opening, setOpening] = useState(false);
   const [step, setStep] = useState(0);
@@ -119,7 +120,16 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
     <div className="setup" ref={box} tabIndex={-1}>
       <StepList items={items} active={finishing} />
       {page ? (
-        <PerfloFrame page={page} title="Set up payments" perfloOrigin={perfloOrigin} onEvent={onFrameEvent} />
+        <PerfloFrame
+          page={page}
+          title="Set up payments"
+          perfloOrigin={perfloOrigin}
+          onEvent={onFrameEvent}
+          onExpired={() => {
+            setPage(null);
+            setProblem('expired');
+          }}
+        />
       ) : (
         !finishing &&
         problem === '' && (
@@ -136,15 +146,7 @@ export function SetupFlow({ perfloOrigin, open, onLinked, onExpired, disabled = 
       {problem === 'expired' && (
         <div className="problem">
           <p>That setup link expired.</p>
-          <button
-            className="secondary"
-            disabled={opening || disabled}
-            onClick={() => {
-              setProblem('');
-              if (onExpired) onExpired();
-              else void openFrame();
-            }}
-          >
+          <button className="secondary" disabled={opening || disabled} onClick={() => void openFrame()}>
             Start again
           </button>
         </div>

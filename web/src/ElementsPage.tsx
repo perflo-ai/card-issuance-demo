@@ -4,7 +4,7 @@ import { useOnMount } from './browser';
 import { canPay, elementProblem, isExpired, isRecording, LOAD_FAILED_TEXT, NOT_OFFERED_TEXT } from './elements';
 import { untilConnected } from './live';
 import { hasPerfloJs, loadPerflo, type ElementError, type PerfloElement, type PerfloElements, type Theme } from './perflo';
-import { stalledText } from './copy';
+import { pageExpiredText, stalledText } from './copy';
 import { settleSignIn, SIGN_IN_WAIT_MS } from './signIn';
 import type { LinkStatus } from '../../server/views';
 
@@ -449,7 +449,7 @@ function AddMoney({ themeNow, register, onAccountChanged }: PartProps & { onAcco
       </section>
       {expired && (
         <div className="problem">
-          <p>This payment page expired.</p>
+          <p>{pageExpiredText('payment')}</p>
           <button className="secondary" onClick={() => void open()}>
             Start again
           </button>

@@ -108,8 +108,8 @@ export class DemoService {
   }
 
   /**
-   * The sign-in to open with UI elements (or an embedded page) outside any order: the one already
-   * waiting, else a new one. Linked already: nothing to open.
+   * The sign-in to open with UI elements, an embedded page or the chat's setup: the one waiting, once
+   * Perflo says it still works, else a new one. Linked already: nothing to open.
    */
   async signIn(user: DemoUser): Promise<SignInView> {
     const { user: fresh, status } = await this.ensureLinked(user);
@@ -118,12 +118,26 @@ export class DemoService {
     return { link: 'login_required', page: { url: loginUrl, ...(clientSecret ? { clientSecret } : {}) } };
   }
 
-  /** Makes sure we hold an access token for this person, or starts the one-time setup. */
+  /**
+   * Makes sure we hold an access token for this person, or a sign-in for them that works. A stored
+   * sign-in is never handed out on trust: it stops working 30 minutes after Perflo opened it, so Perflo
+   * is asked about it first (GET /v1/logins/{id}). Finished: the person is linked. Expired: a new one
+   * is opened. If Perflo cannot be reached this throws and the person is told to try again; a sign-in
+   * nobody checked is never the answer. One per person at a time (the link lock), so two pages opening
+   * at once make one sign-in.
+   */
   async ensureLinked(user: DemoUser): Promise<{ user: DemoUser; status: LinkStatus }> {
     return this.exclusive(`link:${user.id}`, async () => {
-      const fresh = this.store.user(user.id);
+      let fresh = this.store.user(user.id);
       if (fresh.perflo) return { user: fresh, status: 'linked' };
-      if (fresh.pendingLogin) return { user: fresh, status: 'login_required' };
+      if (fresh.pendingLogin) {
+        const looked = await this.lookAtLogin(fresh);
+        if (looked.status !== 'expired') {
+          return { user: looked.user, status: looked.status === 'linked' ? 'linked' : 'login_required' };
+        }
+        fresh = looked.user;
+        this.log.add(fresh.id, 'demo', 'Sign-in expired: opening a new one');
+      }
 
       const result = await this.api.createUser(fresh.id, this.userBody(fresh));
       if (result.status === 'approved') {
@@ -147,30 +161,37 @@ export class DemoService {
     });
   }
 
-  /** Called when the frame says the person signed in or finished setup. */
+  /** Called when the page says the person signed in or finished setup: asks Perflo, never decides alone. */
   async refreshLogin(user: DemoUser): Promise<{ user: DemoUser; status: LinkStatus }> {
     return this.exclusive(`link:${user.id}`, async () => {
       const fresh = this.store.user(user.id);
       if (!fresh.pendingLogin) {
         return { user: fresh, status: fresh.perflo ? 'linked' : 'expired' };
       }
-      const login = await this.api.getLogin(fresh.id, fresh.pendingLogin.loginId);
-      if (login.status === 'pending') return { user: fresh, status: 'pending' };
-      if (login.status === 'expired') {
-        const cleared = this.store.updateUser(fresh.id, (u) => {
-          u.pendingLogin = null;
-        });
-        return { user: cleared, status: 'expired' };
-      }
-      if (login.user_access_token) {
-        return { user: this.storeToken(fresh, login.user_id, login.user_access_token), status: 'linked' };
-      }
-      // Approved, but the token was already handed out once and we do not have it.
-      if (fresh.perflo && fresh.perflo.userId === login.user_id) {
-        return { user: this.store.updateUser(fresh.id, (u) => (u.pendingLogin = null)), status: 'linked' };
-      }
-      return { user: await this.reissue(fresh), status: 'linked' };
+      return this.lookAtLogin(fresh);
     });
+  }
+
+  /**
+   * Where the stored sign-in stands, by Perflo's word: linked (a token Perflo hands out here is stored
+   * at once: it is handed out once), pending, or expired (then it is cleared). Runs under the link lock.
+   */
+  private async lookAtLogin(fresh: DemoUser): Promise<{ user: DemoUser; status: LinkStatus }> {
+    const pending = fresh.pendingLogin;
+    if (!pending) return { user: fresh, status: fresh.perflo ? 'linked' : 'expired' };
+    const login = await this.api.getLogin(fresh.id, pending.loginId);
+    if (login.status === 'pending') return { user: fresh, status: 'pending' };
+    if (login.status === 'expired') {
+      return { user: this.store.updateUser(fresh.id, (u) => (u.pendingLogin = null)), status: 'expired' };
+    }
+    if (login.user_access_token) {
+      return { user: this.storeToken(fresh, login.user_id, login.user_access_token), status: 'linked' };
+    }
+    // Approved, but the token was already handed out once and we do not have it.
+    if (fresh.perflo && fresh.perflo.userId === login.user_id) {
+      return { user: this.store.updateUser(fresh.id, (u) => (u.pendingLogin = null)), status: 'linked' };
+    }
+    return { user: await this.reissue(fresh), status: 'linked' };
   }
 
   private orderBody(order: DemoOrder, userId: string) {
@@ -405,15 +426,26 @@ export class DemoService {
     const step = nextStep(response, order);
 
     if (step === 'login' && response.status === 'login_required') {
-      // The person removed access; the old token is dead. Login completion resumes this order.
+      if (user.perflo && (await this.account(user)) !== null) {
+        // Perflo still takes our token: the person signed in again (on a new sign-in Tiny opened when
+        // this order's own one had ended), and Perflo moves the order on by itself within a minute.
+        // Dropping the token here would undo that sign-in.
+        this.log.add(user.id, 'demo', 'Payments are on again: waiting for the order to go ahead');
+        return { order, user: this.store.user(user.id), notice: null };
+      }
+      // The person removed access; the old token is dead. Signing in again resumes this order.
       const updated = this.store.updateUser(user.id, (u) => {
         u.perflo = null;
-        u.pendingLogin = {
-          loginId: response.login_id,
-          loginUrl: response.login_url,
-          ...(response.client_secret ? { clientSecret: response.client_secret } : {}),
-          orderId: order.id,
-        };
+        // A sign-in already waiting is kept: it is checked with Perflo before it is handed out, and
+        // finishing it turns access back on just the same. Perflo never renews an order's own sign-in.
+        if (u.pendingLogin === null) {
+          u.pendingLogin = {
+            loginId: response.login_id,
+            loginUrl: response.login_url,
+            ...(response.client_secret ? { clientSecret: response.client_secret } : {}),
+            orderId: order.id,
+          };
+        }
       });
       return { order, user: updated, notice: null };
     }
