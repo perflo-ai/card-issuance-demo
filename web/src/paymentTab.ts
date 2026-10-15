@@ -7,8 +7,10 @@
  * - The tab is opened blank while the click is still being handled (a pop-up blocker allows only
  *   that), then sent to Perflo's link once Tiny's server has it. If there is no link, the tab closes.
  * - The page tells this page what happened (window.opener): `perflo:top_up_completed` is money added,
- *   `perflo:closed` is cancelled (its X or Cancel). Only messages from that tab, from the link's own
- *   origin, count: in production the page is not on the API's host.
+ *   `perflo:top_up_cancelled` is cancelled. `perflo:closed` only says the tab is going away (it follows
+ *   a cancel, and "Back to" on a paid page too), so on its own it ends the wait like a tab closed
+ *   without a word. The first of these wins. Only messages from that tab, from the link's own origin,
+ *   count: in production the page is not on the API's host.
  * - A tab closed without a word is noticed by looking at the tab itself (the browser's own state, not
  *   a request); the caller then reads the status it already uses once. The real browser is
  *   `browserTabs` in browser.ts.
@@ -112,7 +114,8 @@ export function watchPaymentTab(
     if (!event) return;
     on.event?.(event);
     if (event.type === 'perflo:top_up_completed') finish('paid');
-    else if (event.type === 'perflo:closed') finish('cancelled');
+    else if (event.type === 'perflo:top_up_cancelled') finish('cancelled');
+    else if (event.type === 'perflo:closed') finish('closed');
     else if (pageExpired(event)) finish('expired');
   });
   const stopChecking = host.every(TAB_CHECK_MS, () => {

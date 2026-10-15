@@ -263,6 +263,7 @@ const js = String.raw`(function () {
       busy(yes, true, 'Cancelling...');
       call('top-up/cancel', {}).then(function (answer) {
         if (answer.status === 'paid') return paid(topUp);
+        send('perflo:top_up_cancelled', { top_up_id: topUp.top_up_id, order_id: ids.order_id });
         send('perflo:closed');
         state.step = 'cancelled';
         render();

@@ -188,7 +188,9 @@ blockers allow that), then sent to the link once it arrives, and closed if the r
 the tab, Tiny says so and shows an **Open the payment page** link. Meanwhile Tiny shows "Finish adding money in the new
 tab", with **Open the payment page again** and **Cancel**. The page tells Tiny through `window.opener` (which is why
 Tiny sends `Cross-Origin-Opener-Policy: same-origin-allow-popups`): `perflo:top_up_completed` is money added (the
-balance is read again), `perflo:closed` is cancelled. Messages count only from that tab and from the origin of the link
+balance is read again), `perflo:top_up_cancelled` is cancelled, and `perflo:closed` with neither before it is treated
+like a tab closed without a word (it also follows a cancel, and "Back to" on a paid page, so it does not mean
+cancelled); the first of these wins. Messages count only from that tab and from the origin of the link
 Perflo returned (production's add money page is not on the API's host). A tab closed without a word is noticed by
 looking at the tab itself every half second (no request), and the balance, or the order, is then read once. Perflo
 offers a partner no way to cancel a top-up, so Tiny's **Cancel** closes the tab it opened; the page stops its own

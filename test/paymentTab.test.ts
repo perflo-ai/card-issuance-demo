@@ -127,10 +127,27 @@ describe('watchPaymentTab: what the payment tab says, and a tab closed without a
     expect(browser.ticking()).toBe(0);
   });
 
-  it('cancelled: the page’s close (its X, Cancel or Done)', () => {
+  it('cancelled: the cancelled message, then the page’s closed', () => {
+    const { browser, tab, ends, events } = opened();
+    browser.post(fromTab(tab, { type: 'perflo:top_up_cancelled', frame_session_id: 'fs_1', top_up_id: 'tu_1' }));
+    browser.post(fromTab(tab, { type: 'perflo:closed', frame_session_id: 'fs_1' }));
+    expect(events).toEqual(['perflo:top_up_cancelled']);
+    expect(ends).toEqual(['cancelled']);
+  });
+
+  it('paid, then "Back to" on the paid page sends closed: still paid', () => {
+    const { browser, tab, ends } = opened();
+    browser.post(fromTab(tab, { type: 'perflo:top_up_completed', frame_session_id: 'fs_1', top_up_id: 'tu_1' }));
+    browser.post(fromTab(tab, { type: 'perflo:closed', frame_session_id: 'fs_1' }));
+    expect(ends).toEqual(['paid']);
+  });
+
+  it('closed alone, with no outcome before it: ends as closed, so the status is read again', () => {
     const { browser, tab, ends } = opened();
     browser.post(fromTab(tab, { type: 'perflo:closed', frame_session_id: 'fs_1' }));
-    expect(ends).toEqual(['cancelled']);
+    tab.close();
+    browser.tick();
+    expect(ends).toEqual(['closed']);
   });
 
   it('expired: the page says its time is over', () => {
