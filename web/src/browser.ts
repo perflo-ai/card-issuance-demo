@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
+import type { TabHost } from './paymentTab';
 import type { Visibility } from './polling';
 
 /** The real page: hidden while the tab is in the background or minimised. */
@@ -10,6 +11,23 @@ export const pageVisibility: Visibility = {
     };
     document.addEventListener('visibilitychange', handle);
     return () => document.removeEventListener('visibilitychange', handle);
+  },
+};
+
+/**
+ * The real browser for the add money tab (paymentTab.ts). The timer only looks whether that tab is
+ * still open, which is the browser's own state: it never sends a request.
+ */
+export const browserTabs: TabHost = {
+  open: (url) => window.open(url, '_blank'),
+  listen: (handler) => {
+    const listener = (message: MessageEvent) => handler({ origin: message.origin, source: message.source, data: message.data });
+    window.addEventListener('message', listener);
+    return () => window.removeEventListener('message', listener);
+  },
+  every: (ms, run) => {
+    const timer = setInterval(run, ms);
+    return () => clearInterval(timer);
   },
 };
 

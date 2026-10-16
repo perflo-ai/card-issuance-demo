@@ -82,7 +82,8 @@ export const accountResponse = z.object({
 export type AccountResponse = z.infer<typeof accountResponse>;
 
 export const frameLinkResponse = z.object({ frame_url: link, client_secret: clientSecret.optional(), expires_at: z.string() });
-export const topUpResponse = frameLinkResponse.extend({ top_up_id: z.string(), amount: amount.nullable().optional() });
+/** A page for exactly `amount`: Perflo refuses a top-up with no amount (422 amount_required). */
+export const topUpResponse = frameLinkResponse.extend({ top_up_id: z.string(), amount });
 export type TopUpResponse = z.infer<typeof topUpResponse>;
 
 export const declineReason = z.enum(['over_order_limit', 'over_monthly_limit', 'partner_limit', 'amount_invalid']);
@@ -177,6 +178,7 @@ export const PARTNER_ERROR_CODES = [
   'email_missing',
   'limits_invalid',
   'amount_invalid',
+  'amount_required',
   'service_unavailable',
   'internal_error',
 ] as const;
@@ -409,10 +411,10 @@ export class PerfloApi {
     return this.parse(accountResponse, r.status, r.json, [200]);
   }
 
-  async createTopUp(demoUserId: string, userId: string, token: string, amountApi?: string, look: LookFields = {}): Promise<TopUpResponse> {
+  async createTopUp(demoUserId: string, userId: string, token: string, amountApi: string, look: LookFields = {}): Promise<TopUpResponse> {
     const r = await this.request(demoUserId, 'POST', `/v1/users/${encodeURIComponent(userId)}/top-ups`, {
       token,
-      body: amountApi === undefined ? { ...look } : { amount: amountApi, ...look },
+      body: { amount: amountApi, ...look },
     });
     return this.parse(topUpResponse, r.status, r.json, [201]);
   }

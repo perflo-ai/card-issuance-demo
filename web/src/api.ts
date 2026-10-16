@@ -94,7 +94,8 @@ export const api = {
   refreshLink: () => request<{ link: LinkStatus }>('POST', '/demo/link/refresh'),
   account: () => request<{ linked: false } | { linked: true; account: AccountView }>('GET', '/demo/account'),
   limitsLink: () => request<PageLink>('POST', '/demo/limits-link'),
-  topUp: (amount?: string) => request<PageLink>('POST', '/demo/top-ups', amount ? { amount } : {}),
+  /** Perflo's add money page for exactly `amount`, the amount typed in Tiny ("10.00"), and the amount Perflo says it is for. */
+  topUp: (amount: string) => request<PageLink & { amount: string }>('POST', '/demo/top-ups', { amount }),
   /** Only the look's id goes to Tiny's server; what Perflo is sent for it is decided there. */
   look: (look: LookId) => request<{ user: MeView }>('POST', '/demo/look', { look }),
   signIn: () => request<SignInView>('POST', '/demo/sign-in'),

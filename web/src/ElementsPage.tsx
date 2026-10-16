@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { AddMoney } from './AddMoney';
 import { api } from './api';
 import { useOnMount } from './browser';
-import { canPay, elementProblem, isExpired, isRecording, LOAD_FAILED_TEXT, NOT_OFFERED_TEXT } from './elements';
+import { elementProblem, isExpired, LOAD_FAILED_TEXT, NOT_OFFERED_TEXT } from './elements';
 import { untilConnected } from './live';
-import { hasPerfloJs, loadPerflo, type ElementError, type PerfloElement, type PerfloElements, type Theme } from './perflo';
-import { pageExpiredText, stalledText } from './copy';
+import {
+  hasPerfloJs,
+  loadPerflo,
+  type ElementError,
+  type ElementKind,
+  type PerfloElement,
+  type PerfloElements,
+  type Theme,
+} from './perflo';
+import { stalledText } from './copy';
 import { settleSignIn, SIGN_IN_WAIT_MS } from './signIn';
 import type { LinkStatus } from '../../server/views';
 
@@ -20,9 +29,10 @@ interface Props {
 /**
  * Tiny's own page built from Perflo's UI elements: Tiny's headings and buttons, Perflo's pieces
  * placed inside them. Sign in (the code element, with Tiny's "Send code" and "Verify"), then the
- * limits element (the person presses Allow inside it), then add money (the amount and payment
- * elements, with Tiny's "Pay"). The look comes from Tiny's server when each one is opened; the light
- * and dark switch changes the open elements live.
+ * limits element (the person presses Allow inside it). Then add money: Tiny's own amount field, and
+ * Perflo's payment page for that amount in a new tab (Perflo has no amount or payment element). The
+ * look comes from Tiny's server when each one is opened; the light and dark switch changes the open
+ * elements live.
  */
 export function ElementsPage({ linked, onLinked, onAccountChanged }: Props) {
   const [theme, setTheme] = useState<Theme | null>(null);
@@ -78,8 +88,8 @@ export function ElementsPage({ linked, onLinked, onAccountChanged }: Props) {
           </div>
         </div>
         <p className="muted small">
-          Perflo&apos;s sign-in, limits and payment pieces, placed in Tiny&apos;s layout with Tiny&apos;s own headings and buttons. Light
-          and Dark change them right away.
+          Perflo&apos;s sign-in and limits pieces, placed in Tiny&apos;s layout with Tiny&apos;s own headings and buttons. Light and Dark
+          change them right away. You type the amount to add in Tiny, and pay on Perflo&apos;s page in a new tab.
         </p>
         {themeError && (
           <p className="error" role="alert">
@@ -87,7 +97,13 @@ export function ElementsPage({ linked, onLinked, onAccountChanged }: Props) {
           </p>
         )}
         {linked ? (
-          <AddMoney themeNow={themeNow} register={register} onAccountChanged={onAccountChanged} />
+          <div className="elements-steps">
+            <section aria-labelledby="add-money-title">
+              <h3 id="add-money-title">Add money</h3>
+              <p className="muted small">Signed in. Money you add stays in your balance for Tiny to use.</p>
+              <AddMoney id="elements-amount" onAccountChanged={onAccountChanged} />
+            </section>
+          </div>
         ) : (
           <SignIn themeNow={themeNow} register={register} onLinked={onLinked} />
         )}
@@ -143,7 +159,7 @@ function useElements(
 /** Places one element in `box` and reports its state; returns what removes it. */
 function place(
   group: PerfloElements,
-  kind: 'code' | 'limits' | 'amount' | 'payment',
+  kind: ElementKind,
   box: HTMLElement | null,
   on: { change?: (complete: boolean, error?: ElementError) => void; loadError: (error: ElementError) => void },
 ): () => void {
@@ -324,146 +340,6 @@ function SignIn({ themeNow, register, onLinked }: PartProps & { onLinked: () => 
         <p className="error" role="alert">
           {problem}
         </p>
-      )}
-    </div>
-  );
-}
-
-function AddMoney({ themeNow, register, onAccountChanged }: PartProps & { onAccountChanged: () => void }) {
-  const [secret, setSecret] = useState<string | null>(null);
-  const [opening, setOpening] = useState(true);
-  const [unavailable, setUnavailable] = useState(false);
-  const [expired, setExpired] = useState(false);
-  const [amountComplete, setAmountComplete] = useState(false);
-  const [paymentComplete, setPaymentComplete] = useState(false);
-  const [paying, setPaying] = useState(false);
-  const [paid, setPaid] = useState(false);
-  /** Perflo's words while a card payment that went through has not shown up yet; null otherwise. */
-  const [recording, setRecording] = useState<string | null>(null);
-  const [problem, setProblem] = useState('');
-  const amountBox = useRef<HTMLDivElement>(null);
-  const paymentBox = useRef<HTMLDivElement>(null);
-
-  const open = async () => {
-    setProblem('');
-    setOpening(true);
-    setSecret(null);
-    setExpired(false);
-    setUnavailable(false);
-    setAmountComplete(false);
-    setPaymentComplete(false);
-    setPaid(false);
-    setRecording(null);
-    try {
-      const link = await api.topUp();
-      if (link.clientSecret) setSecret(link.clientSecret);
-      else setUnavailable(true);
-    } catch (e) {
-      setProblem(e instanceof Error ? e.message : 'Something went wrong. Try again.');
-    } finally {
-      setOpening(false);
-    }
-  };
-  useOnMount(() => void open());
-
-  const refused = useCallback((error: ElementError) => {
-    if (isExpired(error)) setExpired(true);
-    setProblem(elementProblem(error));
-  }, []);
-
-  const group = useElements(
-    secret,
-    { themeNow, register },
-    (made) => {
-      const removeAmount = place(made, 'amount', amountBox.current, {
-        change: (complete, error) => {
-          setAmountComplete(complete);
-          if (error) refused(error);
-        },
-        loadError: refused,
-      });
-      const removePayment = place(made, 'payment', paymentBox.current, {
-        change: (complete, error) => {
-          setPaymentComplete(complete);
-          if (error) refused(error);
-        },
-        loadError: refused,
-      });
-      return () => {
-        removeAmount();
-        removePayment();
-      };
-    },
-    setProblem,
-  );
-
-  const pay = async () => {
-    if (!group.current) return;
-    setProblem('');
-    setPaying(true);
-    const result = await group.current.confirmPayment();
-    setPaying(false);
-    if (result.error && isRecording(result.error)) {
-      // The card was charged; Perflo is still recording it. No Pay again: the live feed updates the
-      // balance once it lands, as for any other top-up.
-      setRecording(elementProblem(result.error));
-      return;
-    }
-    if (result.error) {
-      refused(result.error);
-      return;
-    }
-    setPaid(true);
-    onAccountChanged();
-  };
-
-  const showing = secret !== null && !expired;
-  const payState = { amountComplete, paymentComplete, paying, paid, recording: recording !== null };
-  return (
-    <div className="elements-steps">
-      <section aria-labelledby="add-money-title">
-        <h3 id="add-money-title">Add money</h3>
-        <p className="muted small">Signed in. Money you add stays in your balance for Tiny to use.</p>
-        {opening && <p className="muted">Loading...</p>}
-        {unavailable && <p className="muted">{NOT_OFFERED_TEXT}</p>}
-        <div ref={amountBox} hidden={!showing} />
-        <div ref={paymentBox} hidden={!showing || paid} />
-        {showing && !paid && !payState.recording && (
-          <button className="primary" disabled={!canPay(payState)} onClick={() => void pay()}>
-            {paying ? 'Paying...' : 'Pay'}
-          </button>
-        )}
-        {recording !== null && (
-          <p className="working" role="status">
-            {recording}
-          </p>
-        )}
-        {paid && (
-          <div className="row">
-            <p role="status">Money added. It is in your balance for Tiny to use.</p>
-            <button className="secondary" onClick={() => void open()}>
-              Add more money
-            </button>
-          </div>
-        )}
-      </section>
-      {expired && (
-        <div className="problem">
-          <p>{pageExpiredText('payment')}</p>
-          <button className="secondary" onClick={() => void open()}>
-            Start again
-          </button>
-        </div>
-      )}
-      {problem && !expired && (
-        <p className="error" role="alert">
-          {problem}
-        </p>
-      )}
-      {!opening && !showing && !unavailable && !expired && problem && (
-        <button className="secondary" onClick={() => void open()}>
-          Try again
-        </button>
       )}
     </div>
   );

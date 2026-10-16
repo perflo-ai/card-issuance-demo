@@ -116,6 +116,7 @@ export const FRAME_EVENT_TYPES = [
   'perflo:login_completed',
   'perflo:limits_saved',
   'perflo:top_up_completed',
+  'perflo:top_up_cancelled',
   'perflo:setup_completed',
   'perflo:closed',
   'perflo:error',

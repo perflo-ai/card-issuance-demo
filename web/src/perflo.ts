@@ -13,7 +13,8 @@ import type { ElementError } from './elements';
 export type { ElementError } from './elements';
 
 export type Theme = 'light' | 'dark';
-export type ElementKind = 'code' | 'amount' | 'payment' | 'limits';
+/** The UI elements Perflo.js offers. There is no amount or payment element: add money opens Perflo's page in a new tab. */
+export type ElementKind = 'code' | 'limits';
 
 export interface ElementChange {
   elementType: ElementKind;
@@ -44,7 +45,6 @@ export interface PerfloElements {
   create(kind: ElementKind): PerfloElement;
   sendCode(): Promise<ActionResult>;
   verifyCode(): Promise<ActionResult>;
-  confirmPayment(): Promise<ActionResult>;
   /** Rejects with the field's path when Perflo refuses the appearance; nothing changes then. */
   update(options: { appearance: RuntimeAppearance }): Promise<void>;
 }
