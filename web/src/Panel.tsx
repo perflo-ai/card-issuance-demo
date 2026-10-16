@@ -5,7 +5,7 @@ import { pageVisibility, useFocusWhenClosed, useOnMount, useWhenVisible } from '
 import { cancelUntilDone } from './cancel';
 import { onLive } from './live';
 import { openCardRows } from './cards';
-import { CANCEL_SLOW_TEXT, cancelLabel, identityText, LOOK_LABELS, money, pageExpiredText, when } from './copy';
+import { CANCEL_LABEL, CANCEL_SLOW_TEXT, identityText, LOOK_LABELS, money, pageExpiredText } from './copy';
 import { Orders } from './Orders';
 import { hasPerfloJs } from './perflo';
 import { PerfloFrame } from './PerfloFrame';
@@ -269,11 +269,10 @@ export function Panel(props: Props) {
                       <li key={card.key}>
                         <span>
                           .... {card.last4} · up to {money(card.total)}
-                          <span className="muted small"> · until {when(card.expiresAt)}</span>
                         </span>
                         {only && (
                           <button className="link" disabled={busy !== null} onClick={() => void cancelCard(only)}>
-                            {cancellingCard === only ? 'Cancelling...' : slowCancel === only ? 'Check again' : cancelLabel(card.reusable)}
+                            {cancellingCard === only ? 'Cancelling...' : slowCancel === only ? 'Check again' : CANCEL_LABEL}
                           </button>
                         )}
                         {only && slowCancel === only && cancellingCard === null && (
@@ -364,7 +363,7 @@ export function Panel(props: Props) {
               disabled={savingStop}
               onChange={(e) => void setStopAtCheckout(e.target.checked)}
             />
-            Stop at the checkout page without buying, so the card stays open and can be cancelled
+            Stop at the checkout page without buying, so the order stays open and can be cancelled
           </label>
           {linked && (
             <>

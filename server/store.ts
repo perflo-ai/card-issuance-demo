@@ -92,7 +92,7 @@ export interface DemoOrder {
 export interface OrderCard {
   cardId: string;
   last4: string;
-  expiresAt: string;
+  expiresAt: string | null;
 }
 
 /** How long a browser stays signed in to Tiny without coming back. */
@@ -178,7 +178,7 @@ const orderRecord = z
     createdAt: isoTime,
     look: look.optional(),
     card: z
-      .object({ cardId: z.string().min(1), last4: z.string(), expiresAt: z.string() })
+      .object({ cardId: z.string().min(1), last4: z.string(), expiresAt: z.string().nullable() })
       .strict()
       .optional(),
   })

@@ -68,7 +68,6 @@ export interface OrderView {
   oneTime?: boolean;
   cardLast4?: string;
   cardLimit?: string;
-  cardExpiresAt?: string;
   checkout?: CheckoutSummary;
   amountSpent?: string;
   /** What went back to the balance; null while a reused card is open (its unused money comes back when it closes). */
@@ -99,7 +98,7 @@ export interface AccountView {
     remaining_this_month: { amount: string; currency: 'USD' };
   };
   identity_check: { required_above: string; status: IdentityStatus };
-  open_cards: Array<{ order_id: string; card_id?: string; last4: string; card_limit: string; expires_at: string }>;
+  open_cards: Array<{ order_id: string; card_id?: string; last4: string; card_limit: string; expires_at: string | null }>;
 }
 
 export interface LogEntry {

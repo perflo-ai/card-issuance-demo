@@ -6,9 +6,9 @@ import { cancelUntilDone } from './cancel';
 import { CardDetails } from './CardDetails';
 import { cardUse, type CardUse } from './cards';
 import {
+  CANCEL_LABEL,
   CANCEL_SLOW_TEXT,
-  cancelLabel,
-  cardName,
+  CARD_NAME,
   declineFallback,
   declineHint,
   money,
@@ -16,7 +16,6 @@ import {
   stalledText,
   stepLabel,
   waitingText,
-  when,
   type Waiting,
 } from './copy';
 import { onLive } from './live';
@@ -308,7 +307,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
 
 interface CardProps {
   order: OrderView;
-  /** Whether the order's card is a one-time card, and whether it serves other orders too. */
+  /** Whether the order's card serves other orders too (cards.ts). */
   cardUse: CardUse;
   seen: StepKey[];
   notice: Notice;
@@ -331,9 +330,6 @@ interface CardProps {
 
 export function OrderCard(props: CardProps) {
   const { order, action, waiting, note, error, perfloOrigin, onAdvance, onExpect } = props;
-  const reusable = props.cardUse.reusable;
-  /** A reused card is still open while Perflo has no final figure for what goes back (null). */
-  const cardOpen = reusable && order.amountReturned === null;
   const card = useRef<HTMLElement>(null);
   const amount = formatUsd(order.amountCents);
   const busy = action !== null;
@@ -404,7 +400,7 @@ export function OrderCard(props: CardProps) {
   const cancelButton = (className: string) =>
     order.perfloOrderId && (
       <button className={className} disabled={busy} onClick={() => props.onCancelCard(order.perfloOrderId as string)}>
-        {action === 'cancel' ? 'Cancelling...' : cancelSlow ? 'Check again' : cancelLabel(reusable)}
+        {action === 'cancel' ? 'Cancelling...' : cancelSlow ? 'Check again' : CANCEL_LABEL}
       </button>
     );
 
@@ -531,33 +527,21 @@ export function OrderCard(props: CardProps) {
               expYear={order.checkout.expYear}
             />
           )}
-          {order.checkout.outcome === 'filled_not_submitted' &&
-            (reusable ? (
-              <p>
-                I filled in the checkout on {order.domain}. This demo stops before buying. The card stays open for your later orders until
-                it expires{order.cardExpiresAt ? ` (${when(order.cardExpiresAt)})` : ''}, and unused money goes back to your balance when it
-                closes.
-              </p>
-            ) : (
-              <p>
-                I filled in the checkout on {order.domain}. This demo stops before buying, so the card stays open until you cancel it
-                {order.cardExpiresAt ? ` or it expires (${when(order.cardExpiresAt)})` : ''}. Unused money goes back to your balance.
-              </p>
-            ))}
-          {order.checkout.outcome === 'charge_refused' && (
+          {order.checkout.outcome === 'filled_not_submitted' && (
             <p>
-              {reusable
-                ? 'The shop did not accept the card. You can cancel this order to get its money back.'
-                : 'The shop did not accept the card. You can cancel it to get the money back.'}
+              I filled in the checkout on {order.domain}. This demo stops before buying. You can cancel this order to get its money back.
             </p>
+          )}
+          {order.checkout.outcome === 'charge_refused' && (
+            <p>The shop did not accept the card. You can cancel this order to get its money back.</p>
           )}
           {cancelButton('secondary')}
         </>
       ) : (
         <>
           <p>
-            Your {cardName(reusable).toLowerCase()} <strong>.... {order.cardLast4}</strong> is ready
-            {order.cardLimit ? `, up to ${money(order.cardLimit)}${reusable ? ' for this order' : ''}` : ''}.
+            Your {CARD_NAME.toLowerCase()} <strong>.... {order.cardLast4}</strong> is ready
+            {order.cardLimit ? `, up to ${money(order.cardLimit)} for this order` : ''}.
           </p>
           {order.perfloOrderId && order.cardLast4 && (
             <CardDetails perfloOrderId={order.perfloOrderId} last4={order.cardLast4} cardLimit={order.cardLimit} use={props.cardUse} />
@@ -587,13 +571,7 @@ export function OrderCard(props: CardProps) {
           <p className="done">
             Paid {money(order.amountSpent ?? '0.00')} at {order.domain}.
           </p>
-          <p className="muted small">
-            {order.checkout && !cardOpen ? `${cardName(reusable)} .... ${order.checkout.last4} is now closed. ` : ''}
-            {order.checkout && cardOpen
-              ? `${cardName(true)} .... ${order.checkout.last4} stays open for your later orders until it expires${order.cardExpiresAt ? ` (${when(order.cardExpiresAt)})` : ''}. `
-              : ''}
-            {returnedLine(order.amountReturned) ?? ''}
-          </p>
+          {returnedLine(order.amountReturned) && <p className="muted small">{returnedLine(order.amountReturned)}</p>}
         </>
       );
       break;
@@ -611,10 +589,10 @@ export function OrderCard(props: CardProps) {
       );
       break;
     case 'cancelled':
-      body = <p>Cancelled. {returnedLine(order.amountReturned) ?? 'Nothing was spent.'}</p>;
+      body = <p>Cancelled. {returnedLine(order.amountReturned) ?? (order.amountReturned === null ? '' : 'Nothing was spent.')}</p>;
       break;
     case 'expired':
-      body = <p>The card expired before it was used. The money went back to your balance.</p>;
+      body = <p>This order ended before anything was spent. {returnedLine(order.amountReturned) ?? ''}</p>;
       break;
     case 'failed':
       body = <p>This order could not be completed. Any money set aside for it goes back to your balance.</p>;

@@ -74,7 +74,8 @@ export const accountResponse = z.object({
       card_id: z.string().optional(),
       last4: z.string(),
       card_limit: amount,
-      expires_at: z.string(),
+      // Not used: always null.
+      expires_at: z.string().nullable(),
     }),
   ),
 });
@@ -111,7 +112,8 @@ export const orderResponse = z.discriminatedUnion('status', [
     // Present only on the response that first hands the card out (SPEC 4 clarification).
     reveal_url: link.optional(),
     reveal_expires_at: z.string().optional(),
-    card_expires_at: z.string(),
+    // Not used: always null.
+    card_expires_at: z.string().nullable(),
   }),
   z.object({
     ...orderId,

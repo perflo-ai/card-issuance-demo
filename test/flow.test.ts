@@ -301,7 +301,7 @@ describe('other order states through the demo', () => {
     });
   });
 
-  it('stop at checkout keeps the card open, and Cancel card returns the money', async () => {
+  it('stop at checkout keeps the order open, and Cancel order returns the money', async () => {
     const demo = makeDemo(mock.base);
     const b = browser(demo);
     await linkedWithMoney(b, '100.00');

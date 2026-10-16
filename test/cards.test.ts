@@ -79,7 +79,7 @@ describe('open cards are listed one per card', () => {
     expires_at: expires,
   });
 
-  it('entries with the same card_id make one row with their total and the latest end, even for orders Tiny did not place', () => {
+  it('entries with the same card_id make one row with their total, even for orders Tiny did not place', () => {
     const rows = openCardRows(
       [
         { order_id: 'ord_x', card_id: 'card_a', last4: '4417', card_limit: '10.00', expires_at: '2026-10-10T12:00:00Z' },
@@ -92,7 +92,6 @@ describe('open cards are listed one per card', () => {
         key: 'card:card_a',
         last4: '4417',
         total: '30.05',
-        expiresAt: '2026-10-10T13:00:00Z',
         orderIds: ['ord_x', 'ord_y'],
         reusable: true,
       },
@@ -129,7 +128,6 @@ describe('open cards are listed one per card', () => {
           key: 'card:card_a',
           last4: '4417',
           total: '30.05',
-          expiresAt: '2026-10-10T13:00:00Z',
           orderIds: [a.perfloOrderId, b.perfloOrderId],
           reusable: true,
         },
