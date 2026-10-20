@@ -22,13 +22,13 @@ async function linkedUser(
 ) {
   const created = await signedFetch(mock.base, 'POST', '/v1/users', { body: { external_user_id: externalId, email } });
   expect(created.status).toBe(202);
-  await finishSetup(mock.base, created.json.connect_url, limits);
+  await finishSetup(created.json.connect_url, limits);
   const connection = await signedFetch(mock.base, 'GET', `/v1/connections/${created.json.connection_id}`);
   const token = connection.json.user_access_token as string;
   const userId = connection.json.user_id as string;
   if (balance) {
     const link = await signedFetch(mock.base, 'POST', `/v1/users/${userId}/top-ups`, { token, body: { amount: balance } });
-    await payInFrame(mock.base, link.json.frame_url, balance);
+    await payInFrame(link.json.frame_url, balance);
   }
   return { token, userId };
 }
@@ -78,12 +78,12 @@ describe('users and connections', () => {
 
     expect((await signedFetch(mock.base, 'GET', `/v1/connections/${created.json.connection_id}`)).json).toEqual({ status: 'pending' });
     // The frame knows the email, so the code is already sent: the first step is the code.
-    expect((await frameCall(mock.base, created.json.connect_url, 'state')).json).toMatchObject({
+    expect((await frameCall(created.json.connect_url, 'state')).json).toMatchObject({
       purpose: 'setup',
       step: 'login',
       email_masked: 'a***@example.com',
     });
-    await finishSetup(mock.base, created.json.connect_url);
+    await finishSetup(created.json.connect_url);
 
     const first = await signedFetch(mock.base, 'GET', `/v1/connections/${created.json.connection_id}`);
     expect(first.json).toMatchObject({
@@ -131,7 +131,7 @@ describe('users and connections', () => {
     const created = await signedFetch(mock.base, 'POST', '/v1/users', {
       body: { external_user_id: 'ext-1', email: 'ada@example.com' },
     });
-    const wrong = await frameCall(mock.base, created.json.connect_url, 'login', { privy_access_token: 'mock-otp:000000' });
+    const wrong = await frameCall(created.json.connect_url, 'login', { privy_access_token: 'mock-otp:000000' });
     expect(wrong.status).toBe(401);
     expect(wrong.json.error).toEqual({ code: 'connection_failed', message: 'That code is not right. Check it and try again.' });
   });
@@ -170,7 +170,7 @@ describe('orders', () => {
     const placed = await signedFetch(mock.base, 'POST', '/v1/checkout/orders', { token, idem: 'k1', body: order(userId, '50.00') });
     expect(placed.status).toBe(202);
     expect(placed.json).toMatchObject({ status: 'payment_required', amount_due: centsToApiAmount(quote(5000).totalCents) });
-    await payInFrame(mock.base, placed.json.frame_url, placed.json.amount_due);
+    await payInFrame(placed.json.frame_url, placed.json.amount_due);
     const now = await signedFetch(mock.base, 'GET', `/v1/checkout/orders/${placed.json.order_id}`);
     expect(now.status).toBe(200);
     expect(now.json).toMatchObject({ status: 'ready', last4: expect.stringMatching(/^[0-9]{4}$/), card_limit: '50.00' });
@@ -291,7 +291,7 @@ describe('orders', () => {
       connect_url: expect.stringContaining('/v1/frames/setup?session=fs_'),
       client_secret: expect.any(String),
     });
-    await finishSetup(mock.base, placed.json.connect_url);
+    await finishSetup(placed.json.connect_url);
     const connection = await signedFetch(mock.base, 'GET', `/v1/connections/${placed.json.connection_id}`);
     expect(connection.json.user_access_token).toMatch(/^ptk_test_/);
     expect((await signedFetch(mock.base, 'GET', `/v1/checkout/orders/${placed.json.order_id}`)).json.status).toBe('ready');
@@ -342,11 +342,9 @@ describe('frames', () => {
     const created = await signedFetch(mock.base, 'POST', '/v1/users', {
       body: { external_user_id: 'ext-1', email: 'ada@example.com' },
     });
-    await frameCall(mock.base, created.json.connect_url, 'login', { privy_access_token: 'mock-otp:123456' });
-    expect((await frameCall(mock.base, created.json.connect_url, 'limits', {})).status).toBe(400);
-    expect((await frameCall(mock.base, created.json.connect_url, 'limits', { per_order: '2500.00', per_month: '1000.00' })).status).toBe(
-      400,
-    );
+    await frameCall(created.json.connect_url, 'login', { privy_access_token: 'mock-otp:123456' });
+    expect((await frameCall(created.json.connect_url, 'limits', {})).status).toBe(400);
+    expect((await frameCall(created.json.connect_url, 'limits', { per_order: '2500.00', per_month: '1000.00' })).status).toBe(400);
   });
 });
 
@@ -376,9 +374,9 @@ describe('add money pages: one amount each, opened in their own tab', () => {
   it('opens straight on the payment for its own amount: no amount can be typed there', async () => {
     const { token, userId } = await linkedUser();
     const link = await signedFetch(mock.base, 'POST', `/v1/users/${userId}/top-ups`, { token, body: { amount: '25.00' } });
-    expect((await frameCall(mock.base, link.json.frame_url, 'state')).json).toMatchObject({ purpose: 'top-up', amount: '25.00' });
-    expect((await frameCall(mock.base, link.json.frame_url, 'top-up', { amount: '5.00' })).status).toBe(400);
-    const started = await frameCall(mock.base, link.json.frame_url, 'top-up', {});
+    expect((await frameCall(link.json.frame_url, 'state')).json).toMatchObject({ purpose: 'top-up', amount: '25.00' });
+    expect((await frameCall(link.json.frame_url, 'top-up', { amount: '5.00' })).status).toBe(400);
+    const started = await frameCall(link.json.frame_url, 'top-up', {});
     expect(started.status).toBe(201);
     expect(started.json.amount).toBe('25.00');
   });
@@ -395,14 +393,14 @@ describe('add money pages: one amount each, opened in their own tab', () => {
       });
 
     const first = await open();
-    const started = await frameCall(mock.base, first, 'top-up', {});
-    expect((await frameCall(mock.base, first, 'top-up/cancel', {})).json).toEqual({ status: 'cancelled' });
+    const started = await frameCall(first, 'top-up', {});
+    expect((await frameCall(first, 'top-up/cancel', {})).json).toEqual({ status: 'cancelled' });
     expect((await pay(started.json.client_secret as string)).status).toBe(409);
-    expect((await frameCall(mock.base, first, 'top-up', {})).status).toBe(409);
+    expect((await frameCall(first, 'top-up', {})).status).toBe(409);
 
     const second = await open();
-    await payInFrame(mock.base, second, '25.00');
-    expect((await frameCall(mock.base, second, 'top-up/cancel', {})).json).toEqual({ status: 'paid' });
+    await payInFrame(second, '25.00');
+    expect((await frameCall(second, 'top-up/cancel', {})).json).toEqual({ status: 'paid' });
     const account = await signedFetch(mock.base, 'GET', `/v1/users/${userId}`, { token });
     expect(account.json.balance.amount).toBe('25.00');
   });
@@ -411,6 +409,54 @@ describe('add money pages: one amount each, opened in their own tab', () => {
     const script = await (await fetch(`${mock.base}/mock-assets/frame.js`)).text();
     expect(script).toContain('window.opener');
     expect(script).toContain('window.parent');
+  });
+});
+
+describe('the checkout host: every page link on an origin of its own, as Perflo hands them out', () => {
+  let hosted: Awaited<ReturnType<typeof startMock>>;
+  beforeEach(async () => {
+    hosted = await startMock(50, undefined, false, undefined, true);
+  });
+  afterEach(async () => {
+    await hosted.close();
+  });
+
+  it('the connect, limits and add money links are on the checkout origin, and each page calls under its own folder there', async () => {
+    const checkout = hosted.checkout as string;
+    const created = await signedFetch(hosted.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1', email: 'ada@example.com' } });
+    expect(created.json.connect_url).toContain(`${checkout}/setup?session=fs_`);
+    const connect = await fetch(created.json.connect_url);
+    expect(connect.status).toBe(200);
+    // Placed inside the partner's page, like the connect page on Perflo's checkout host.
+    expect(connect.headers.get('content-security-policy')).toContain('frame-ancestors https://localhost:5174');
+    expect(await connect.text()).toContain('data-api="/setup/session"');
+    expect(await finishSetup(created.json.connect_url)).toMatchObject({ status: 200 });
+
+    const connection = await signedFetch(hosted.base, 'GET', `/v1/connections/${created.json.connection_id}`);
+    const token = connection.json.user_access_token as string;
+    const userId = connection.json.user_id as string;
+
+    const limits = await signedFetch(hosted.base, 'POST', `/v1/users/${userId}/limits-link`, { token });
+    expect(limits.json.frame_url).toContain(`${checkout}/limits?session=fs_`);
+    const limitsPage = await fetch(limits.json.frame_url);
+    expect(limitsPage.headers.get('content-security-policy')).toContain('frame-ancestors https://localhost:5174');
+    expect(await limitsPage.text()).toContain('data-api="/limits/session"');
+    expect((await frameCall(limits.json.frame_url, 'state')).json).toMatchObject({ purpose: 'limits', step: 'limits' });
+    expect((await frameCall(limits.json.frame_url, 'limits', { per_order: '50.00', per_month: '100.00' })).status).toBe(200);
+
+    const topUp = await signedFetch(hosted.base, 'POST', `/v1/users/${userId}/top-ups`, { token, body: { amount: '25.00' } });
+    expect(topUp.json.frame_url).toContain(`${checkout}/top-up?session=fs_`);
+    const topUpPage = await fetch(topUp.json.frame_url);
+    expect(topUpPage.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(await topUpPage.text()).toContain('data-api="/top-up/session"');
+    await payInFrame(topUp.json.frame_url, '25.00');
+    expect((await signedFetch(hosted.base, 'GET', `/v1/users/${userId}`, { token })).json.balance.amount).toBe('25.00');
+  });
+
+  it('without a checkout origin the pages stay on the API host and call /v1/frames/session, as before', async () => {
+    const created = await signedFetch(mock.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1', email: 'ada@example.com' } });
+    expect(created.json.connect_url).toContain(`${mock.base}/v1/frames/setup?session=fs_`);
+    expect(await (await fetch(created.json.connect_url)).text()).toContain('data-api="/v1/frames/session"');
   });
 });
 
@@ -709,7 +755,7 @@ describe('connections: only the connect names', () => {
     });
     try {
       const created = await signedFetch(hooked.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1' } });
-      await finishSetup(hooked.base, created.json.connect_url);
+      await finishSetup(created.json.connect_url);
       const linked = await signedFetch(hooked.base, 'GET', `/v1/connections/${created.json.connection_id}`);
       await fetch(`${hooked.base}/mock/control/revoke`, {
         method: 'POST',

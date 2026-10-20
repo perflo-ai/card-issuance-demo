@@ -24,6 +24,7 @@ import { SetupFlow } from './Setup';
 import { StepList } from './Steps';
 import { formatUsd } from '../../server/money';
 import type { Notice, OrderPhase, OrderView, PerfloPageView } from '../../server/views';
+import type { PerfloOrigins } from './frameEvents';
 
 type Message = { id: string; kind: 'user' | 'assistant'; text: string } | { id: string; kind: 'order'; orderId: string };
 
@@ -31,7 +32,7 @@ type Message = { id: string; kind: 'user' | 'assistant'; text: string } | { id: 
 type Action = 'place' | 'pay' | 'check' | 'cancel' | 'discard';
 
 interface ChatProps {
-  perfloOrigin: string;
+  origins: PerfloOrigins;
   orders: Record<string, OrderView>;
   /** The steps each order has been seen on, from the statuses the server returned. */
   seen: Record<string, StepKey[]>;
@@ -61,7 +62,7 @@ const STALL_MS: Record<Waiting, number> = {
   card: 5 * 60_000,
 };
 
-export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountChanged, onChangeLimits, onLinked }: ChatProps) {
+export function Chat({ origins, orders, seen, loaded, onOrder, onAccountChanged, onChangeLimits, onLinked }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [notices, setNotices] = useState<Record<string, Notice>>({});
   const [actions, setActions] = useState<Record<string, Action | null>>({});
@@ -260,7 +261,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
               note={notes[m.orderId] ?? ''}
               error={errors[m.orderId] ?? ''}
               cancelSlow={slowCancels[m.orderId] ?? false}
-              perfloOrigin={perfloOrigin}
+              origins={origins}
               onAdvance={(action) => advance(m.orderId, action)}
               onExpect={(from, what) => expect(m.orderId, from, what)}
               onDiscard={() => void discard(m.orderId)}
@@ -317,7 +318,7 @@ interface CardProps {
   error: string;
   /** The cancel has not gone through yet after Tiny kept trying: say so calmly and offer to check again. */
   cancelSlow: boolean;
-  perfloOrigin: string;
+  origins: PerfloOrigins;
   onAdvance: (action: Action) => Promise<OrderView | null>;
   /** Show that Tiny is waiting for Perflo's word on this order, until it moves on. */
   onExpect: (from: OrderPhase, what: Waiting) => void;
@@ -329,7 +330,7 @@ interface CardProps {
 }
 
 export function OrderCard(props: CardProps) {
-  const { order, action, waiting, note, error, perfloOrigin, onAdvance, onExpect } = props;
+  const { order, action, waiting, note, error, origins, onAdvance, onExpect } = props;
   const card = useRef<HTMLElement>(null);
   const amount = formatUsd(order.amountCents);
   const busy = action !== null;
@@ -433,7 +434,7 @@ export function OrderCard(props: CardProps) {
           ) : (
             <p className="muted">Payments for Tiny were turned off. Reconnect to allow this order.</p>
           )}
-          <SetupFlow perfloOrigin={perfloOrigin} disabled={busy} open={openConnection} onLinked={linked} />
+          <SetupFlow origins={origins} disabled={busy} open={openConnection} onLinked={linked} />
           {action === 'place' && (
             <p className="working" role="status">
               {waitingText('placing')}

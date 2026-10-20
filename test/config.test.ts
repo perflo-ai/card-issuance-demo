@@ -53,6 +53,34 @@ describe('loadConfig: the address state-changing requests must come from', () =>
   });
 });
 
+describe('loadConfig: where Perflo hands out its page links (PERFLO_CHECKOUT_ORIGIN)', () => {
+  it('is unset by default: every page then comes from the API origin, as before', () => {
+    expect(loadConfig({ ...LIVE }).checkoutOrigin).toBeNull();
+  });
+
+  it('is the origin Perflo hands the connect, limits and add money links on', () => {
+    expect(loadConfig({ ...LIVE, PERFLO_CHECKOUT_ORIGIN: 'https://checkout.perflo.ai' }).checkoutOrigin).toBe('https://checkout.perflo.ai');
+    expect(loadConfig({ ...LIVE, PERFLO_CHECKOUT_ORIGIN: 'https://checkout.perflo.ai/' }).checkoutOrigin).toBe(
+      'https://checkout.perflo.ai',
+    );
+  });
+
+  it.each(['checkout.perflo.ai', 'http://checkout.perflo.ai', 'https://checkout.perflo.ai/setup', 'https://checkout.perflo.ai/?a=1'])(
+    'refuses PERFLO_CHECKOUT_ORIGIN=%s',
+    (origin) => {
+      expect(() => loadConfig({ ...LIVE, PERFLO_CHECKOUT_ORIGIN: origin })).toThrow(ConfigError);
+    },
+  );
+
+  it('in mock mode is a localhost port of its own, where the mock serves the pages', () => {
+    const MOCK = { ...LIVE, DEMO_MODE: 'mock', PERFLO_API_BASE: 'https://localhost:8791' };
+    expect(loadConfig({ ...MOCK, PERFLO_CHECKOUT_ORIGIN: 'https://localhost:8792' }).checkoutOrigin).toBe('https://localhost:8792');
+    for (const origin of ['https://checkout.perflo.ai', 'https://localhost:8791', 'https://localhost:5174']) {
+      expect(() => loadConfig({ ...MOCK, PERFLO_CHECKOUT_ORIGIN: origin })).toThrow(ConfigError);
+    }
+  });
+});
+
 describe('loadConfig: the webhook secret', () => {
   it('is required in live mode, because without webhooks nothing on the page would move', () => {
     const { PERFLO_WEBHOOK_SECRET: _unset, ...withoutSecret } = LIVE;

@@ -7,9 +7,10 @@ import { PerfloFrame } from './PerfloFrame';
 import { CONNECT_WAIT_MS, settleConnection } from './connect';
 import { StepList } from './Steps';
 import type { LinkStatus, PerfloPageView } from '../../server/views';
+import type { PerfloOrigins } from './frameEvents';
 
 interface Props {
-  perfloOrigin: string;
+  origins: PerfloOrigins;
   /**
    * The setup page to show, asked of Tiny's server each time (it checks with Perflo that the connection
    * still works), or null when there is nothing to open. A throw is shown as the error.
@@ -25,7 +26,7 @@ interface Props {
  * up (or turned back on). The step list follows the frame's own events
  * (code verified, limits saved), never a timer.
  */
-export function SetupFlow({ perfloOrigin, open, onLinked, disabled = false }: Props) {
+export function SetupFlow({ origins, open, onLinked, disabled = false }: Props) {
   const [page, setPage] = useState<PerfloPageView | null>(null);
   const [opening, setOpening] = useState(false);
   const [step, setStep] = useState(0);
@@ -123,7 +124,7 @@ export function SetupFlow({ perfloOrigin, open, onLinked, disabled = false }: Pr
         <PerfloFrame
           page={page}
           title="Set up payments"
-          perfloOrigin={perfloOrigin}
+          origins={origins}
           onEvent={onFrameEvent}
           onExpired={() => {
             setPage(null);

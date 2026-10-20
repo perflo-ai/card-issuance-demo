@@ -9,8 +9,10 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 export interface HeaderOptions {
-  /** Origin of the payments service: the only place Perflo.js and Perflo's pages may load from. */
+  /** Origin of the payments service: the only place Perflo.js loads from, and where the pages it places come from. */
   perfloOrigin: string;
+  /** Where Perflo hands out its page links (PERFLO_CHECKOUT_ORIGIN), or null when they are on `perfloOrigin`. */
+  checkoutOrigin: string | null;
   /** The built web app is served (strict script policy). Off while Vite serves the page in development. */
   production: boolean;
   /** Behind a host that terminates HTTPS. */
@@ -19,14 +21,17 @@ export interface HeaderOptions {
 
 /**
  * Headers on every response. The page embeds Perflo's pages and nothing else:
- * frame-src names that one origin, scripts come from Tiny's own origin and
- * Perflo.js from that same Perflo origin (PERFLO_API_BASE, so production's
- * https://api.perflo.ai or whichever host the demo points at, never a list
- * written here), connections stay on Tiny's own origin (Perflo.js makes none),
- * and no one may frame Tiny itself. Development keeps only the framing rule,
- * because Vite injects inline scripts for hot reload.
+ * frame-src names Perflo's origins (PERFLO_API_BASE's, where Perflo.js places
+ * its pages, and PERFLO_CHECKOUT_ORIGIN when set, where Perflo hands out the
+ * page links: production's https://api.perflo.ai and https://checkout.perflo.ai,
+ * or whichever hosts the demo points at, never a list written here), scripts
+ * come from Tiny's own origin and Perflo.js from the API origin only,
+ * connections stay on Tiny's own origin (Perflo.js makes none), and no one may
+ * frame Tiny itself. Development keeps only the framing rule, because Vite
+ * injects inline scripts for hot reload.
  */
-export function securityHeaders({ perfloOrigin, production, hosted }: HeaderOptions): RequestHandler {
+export function securityHeaders({ perfloOrigin, checkoutOrigin, production, hosted }: HeaderOptions): RequestHandler {
+  const pageOrigins = checkoutOrigin === null || checkoutOrigin === perfloOrigin ? [perfloOrigin] : [perfloOrigin, checkoutOrigin];
   const csp = production
     ? [
         "default-src 'self'",
@@ -35,7 +40,7 @@ export function securityHeaders({ perfloOrigin, production, hosted }: HeaderOpti
         'font-src https://fonts.gstatic.com',
         "img-src 'self' data:",
         "connect-src 'self'",
-        `frame-src ${perfloOrigin}`,
+        `frame-src ${pageOrigins.join(' ')}`,
         "form-action 'self'",
         "base-uri 'none'",
         "object-src 'none'",
@@ -51,8 +56,8 @@ export function securityHeaders({ perfloOrigin, production, hosted }: HeaderOpti
       // Not plain same-origin: Perflo's add money page opens in a tab Tiny's page opens, and tells this
       // page when the person is done (window.opener). Windows from anywhere else still get no link here.
       'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
-      // The add money frame takes card payments, so it alone may use the Payment Request API.
-      'Permissions-Policy': `camera=(), microphone=(), geolocation=(), payment=(self "${perfloOrigin}")`,
+      // Perflo's frames take card payments, so they alone may use the Payment Request API.
+      'Permissions-Policy': `camera=(), microphone=(), geolocation=(), payment=(self ${pageOrigins.map((o) => `"${o}"`).join(' ')})`,
     });
     if (hosted) res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     next();

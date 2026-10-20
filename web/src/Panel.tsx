@@ -8,6 +8,7 @@ import { openCardRows } from './cards';
 import { CANCEL_LABEL, CANCEL_SLOW_TEXT, identityText, LOOK_LABELS, money, pageExpiredText } from './copy';
 import { Orders } from './Orders';
 import { hasPerfloJs } from './perflo';
+import type { PerfloOrigins } from './frameEvents';
 import { PerfloFrame } from './PerfloFrame';
 import { singleFlight } from './polling';
 import {
@@ -21,7 +22,7 @@ import {
 } from '../../server/views';
 
 interface Props {
-  perfloOrigin: string;
+  origins: PerfloOrigins;
   mode: 'live' | 'mock';
   /** Bumped by the chat whenever money or access may have changed. */
   refreshKey: number;
@@ -50,7 +51,7 @@ type Tab = (typeof TABS)[number];
 type Busy = 'limits' | 'revoke' | { cancel: string } | null;
 
 export function Panel(props: Props) {
-  const { perfloOrigin, mode, refreshKey, limitsRequest, onAccountChanged, me, onMe } = props;
+  const { origins, mode, refreshKey, limitsRequest, onAccountChanged, me, onMe } = props;
   const [account, setAccount] = useState<AccountView | null>(null);
   const [linked, setLinked] = useState<boolean | null>(null);
   const [frame, setFrame] = useState<OpenFrame>(null);
@@ -293,7 +294,7 @@ export function Panel(props: Props) {
             <PerfloFrame
               page={frame.page}
               title="Change limits"
-              perfloOrigin={perfloOrigin}
+              origins={origins}
               onEvent={(event) => {
                 if (event.type === 'perflo:closed') setFrame(null);
                 if (event.type === 'perflo:limits_saved') onAccountChanged();

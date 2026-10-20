@@ -100,7 +100,7 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
   // A host's proxy sits in front: the client address and the public host name come from its headers.
   if (hosted) app.set('trust proxy', 1);
   app.use(requestLog(logger));
-  app.use(securityHeaders({ perfloOrigin: config.perfloOrigin, production, hosted }));
+  app.use(securityHeaders({ perfloOrigin: config.perfloOrigin, checkoutOrigin: config.checkoutOrigin, production, hosted }));
 
   // For the host's health check: no session, no rate limit, nothing about anyone.
   app.get('/healthz', (_req, res) => {
@@ -209,6 +209,7 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     const view: DemoConfigView = {
       mode: config.mode,
       perfloOrigin: config.perfloOrigin,
+      checkoutOrigin: config.checkoutOrigin,
       // Perflo.js learns where Perflo is from its own address, so it is loaded from exactly the API base.
       perfloScriptUrl: config.mode === 'live' ? `${config.perfloApiBase}/v1/perflo.js` : null,
     };

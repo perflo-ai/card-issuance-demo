@@ -188,7 +188,7 @@ describe('an order moved on by webhooks alone', () => {
     // A slow card (over $100 in the mock), so "ready" comes later and only a webhook can bring it.
     const draft = (await post('/demo/chat', { text: 'buy me $150 worth of headphones on amazon' })).body.order as OrderView;
     const setup = (await post(`/demo/orders/${draft.id}/advance`)).body.order as OrderView;
-    await finishSetup(mock.base, setup.frameUrl as string);
+    await finishSetup(setup.frameUrl as string);
     await post('/demo/frame-events', {
       type: 'perflo:setup_completed',
       frame_session_id: new URL(setup.frameUrl as string).searchParams.get('session'),
@@ -198,7 +198,7 @@ describe('an order moved on by webhooks alone', () => {
 
     const stream = await openStream(tiny, cookie);
     const advances = vi.spyOn(demo.service, 'advanceOrder');
-    await payInFrame(mock.base, due.frameUrl as string, due.amountDue as string);
+    await payInFrame(due.frameUrl as string, due.amountDue as string);
 
     // From here the page sends nothing. Perflo's webhooks move the order; Tiny pays and pushes.
     const pushedPhase = () => stream.messages.flatMap((m) => (m.type === 'order' && m.order.id === draft.id ? [m.order.phase] : [])).at(-1);

@@ -130,7 +130,7 @@ describe('a setup link links only the session that started it', () => {
     const { app: target } = app();
     const before = await startSession(target);
     const frameUrl = await setupLink(target, before);
-    await finishSetup(mock.base, frameUrl);
+    await finishSetup(frameUrl);
     const event = await post(target, '/demo/frame-events', before, {
       type: 'perflo:setup_completed',
       frame_session_id: new URL(frameUrl).searchParams.get('session') as string,
@@ -152,7 +152,7 @@ describe('a setup link links only the session that started it', () => {
     const alice = await startSession(target);
     const mallory = await startSession(target);
     const aliceFrame = await setupLink(target, alice);
-    await finishSetup(mock.base, aliceFrame);
+    await finishSetup(aliceFrame);
     // Mallory replays Alice's frame event, ids and all, on her own session.
     const aliceConnectionId = Object.values(
       JSON.parse(readFileSync(demo.dataFile, 'utf8')).users as Record<
@@ -225,6 +225,25 @@ describe('response headers', () => {
     expect(csp).toContain(`script-src 'self' ${new URL(mock.base).origin};`);
     expect(csp).toContain(`frame-src ${new URL(mock.base).origin}`);
     expect(csp).toContain("frame-ancestors 'none'");
+  });
+
+  it('lets the pages be framed from the checkout origin too, while Perflo.js still loads from the API origin only', async () => {
+    const api = new URL(mock.base).origin;
+    const checkout = 'https://checkout.perflo.test';
+    const built = await request(app(makeDemo(mock.base, 'mock', checkout), true).app)
+      .get('/demo/config')
+      .set('Host', HOST);
+    const csp = built.headers['content-security-policy'];
+    expect(csp).toContain(`script-src 'self' ${api};`);
+    expect(csp).toContain(`frame-src ${api} ${checkout};`);
+    expect(built.headers['permissions-policy']).toBe(`camera=(), microphone=(), geolocation=(), payment=(self "${api}" "${checkout}")`);
+    expect(built.body).toMatchObject({ perfloOrigin: api, checkoutOrigin: checkout });
+
+    // Unset, nothing moves: one Perflo origin, as before.
+    const before = await request(app(undefined, true).app).get('/demo/config').set('Host', HOST);
+    expect(before.headers['content-security-policy']).toContain(`frame-src ${api};`);
+    expect(before.headers['permissions-policy']).toBe(`camera=(), microphone=(), geolocation=(), payment=(self "${api}")`);
+    expect(before.body).toMatchObject({ perfloOrigin: api, checkoutOrigin: null });
   });
 
   it('marks every demo answer as not to be cached', async () => {

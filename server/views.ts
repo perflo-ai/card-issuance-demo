@@ -142,6 +142,11 @@ export interface DemoConfigView {
   mode: 'live' | 'mock';
   perfloOrigin: string;
   /**
+   * Where Perflo hands out the connect, limits and add money page links (PERFLO_CHECKOUT_ORIGIN), or null
+   * when they come from `perfloOrigin`. A page opened from its link must be on one of the two.
+   */
+  checkoutOrigin: string | null;
+  /**
    * Where the page loads Perflo.js from (live mode), to open embedded pages and UI elements with a
    * client_secret. null in mock mode: the test payments service has no Perflo.js, so its pages are
    * opened from their links.

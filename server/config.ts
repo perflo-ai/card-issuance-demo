@@ -23,6 +23,13 @@ export interface DemoConfig {
   /** Origin plus optional path prefix, no trailing slash. */
   perfloApiBase: string;
   perfloOrigin: string;
+  /**
+   * Where Perflo hands out the connect, limits and add money page links (PERFLO_CHECKOUT_ORIGIN), such as
+   * https://checkout.perflo.ai, or null when it is not set: the pages then come from `perfloOrigin`, as on a
+   * Perflo with no checkout host. Perflo.js and the pages it places stay on `perfloOrigin` either way. In
+   * mock mode the mock serves the pages on this origin.
+   */
+  checkoutOrigin: string | null;
   credentials: PartnerCredentials;
   dataFile: string;
   listen: DemoListen;
@@ -92,6 +99,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DemoConfig {
     throw new ConfigError(`The mock cannot share port ${DEMO_PORT} with the demo`);
   }
 
+  const checkoutOrigin = checkoutOriginFrom(env, mode, base);
+
   const partnerId = required(env, 'PARTNER_ID');
   if (!PARTNER_ID_PATTERN.test(partnerId)) throw new ConfigError('PARTNER_ID must be a v4 uuid');
   const keyVersion = required(env, 'PARTNER_KEY_VERSION');
@@ -127,6 +136,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DemoConfig {
     mode,
     perfloApiBase: base.toString().replace(/\/$/, ''),
     perfloOrigin: base.origin,
+    checkoutOrigin,
     credentials: { partnerId, keyVersion, secret },
     dataFile: env.DEMO_DATA_FILE?.trim() || 'data/demo-store.json',
     listen,
@@ -134,6 +144,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DemoConfig {
     webhookSecret,
     mockReuseCards: rawReuse === 'true',
   };
+}
+
+function checkoutOriginFrom(env: NodeJS.ProcessEnv, mode: DemoMode, api: URL): string | null {
+  const raw = env.PERFLO_CHECKOUT_ORIGIN?.trim();
+  if (!raw) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new ConfigError('PERFLO_CHECKOUT_ORIGIN must be an address such as https://checkout.perflo.ai');
+  }
+  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  const secure = url.protocol === 'https:' || (url.protocol === 'http:' && isLocal);
+  if (!secure || url.origin !== raw.replace(/\/$/, '')) {
+    throw new ConfigError(
+      'PERFLO_CHECKOUT_ORIGIN must be https (or http on localhost) and only the origin, such as https://checkout.perflo.ai',
+    );
+  }
+  if (mode === 'mock') {
+    if (!isLocal) throw new ConfigError('In mock mode PERFLO_CHECKOUT_ORIGIN must be a localhost URL; the mock serves its pages there');
+    const port = (u: URL) => u.port || (u.protocol === 'https:' ? '443' : '80');
+    if (port(url) === port(api) || port(url) === String(DEMO_PORT)) {
+      throw new ConfigError(`In mock mode PERFLO_CHECKOUT_ORIGIN needs a port of its own, not the mock's API port or ${DEMO_PORT}`);
+    }
+  }
+  return url.origin;
 }
 
 function publicOriginFrom(env: NodeJS.ProcessEnv, listen: DemoListen): string | null {

@@ -30,7 +30,7 @@ embed frames, and Perflo accepts only https origins. The port is fixed and the s
 is taken.
 
 The certificate is self-signed, so the browser warns once per port. Open https://localhost:5174 and, in mock
-mode, https://localhost:8791 once, and accept the warning on each. If you have
+mode, https://localhost:8791 and https://localhost:8792 (`PERFLO_CHECKOUT_ORIGIN`) once, and accept the warning on each. If you have
 [mkcert](https://github.com/FiloSottile/mkcert), you can use a trusted certificate instead:
 `mkcert -install && mkcert -cert-file certs/localhost.pem -key-file certs/localhost-key.pem localhost 127.0.0.1`.
 The server reads `certs/localhost.pem` and `certs/localhost-key.pem` either way, and trusts that certificate
@@ -41,12 +41,15 @@ for its own calls to the mock (`NODE_EXTRA_CA_CERTS` in the npm scripts).
 ```
 DEMO_MODE=mock
 PERFLO_API_BASE=https://localhost:8791
+PERFLO_CHECKOUT_ORIGIN=https://localhost:8792
 PARTNER_ID=<any v4 uuid>
 PARTNER_KEY_VERSION=v1
 PARTNER_SECRET=<any 43 base64url characters>
 ```
 
-`npm run dev` starts the test payments service on `PERFLO_API_BASE` as well. Like Perflo, it sends Tiny a
+`npm run dev` starts the test payments service on `PERFLO_API_BASE` as well. With `PERFLO_CHECKOUT_ORIGIN` it also
+answers on that port and hands out the connect, limits and add money links there (`/setup`, `/limits`, `/top-up`),
+as Perflo does on `https://checkout.perflo.ai`; without it the pages stay at `PERFLO_API_BASE/v1/frames/...`. Like Perflo, it sends Tiny a
 signed webhook for every order and person status change (to `https://localhost:5174/webhooks/perflo`), with a
 webhook secret made fresh for each run, so `PERFLO_WEBHOOK_SECRET` can stay unset here. Its state is in
 memory, so a restart starts it fresh (the demo's own store in `data/` is kept: sign out and set up payments again after a
@@ -87,6 +90,7 @@ spending; cards up to $2,500; partner cap $10,000 per rolling 24 hours.
 ```
 DEMO_MODE=live
 PERFLO_API_BASE=<the Perflo API base>
+PERFLO_CHECKOUT_ORIGIN=<where that Perflo hands out its page links, if not on the API base>
 PARTNER_ID=<partner_id>
 PARTNER_KEY_VERSION=<key_version>
 PARTNER_SECRET=<secret>
@@ -162,10 +166,12 @@ and `POST /v1/checkout/orders` (`payment_element_options` only on the two that t
 every other request (`X-Partner-Key-Version` and the rest). A page already open keeps the look it was opened with,
 and an order keeps the look it was made with, so a retry with its Idempotency-Key sends the same body.
 
-**Content Security Policy.** The built app allows `script-src` and `frame-src` for the origin of `PERFLO_API_BASE` and
-nothing else: `https://api.perflo.ai` in production, or whichever develop or staging host the demo is pointed at. No
-host is written into the code. Perflo.js makes no network calls, so `connect-src` stays `'self'`. `frame-src` is for
-the connect and limits pages; the add money page opens in its own tab, so it needs no entry here.
+**Content Security Policy.** The built app allows `script-src` for the origin of `PERFLO_API_BASE` and nothing else:
+`https://api.perflo.ai` in production, or whichever develop or staging host the demo is pointed at. `frame-src` (and
+`payment` in `Permissions-Policy`) allows that origin, where Perflo.js places its pages, and `PERFLO_CHECKOUT_ORIGIN`
+when set, where Perflo hands out the connect and limits links: `https://checkout.perflo.ai` in production. No host is
+written into the code. Perflo.js makes no network calls, so `connect-src` stays `'self'`. The add money page opens in
+its own tab, so it needs no entry here.
 
 **Adding money** (`web/src/paymentTab.ts`, the one hand-off every top-up goes through). Tiny never builds a money
 input inside Perflo: the person types the amount in Tiny's own field, Tiny's server sends it as `amount` on
@@ -195,8 +201,9 @@ A host sets `PORT`, terminates HTTPS itself and has no `.env` file. With `PORT` 
 listens on that port over plain HTTP on every interface; without it, it runs on
 `https://localhost:5174` as above. Mock mode only runs on this computer.
 
-1. **Variables:** `DEMO_MODE=live`, `PERFLO_API_BASE` (`https://api.perflo.ai` in production), `PARTNER_ID`, `PARTNER_KEY_VERSION`,
-   `PARTNER_SECRET`, `PERFLO_WEBHOOK_SECRET`. A `.env` file is read only when present and never replaces a variable the
+1. **Variables:** `DEMO_MODE=live`, `PERFLO_API_BASE` (`https://api.perflo.ai` in production), `PERFLO_CHECKOUT_ORIGIN`
+   (`https://checkout.perflo.ai` in production; unset for a Perflo that keeps its pages on the API host, as develop
+   does), `PARTNER_ID`, `PARTNER_KEY_VERSION`, `PARTNER_SECRET`, `PERFLO_WEBHOOK_SECRET`. A `.env` file is read only when present and never replaces a variable the
    host already set.
 2. **Build and start:** `npm ci --include=dev && npm run build`, then `npm start`. The build needs
    the dev dependencies (TypeScript, Vite).
@@ -302,8 +309,12 @@ Every call goes to `PERFLO_API_BASE` (`https://api.perflo.ai` in production). Th
   session cookie is `HttpOnly`, `Secure`, `SameSite=Strict` and lasts 30 days; linking an account to
   Perflo gives the browser a new session id. The setup link goes only to the session that asked for it
   and never into the log, and a connection is only ever completed for the session that started it.
-- **Frames**: embedded with `allow="payment"`. Messages are accepted only from the `PERFLO_API_BASE` origin,
-  from that frame's window, and only in the SPEC object shape.
+- **Frames**: embedded with `allow="payment"`. A page Perflo.js placed is listened to only from the
+  `PERFLO_API_BASE` origin. A page opened from its link is opened only when the link is on `PERFLO_CHECKOUT_ORIGIN` or
+  the `PERFLO_API_BASE` origin, and is listened to from those two (a link on the API host sends the person on to the
+  checkout host). Either way only from that frame's window, and only in the SPEC object shape. If Perflo hands out
+  links on a checkout host that `PERFLO_CHECKOUT_ORIGIN` does not name, the connect and limits frames say "This payment
+  page could not be opened".
 - **Accounts**: a first visit gets an anonymous Tiny account (a session cookie, no personal details).
   Perflo's emailed code is what proves who the person is. Once an account links to a Perflo user that an
   earlier Tiny account already linked to, it is the same person, so the earlier account's orders move onto the

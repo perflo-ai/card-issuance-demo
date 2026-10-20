@@ -5,6 +5,7 @@ import { Chat } from './Chat';
 import { ElementsPage } from './ElementsPage';
 import { connectLive, onLive, onReconnect } from './live';
 import { Panel } from './Panel';
+import type { PerfloOrigins } from './frameEvents';
 import { configurePerflo } from './perflo';
 import { shared } from './polling';
 import { stepOf, type StepKey } from './progress';
@@ -116,6 +117,7 @@ function Workspace({ config, me, onMe, view }: { config: DemoConfigView; me: MeV
   const [ordersError, setOrdersError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [limitsRequest, setLimitsRequest] = useState(0);
+  const origins: PerfloOrigins = { perflo: config.perfloOrigin, checkout: config.checkoutOrigin };
   const phases = useRef<Record<string, OrderPhase>>({});
 
   const accountChanged = useCallback(() => setRefreshKey((k) => k + 1), []);
@@ -212,7 +214,7 @@ function Workspace({ config, me, onMe, view }: { config: DemoConfigView; me: MeV
       {/* Kept while UI elements are shown, so the conversation is still there on the way back. */}
       <div className="chat-slot" hidden={view === 'elements'}>
         <Chat
-          perfloOrigin={config.perfloOrigin}
+          origins={origins}
           orders={orders}
           seen={seen}
           loaded={loaded}
@@ -223,7 +225,7 @@ function Workspace({ config, me, onMe, view }: { config: DemoConfigView; me: MeV
         />
       </div>
       <Panel
-        perfloOrigin={config.perfloOrigin}
+        origins={origins}
         mode={config.mode}
         refreshKey={refreshKey}
         limitsRequest={limitsRequest}

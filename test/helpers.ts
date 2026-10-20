@@ -24,28 +24,47 @@ export const WEBHOOK_SECRET = 'whsec_dGlueS1kZW1vLXdlYmhvb2stdGVzdC1zZWNyZXQtMDA
 export const TEST_HOST = 'tiny.test';
 export const TEST_ORIGIN = `https://${TEST_HOST}`;
 
+/** A server on a free 127.0.0.1 port that hands every request to `handler()` (set once the port is known). */
+async function listenAnywhere(handler: () => RequestListener) {
+  const server = createServer((req, res) => handler()(req, res));
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  const address = server.address();
+  if (typeof address !== 'object' || address === null) throw new Error('no port');
+  return { origin: `http://127.0.0.1:${address.port}`, close: () => new Promise<void>((done) => server.close(() => done())) };
+}
+
+/**
+ * The mock payments service. With `checkout`, it also listens on a second origin of its own and hands
+ * out the connect, limits and add money links there, as Perflo does on its checkout host
+ * (`checkout` is then that origin; null without it).
+ */
 export async function startMock(
   slowIssueMs = 50,
   webhook?: MockOptions['webhook'],
   reuseCards = false,
   now?: () => number,
-): Promise<{ base: string; close: () => Promise<void> }> {
+  checkout = false,
+): Promise<{ base: string; checkout: string | null; close: () => Promise<void> }> {
   let handler: RequestListener = () => undefined;
-  const server = createServer((req, res) => handler(req, res));
-  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
-  const address = server.address();
-  if (typeof address !== 'object' || address === null) throw new Error('no port');
-  const base = `http://127.0.0.1:${address.port}`;
+  const api = await listenAnywhere(() => handler);
+  const pages = checkout ? await listenAnywhere(() => handler) : null;
   handler = createMockPerflo({
     ...CREDS,
-    selfOrigin: base,
+    selfOrigin: api.origin,
+    ...(pages ? { checkoutOrigin: pages.origin } : {}),
     partnerOrigin: PARTNER_ORIGIN,
     slowIssueMs,
     reuseCards,
     ...(webhook ? { webhook } : {}),
     ...(now ? { now } : {}),
   });
-  return { base, close: () => new Promise<void>((done) => server.close(() => done())) };
+  return {
+    base: api.origin,
+    checkout: pages?.origin ?? null,
+    close: async () => {
+      await Promise.all([api.close(), pages?.close()]);
+    },
+  };
 }
 
 /** The address a fake fetch was called with, whatever form it was given in. */
@@ -93,10 +112,20 @@ export function revealFetch(url: string, token: string | null, secret = CREDS.se
 
 export const sessionOf = (url: string) => new URL(url).searchParams.get('session') as string;
 
-export async function frameCall(base: string, frameUrl: string, action: string, body?: unknown) {
+/**
+ * Where a page's own calls go, as the page makes them: on its own origin, under `/v1/frames/session` for
+ * a page on the API host, or under `<page>/session` for one on the checkout host (`/setup/session`).
+ */
+export function pageCalls(frameUrl: string): string {
+  const url = new URL(frameUrl);
+  return url.pathname.startsWith('/v1/frames/') ? `${url.origin}/v1/frames/session` : `${url.origin}${url.pathname}/session`;
+}
+
+/** One call a page makes, from the page `frameUrl` opens. */
+export async function frameCall(frameUrl: string, action: string, body?: unknown) {
   const headers: Record<string, string> = { 'X-Perflo-Frame-Session': sessionOf(frameUrl) };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const response = await fetch(`${base}/v1/frames/session/${action}`, {
+  const response = await fetch(`${pageCalls(frameUrl)}/${action}`, {
     method: body === undefined ? 'GET' : 'POST',
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -108,43 +137,40 @@ export async function frameCall(base: string, frameUrl: string, action: string, 
  * What a person does in the setup frame: email and code, limits, then (if asked) money, then finish.
  * Tiny sends no email, so the person types it in the frame (the mock's token carries it).
  */
-export async function finishSetup(
-  base: string,
-  frameUrl: string,
-  limits = { per_order: '500.00', per_month: '1000.00' },
-  email = 'ada@example.com',
-) {
-  const login = await frameCall(base, frameUrl, 'login', { privy_access_token: `mock-otp:${email}:123456` });
+export async function finishSetup(frameUrl: string, limits = { per_order: '500.00', per_month: '1000.00' }, email = 'ada@example.com') {
+  const login = await frameCall(frameUrl, 'login', { privy_access_token: `mock-otp:${email}:123456` });
   if (login.status !== 200) throw new Error(`login ${login.status}`);
-  const saved = await frameCall(base, frameUrl, 'limits', limits);
+  const saved = await frameCall(frameUrl, 'limits', limits);
   if (saved.status !== 200) throw new Error(`limits ${saved.status}`);
   if (saved.json.next === 'top_up') {
-    const state = await frameCall(base, frameUrl, 'state');
-    await payInFrame(base, frameUrl, state.json.amount);
+    const state = await frameCall(frameUrl, 'state');
+    await payInFrame(frameUrl, state.json.amount);
   }
-  return frameCall(base, frameUrl, 'complete', { step: 'setup' });
+  return frameCall(frameUrl, 'complete', { step: 'setup' });
 }
 
 /** Pays on an add money page. The page is for one amount (`amount`, checked here); none is typed on it. */
-export async function payInFrame(base: string, frameUrl: string, amount: string) {
-  const topUp = await frameCall(base, frameUrl, 'top-up', {});
+export async function payInFrame(frameUrl: string, amount: string) {
+  const topUp = await frameCall(frameUrl, 'top-up', {});
   if (topUp.status !== 201) throw new Error(`top-up ${topUp.status} ${JSON.stringify(topUp.json)}`);
   if (topUp.json.amount !== amount) throw new Error(`the page is for ${topUp.json.amount}, not ${amount}`);
-  const paid = await fetch(`${base}/mock-stripe/pay`, {
+  // The page's own origin, as the page calls it.
+  const paid = await fetch(`${new URL(frameUrl).origin}/mock-stripe/pay`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ client_secret: topUp.json.client_secret }),
   });
   if (!paid.ok) throw new Error('mock stripe refused');
-  return frameCall(base, frameUrl, 'complete', { step: 'top_up' });
+  return frameCall(frameUrl, 'complete', { step: 'top_up' });
 }
 
-export function makeDemo(base: string, mode: 'mock' | 'live' = 'mock') {
+export function makeDemo(base: string, mode: 'mock' | 'live' = 'mock', checkoutOrigin: string | null = null) {
   const dataFile = join(mkdtempSync(join(tmpdir(), 'tiny-demo-')), 'store.json');
   const config: DemoConfig = {
     mode,
     perfloApiBase: base,
     perfloOrigin: new URL(base).origin,
+    checkoutOrigin,
     credentials: CREDS,
     dataFile,
     listen: { kind: 'local' },

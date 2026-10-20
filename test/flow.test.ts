@@ -64,7 +64,7 @@ async function advance(b: ReturnType<typeof browser>, id: string): Promise<Order
 
 /** Setup through the frame, then the frame event the browser forwards. */
 async function setUp(b: ReturnType<typeof browser>, frameUrl: string) {
-  await finishSetup(mock.base, frameUrl);
+  await finishSetup(frameUrl);
   const event = await b.post('/demo/frame-events', {
     type: 'perflo:setup_completed',
     frame_session_id: new URL(frameUrl).searchParams.get('session'),
@@ -75,7 +75,7 @@ async function setUp(b: ReturnType<typeof browser>, frameUrl: string) {
 async function addMoney(b: ReturnType<typeof browser>, amount: string) {
   const link = await b.post('/demo/top-ups', { amount });
   expect(link.status).toBe(200);
-  await payInFrame(mock.base, link.body.frameUrl, amount);
+  await payInFrame(link.body.frameUrl, amount);
 }
 
 function assertNothingSecretLeaks(demo: ReturnType<typeof makeDemo>, ...browserBodies: unknown[]) {
@@ -113,7 +113,7 @@ describe('first order, end to end in mock mode', () => {
 
     const due = await advance(b, draft.id);
     expect(due).toMatchObject({ phase: 'payment_required', amountDue: '52.90' });
-    await payInFrame(mock.base, due.frameUrl as string, due.amountDue as string);
+    await payInFrame(due.frameUrl as string, due.amountDue as string);
 
     const done = await advance(b, draft.id);
     expect(done).toMatchObject({ phase: 'completed', amountSpent: '50.00' });
@@ -246,13 +246,13 @@ describe('other order states through the demo', () => {
       await signUp(b);
       const first = await ask(b, 'buy me $1.00 worth of gum on amazon');
       const frameUrl = (await advance(b, first.id)).frameUrl as string;
-      await finishSetup(slow.base, frameUrl);
+      await finishSetup(frameUrl);
       await b.post('/demo/frame-events', {
         type: 'perflo:setup_completed',
         frame_session_id: new URL(frameUrl).searchParams.get('session'),
       });
       const link = await b.post('/demo/top-ups', { amount: '200.00' });
-      await payInFrame(slow.base, link.body.frameUrl, '200.00');
+      await payInFrame(link.body.frameUrl, '200.00');
       const draft = await ask(b, 'book the 150.00 hotel on united.com');
       expect((await advance(b, draft.id)).phase).toBe('issuing');
       let looks = 0;
@@ -491,7 +491,7 @@ describe('Add money: the amount is always the one typed in Tiny', () => {
       clientSecret: expect.any(String),
       amount: '10.00',
     });
-    const state = await frameCall(mock.base, res.body.frameUrl, 'state');
+    const state = await frameCall(res.body.frameUrl, 'state');
     expect(state.json).toMatchObject({ purpose: 'top-up', amount: '10.00' });
   });
 });
@@ -550,7 +550,7 @@ describe('connections: Tiny reads only connection_id and connect_url, and checks
     expect((await b.post('/demo/frame-events', { type: 'perflo:connection_completed', frame_session_id: session })).body).toEqual({
       link: 'pending',
     });
-    await finishSetup(mock.base, setup.frameUrl as string);
+    await finishSetup(setup.frameUrl as string);
     const connectionId = demo.store.user(userId).pendingConnection?.connectionId;
     const before = checks(demo, userId).length;
     const old = await b.post('/demo/frame-events', { type: 'perflo:login_completed', frame_session_id: session, login_id: connectionId });

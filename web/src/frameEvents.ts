@@ -26,3 +26,31 @@ export function readFrameEvent(data: unknown): FrameEventPayload | null {
 export function pageExpired(event: FrameEventPayload): boolean {
   return event.type === 'perflo:error' && event.code === 'frame_expired';
 }
+
+/** Perflo's two origins, as Tiny's server was told them (GET /demo/config). */
+export interface PerfloOrigins {
+  /** PERFLO_API_BASE's: Perflo.js, and the pages it places. */
+  perflo: string;
+  /** PERFLO_CHECKOUT_ORIGIN: where Perflo hands out the page links; null when they are on `perflo`. */
+  checkout: string | null;
+}
+
+/**
+ * The origins a Perflo page inside Tiny may send messages from; empty when the page is not opened at all.
+ * - Placed by Perflo.js (`viaScript`): the API origin only, because Perflo.js and its pages stay there.
+ * - Opened from its link: only a link on one of Perflo's origins is opened. It is on the checkout origin
+ *   when Perflo has one, or on the API origin, where a Perflo without one keeps its pages and where a
+ *   link handed out before it had one sends the person on to it. So either origin may speak; the frame's
+ *   own window is checked as well (message.source), which is what ties a message to this page.
+ */
+export function frameOrigins(origins: PerfloOrigins, viaScript: boolean, url: string): string[] {
+  if (viaScript) return [origins.perflo];
+  const perflo = origins.checkout === null || origins.checkout === origins.perflo ? [origins.perflo] : [origins.perflo, origins.checkout];
+  let origin: string;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    return [];
+  }
+  return perflo.includes(origin) ? perflo : [];
+}
