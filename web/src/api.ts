@@ -74,7 +74,6 @@ async function send<T>(method: 'GET' | 'POST', path: string, body?: unknown): Pr
 export interface FrameEventPayload {
   type: string;
   frame_session_id: string;
-  login_id?: string;
   connection_id?: string;
   top_up_id?: string;
   order_id?: string;

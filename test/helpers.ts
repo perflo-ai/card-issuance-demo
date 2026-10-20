@@ -29,8 +29,6 @@ export async function startMock(
   webhook?: MockOptions['webhook'],
   reuseCards = false,
   now?: () => number,
-  /** false: answer like a Perflo from before the connect names (connection_id, connect_url, /v1/connections). */
-  connectNames = true,
 ): Promise<{ base: string; close: () => Promise<void> }> {
   let handler: RequestListener = () => undefined;
   const server = createServer((req, res) => handler(req, res));
@@ -44,7 +42,6 @@ export async function startMock(
     partnerOrigin: PARTNER_ORIGIN,
     slowIssueMs,
     reuseCards,
-    connectNames,
     ...(webhook ? { webhook } : {}),
     ...(now ? { now } : {}),
   });

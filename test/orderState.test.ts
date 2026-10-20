@@ -8,7 +8,7 @@ const user = (over: Partial<DemoUser> = {}): DemoUser => ({
   id: 'u1',
   createdAt: '2026-10-07T00:00:00Z',
   perflo: { userId: 'usr_1', token: 'ptk_test_secret_token' },
-  pendingLogin: null,
+  pendingConnection: null,
   ...over,
 });
 
@@ -55,8 +55,13 @@ describe('every SPEC 4 order status maps to a browser view', () => {
       { phase: 'payment_required', frameUrl: 'https://p.example/frames/top-up?session=fs_1', amountDue: '417.80' },
     ],
     [
-      { order_id: 'ord_1', status: 'login_required', login_id: 'lg_1', login_url: 'https://p.example/frames/setup?session=fs_2' },
-      { phase: 'login_required', frameUrl: 'https://p.example/frames/setup?session=fs_2' },
+      {
+        order_id: 'ord_1',
+        status: 'connection_required',
+        connection_id: 'lg_1',
+        connect_url: 'https://p.example/frames/setup?session=fs_2',
+      },
+      { phase: 'connection_required', frameUrl: 'https://p.example/frames/setup?session=fs_2' },
     ],
     [
       { order_id: 'ord_1', status: 'identity_check_required', kyc_url: 'https://kyc.example/x' },
@@ -174,7 +179,7 @@ describe('views before Perflo has the order', () => {
   it('shows the setup frame while the one-time setup is pending', () => {
     const pending = user({
       perflo: null,
-      pendingLogin: { loginId: 'lg_1', loginUrl: 'https://p.example/setup?session=fs', orderId: null },
+      pendingConnection: { connectionId: 'lg_1', connectUrl: 'https://p.example/setup?session=fs', orderId: null },
     });
     expect(toView(order({ state: 'placing', perfloOrderId: null }), pending)).toMatchObject({
       phase: 'needs_setup',
@@ -189,10 +194,10 @@ describe('what the server does next', () => {
     expect(nextStep(ready, { checkout })).toBe('none');
   });
 
-  it('remembers the login for login_required and waits on everything else', () => {
-    expect(nextStep({ order_id: 'o', status: 'login_required', login_id: 'l', login_url: 'https://x.example' }, { checkout: null })).toBe(
-      'login',
-    );
+  it('remembers the connection for connection_required and waits on everything else', () => {
+    expect(
+      nextStep({ order_id: 'o', status: 'connection_required', connection_id: 'l', connect_url: 'https://x.example' }, { checkout: null }),
+    ).toBe('connect');
     expect(nextStep({ order_id: 'o', status: 'issuing' }, { checkout: null })).toBe('none');
     expect(
       nextStep({ order_id: 'o', status: 'payment_required', frame_url: 'https://x.example', amount_due: '1.00' }, { checkout: null }),
@@ -216,7 +221,7 @@ describe('redact', () => {
       user_access_token: 'ptk_live_abc',
       Authorization: 'Bearer x',
       email: 'ada@example.com',
-      login_url: 'https://api.example/v1/frames/setup?session=fs_secret',
+      connect_url: 'https://api.example/v1/frames/setup?session=fs_secret',
       kyc_url: 'https://kyc.example/start?ref=abc',
       reveal_url: 'https://reveal.example/x?t=abc',
       nested: [{ card_number: '4111111111111111', cvv: '123', exp_month: '10', exp_year: '2029', last4: '1111' }],
@@ -226,7 +231,7 @@ describe('redact', () => {
       user_access_token: '[redacted]',
       Authorization: '[redacted]',
       email: 'a***@example.com',
-      login_url: 'https://api.example/v1/frames/setup?[redacted]',
+      connect_url: 'https://api.example/v1/frames/setup?[redacted]',
       kyc_url: 'https://kyc.example/start?[redacted]',
       reveal_url: '[redacted]',
       nested: [{ card_number: '[redacted]', cvv: '[redacted]', exp_month: '[redacted]', exp_year: '[redacted]', last4: '1111' }],

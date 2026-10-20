@@ -208,7 +208,7 @@ describe('webhook data alone never links, unlinks or wakes someone else', () => 
     data,
   });
 
-  it('user.connected wakes a page only while that account waits on a sign-in', async () => {
+  it('user.connected wakes a page only while that account waits on a connection', async () => {
     const { demo, base, browser } = await tiny();
     const idle = browser();
     await idle.post('/demo/session');
@@ -226,7 +226,7 @@ describe('webhook data alone never links, unlinks or wakes someone else', () => 
     await a.post('/demo/session');
     const draft = (await a.post('/demo/chat', { text: 'buy me $5 worth of stickers on amazon' })).body.order as { id: string };
     await a.post(`/demo/orders/${draft.id}/advance`);
-    expect(demo.store.user(a.userId()).pendingLogin).not.toBeNull();
+    expect(demo.store.user(a.userId()).pendingConnection).not.toBeNull();
     const stream = await openStream(base, a.cookie());
     await demo.service.onWebhook(event('user.connected', { user_id: 'usr_someone', external_user_id: a.userId() }));
     await wait(50);

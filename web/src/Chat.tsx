@@ -347,7 +347,7 @@ export function OrderCard(props: CardProps) {
    */
   const openConnection = async (): Promise<PerfloPageView | null> => {
     const result = await api.connect();
-    if (result.link === 'login_required') return result.page;
+    if (result.link === 'connection_required') return result.page;
     await linked();
     return null;
   };
@@ -355,8 +355,8 @@ export function OrderCard(props: CardProps) {
   const linked = async () => {
     props.onLinked();
     props.onAccountChanged();
-    if (order.phase === 'login_required') {
-      onExpect('login_required', 'placing');
+    if (order.phase === 'connection_required') {
+      onExpect('connection_required', 'placing');
       // One look now: the order may already have gone ahead while the frame was closing.
       await onAdvance('check');
     } else await onAdvance('place');
@@ -424,7 +424,7 @@ export function OrderCard(props: CardProps) {
       );
       break;
     case 'needs_setup':
-    case 'login_required':
+    case 'connection_required':
       body = (
         <>
           <h3>{order.phase === 'needs_setup' ? 'Set up payments for Tiny' : 'Turn Tiny payments back on'}</h3>

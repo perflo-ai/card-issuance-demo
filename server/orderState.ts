@@ -4,7 +4,7 @@
  * next. No I/O here, so every status in SPEC 4 is covered by unit tests.
  */
 
-import { connectionOf, type OrderResponse } from './perfloApi.js';
+import type { OrderResponse } from './perfloApi.js';
 import type { DemoOrder, DemoUser } from './store.js';
 import type { OrderView } from './views.js';
 
@@ -13,17 +13,17 @@ export type { OrderPhase, OrderView } from './views.js';
 /** Statuses after which nothing more will happen to the order. */
 export const TERMINAL_STATUSES: ReadonlySet<OrderResponse['status']> = new Set(['declined', 'completed', 'cancelled', 'expired', 'failed']);
 
-export type NextStep = 'reveal' | 'login' | 'none';
+export type NextStep = 'reveal' | 'connect' | 'none';
 
 /**
  * What the server does with a fresh order answer.
  * - reveal: the card is ready and has not been read for checkout yet
- * - login: the user's access was removed; remember the login to wait on
+ * - connect: the user's access was removed; remember the connection to wait on
  * - none: show it and wait (for the user, for time, or for nothing)
  */
 export function nextStep(response: OrderResponse, order: Pick<DemoOrder, 'checkout'>): NextStep {
   if (response.status === 'ready') return order.checkout ? 'none' : 'reveal';
-  if (response.status === 'login_required') return 'login';
+  if (response.status === 'connection_required') return 'connect';
   return 'none';
 }
 
@@ -64,9 +64,9 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
   const last = order.last;
   if (last === null) {
     // Not yet with Perflo: either waiting for the one-time setup or about to send.
-    if (user.perflo === null && user.pendingLogin !== null) {
-      const { loginUrl, clientSecret } = user.pendingLogin;
-      return { ...base, phase: 'needs_setup', frameUrl: loginUrl, ...(clientSecret ? { clientSecret } : {}) };
+    if (user.perflo === null && user.pendingConnection !== null) {
+      const { connectUrl, clientSecret } = user.pendingConnection;
+      return { ...base, phase: 'needs_setup', frameUrl: connectUrl, ...(clientSecret ? { clientSecret } : {}) };
     }
     return { ...base, phase: 'placing' };
   }
@@ -90,17 +90,14 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
         ...(last.client_secret ? { clientSecret: last.client_secret } : {}),
         amountDue: last.amount_due,
       };
-    case 'login_required': {
-      // The user reconnects on the connect page this order names (connect_url, or login_url from a
-      // Perflo from before the connect names).
-      const page = connectionOf(last)?.url;
+    case 'connection_required':
+      // The user reconnects on the connect page this order names.
       return {
         ...base,
-        phase: 'login_required',
-        ...(page ? { frameUrl: page } : {}),
+        phase: 'connection_required',
+        frameUrl: last.connect_url,
         ...(last.client_secret ? { clientSecret: last.client_secret } : {}),
       };
-    }
     case 'identity_check_required':
       // No link means Perflo could not make one right now; the browser says so and offers a retry.
       return { ...base, phase: 'identity_check_required', ...(last.kyc_url ? { kycUrl: last.kyc_url } : {}) };

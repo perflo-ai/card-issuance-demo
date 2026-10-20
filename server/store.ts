@@ -38,22 +38,19 @@ export interface PerfloLink {
 
 /**
  * A Tiny account. It holds no name or email: the person proves their email to
- * Perflo inside Perflo's own sign-in frame, and Tiny never asks for it.
+ * Perflo inside Perflo's own connect page, and Tiny never asks for it.
  */
 export interface DemoUser {
   id: string;
   createdAt: string;
   perflo: PerfloLink | null;
   /**
-   * The connection to Perflo we are waiting on, from POST /users or an order's login_required. `loginId`
-   * and `loginUrl` hold its id and its connect page (connection_id and connect_url, or login_id and
-   * login_url from a Perflo from before the connect names: the same values); the field names are kept
-   * so data files written by earlier versions still open. `connectNames`: Perflo named it with the
-   * connect names, so it is checked at GET /v1/connections/{id}; absent, at GET /v1/logins/{id}.
-   * `clientSecret` opens the same connect page with Perflo.js; absent when Perflo did not send one (or
-   * stored by an earlier version).
+   * The connection to Perflo we are waiting on, from POST /users or an order's connection_required: its
+   * connection_id and its connect page (connect_url). `clientSecret` opens the same connect page with
+   * Perflo.js; absent when Perflo did not send one (or stored by an earlier version). `orderId`: the order
+   * that asked for it, or null for one Tiny opened itself.
    */
-  pendingLogin: { loginId: string; loginUrl: string; connectNames?: true; clientSecret?: string; orderId: string | null } | null;
+  pendingConnection: { connectionId: string; connectUrl: string; clientSecret?: string; orderId: string | null } | null;
   /** Mock mode test control: fill the checkout but do not buy, so the card stays open. */
   testStopAtCheckout?: boolean;
   /** The example look Perflo's pages are opened in from now on (server/looks.ts). Absent: the brand default. */
@@ -133,7 +130,21 @@ export class StoreError extends Error {
 
 const isoTime = z.string().refine((value) => !Number.isNaN(Date.parse(value)));
 const perfloLink = z.object({ userId: z.string().min(1), token: z.string().min(1) }).strict();
-const pendingLogin = z
+const pendingConnection = z
+  .object({
+    connectionId: z.string().min(1),
+    connectUrl: z.string().url(),
+    clientSecret: z.string().min(1).optional(),
+    orderId: z.string().nullable(),
+  })
+  .strict();
+/**
+ * The same connection as versions before Perflo dropped its login names stored it (`pendingLogin`): its
+ * login id is the connection id and its login page the connect page, as Perflo sent both names with the
+ * same values. `connectNames` only said which address to ask, and only GET /v1/connections is left.
+ * Read as the new shape; the file is written back under the new names when it opens.
+ */
+const legacyPendingLogin = z
   .object({
     loginId: z.string().min(1),
     loginUrl: z.string().url(),
@@ -141,14 +152,17 @@ const pendingLogin = z
     clientSecret: z.string().min(1).optional(),
     orderId: z.string().nullable(),
   })
-  .strict();
+  .strict()
+  .transform(({ loginId, loginUrl, connectNames: _named, ...rest }) => ({ connectionId: loginId, connectUrl: loginUrl, ...rest }));
 const look = z.enum(LOOK_IDS);
 const userRecord = z
   .object({
     id: z.string().min(1),
     createdAt: isoTime,
     perflo: perfloLink.nullable(),
-    pendingLogin: pendingLogin.nullable(),
+    pendingConnection: pendingConnection.nullable().optional(),
+    // Kept by versions before Perflo dropped its login names; read as pendingConnection.
+    pendingLogin: legacyPendingLogin.nullable().optional(),
     testStopAtCheckout: z.boolean().optional(),
     look: look.optional(),
     // Kept by versions that asked for a name and email at sign-up; read only to be dropped.
@@ -156,7 +170,37 @@ const userRecord = z
     lastName: z.unknown().optional(),
     email: z.unknown().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((user, ctx) => {
+    // Exactly one of the two: none would leave the waiting connection unknown, both would be a guess.
+    if ((user.pendingConnection === undefined) === (user.pendingLogin === undefined)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pendingConnection'], message: 'needs exactly one waiting connection field' });
+    }
+  });
+/**
+ * An order answer stored by versions before Perflo dropped its login names: login_required, naming the
+ * connection as login_id and login_url (and, from the version that read the connect names, as
+ * connection_id and connect_url beside them, with the same values). Read as connection_required and
+ * checked like a fresh answer; the file is written back with it when it opens.
+ */
+const legacyConnectionAnswer = z
+  .object({
+    order_id: z.string(),
+    one_time: z.boolean().optional(),
+    status: z.literal('login_required'),
+    login_id: z.string().optional(),
+    login_url: z.string().optional(),
+    connection_id: z.string().optional(),
+    connect_url: z.string().optional(),
+    client_secret: z.string().nullable().optional(),
+  })
+  .transform(({ status: _old, login_id, login_url, connection_id, connect_url, ...rest }) => ({
+    ...rest,
+    status: 'connection_required' as const,
+    connection_id: connection_id ?? login_id,
+    connect_url: connect_url ?? login_url,
+  }))
+  .pipe(orderResponse);
 const checkoutSummary = z
   .object({
     last4: z.string(),
@@ -177,7 +221,7 @@ const orderRecord = z
       .strict(),
     state: z.enum(['draft', 'discarded', 'placing', 'placed']),
     perfloOrderId: z.string().nullable(),
-    last: orderResponse.nullable(),
+    last: z.union([orderResponse, legacyConnectionAnswer]).nullable(),
     revealUsed: z.boolean(),
     checkout: checkoutSummary.nullable(),
     amountReturned: z.string().nullable(),
@@ -256,9 +300,13 @@ export class Store {
       if (at > now - WEBHOOK_EVENT_MEMORY_MS) this.webhookEvents.set(id, at);
     }
     for (const [id, record] of Object.entries(data.users)) {
-      // Names and emails typed at the old sign-up are dropped: nothing reads them any more.
-      const { firstName: _first, lastName: _last, email: _email, ...user } = record;
-      this.users.set(id, user);
+      // Names and emails typed at the old sign-up are dropped: nothing reads them any more. A connection
+      // stored under the old name is kept under the new one (exactly one of the two is present).
+      const { firstName: _first, lastName: _last, email: _email, pendingLogin, ...user } = record;
+      this.users.set(id, {
+        ...user,
+        pendingConnection: user.pendingConnection !== undefined ? user.pendingConnection : (pendingLogin ?? null),
+      });
     }
     for (const [sid, record] of Object.entries(data.sessions)) {
       // An old session without an expiry gets a fresh one; an expired one, or one for nobody, is dropped.
@@ -284,7 +332,7 @@ export class Store {
    * One person, one Tiny account, decided by Perflo: Tiny accounts linked to
    * the same Perflo user have each proved that person's email with Perflo's
    * code. Each new browser starts a new anonymous account, so without this a
-   * person who signed in again lost sight of their earlier orders. Moves the
+   * person who connected again lost sight of their earlier orders. Moves the
    * others' orders and sessions onto `keepId` and removes them.
    */
   private foldSamePerson(keepId: string): void {
@@ -306,7 +354,7 @@ export class Store {
   linkPerflo(id: string, link: PerfloLink): DemoUser {
     const user = this.requireUser(id);
     user.perflo = link;
-    user.pendingLogin = null;
+    user.pendingConnection = null;
     this.foldSamePerson(id);
     this.save();
     return user;
@@ -347,7 +395,7 @@ export class Store {
    * folded together (see foldSamePerson).
    */
   createUser(): { user: DemoUser; sessionId: string } {
-    const user: DemoUser = { id: randomUUID(), createdAt: new Date().toISOString(), perflo: null, pendingLogin: null };
+    const user: DemoUser = { id: randomUUID(), createdAt: new Date().toISOString(), perflo: null, pendingConnection: null };
     this.users.set(user.id, user);
     const sessionId = this.newSession(user.id);
     this.save();

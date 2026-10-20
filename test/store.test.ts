@@ -47,7 +47,7 @@ describe('a bad data file fails closed', () => {
     ['the wrong top level', '[]'],
     [
       'a user with no perflo field (would have read as linked)',
-      JSON.stringify({ sessions: {}, users: { u1: { id: 'u1', createdAt: '2026-10-09T00:00:00Z', pendingLogin: null } }, orders: {} }),
+      JSON.stringify({ sessions: {}, users: { u1: { id: 'u1', createdAt: '2026-10-09T00:00:00Z', pendingConnection: null } }, orders: {} }),
     ],
     [
       'a session with no expiry and no legacy shape',
@@ -57,7 +57,7 @@ describe('a bad data file fails closed', () => {
       'a user filed under another id',
       JSON.stringify({
         sessions: {},
-        users: { u2: { id: 'u1', createdAt: '2026-10-09T00:00:00Z', perflo: null, pendingLogin: null } },
+        users: { u2: { id: 'u1', createdAt: '2026-10-09T00:00:00Z', perflo: null, pendingConnection: null } },
         orders: {},
       }),
     ],
@@ -113,7 +113,7 @@ describe('a bad data file fails closed', () => {
 
   it('drops sessions that expired or belong to nobody when the file opens', () => {
     const file = fileIn('expired');
-    const user = { id: 'u1', createdAt: '2026-10-09T00:00:00Z', perflo: null, pendingLogin: null };
+    const user = { id: 'u1', createdAt: '2026-10-09T00:00:00Z', perflo: null, pendingConnection: null };
     const [live, old, orphan] = ['a', 'b', 'c'].map((c) => c.repeat(43));
     writeFileSync(
       file,
@@ -211,8 +211,108 @@ describe('the chosen look', () => {
       file,
       JSON.stringify({
         sessions: {},
-        users: { u1: { id: 'u1', createdAt: '2026-10-09T00:00:00Z', perflo: null, pendingLogin: null, look: 'neon' } },
+        users: { u1: { id: 'u1', createdAt: '2026-10-09T00:00:00Z', perflo: null, pendingConnection: null, look: 'neon' } },
         orders: {},
+      }),
+    );
+    expect(() => new Store(file)).toThrow(StoreError);
+  });
+});
+
+describe('data files written before Perflo dropped its login names', () => {
+  const PAGE = 'https://perflo.test/v1/frames/setup?session=fs_1';
+  const user = (id: string, pending: unknown) => ({ id, createdAt: '2026-10-09T00:00:00Z', perflo: null, pendingLogin: pending });
+  const waitingOrder = (id: string, last: unknown) => ({
+    id,
+    demoUserId: 'u1',
+    idempotencyKey: `k-${id}`,
+    intent,
+    state: 'placed',
+    perfloOrderId: `ord_${id}`,
+    last,
+    revealUsed: false,
+    checkout: null,
+    amountReturned: null,
+    createdAt: '2026-10-09T00:00:00Z',
+  });
+
+  it('reads a stored connection and an order waiting on one under the new names, and writes them back that way', () => {
+    const file = fileIn('legacy-connection');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        sessions: {},
+        users: {
+          // Stored by a version before the connect names: the login id is the connection id.
+          u1: user('u1', { loginId: 'lg_1', loginUrl: PAGE, clientSecret: 'fs_1', orderId: null }),
+          // Stored by the version that read the connect names beside the old ones.
+          u2: user('u2', { loginId: 'lg_2', loginUrl: PAGE, connectNames: true, orderId: 'o2' }),
+          u3: user('u3', null),
+        },
+        orders: {
+          o1: waitingOrder('o1', {
+            order_id: 'ord_o1',
+            status: 'login_required',
+            login_id: 'lg_1',
+            login_url: PAGE,
+            client_secret: 'fs_1',
+          }),
+          o2: waitingOrder('o2', {
+            order_id: 'ord_o2',
+            one_time: true,
+            status: 'login_required',
+            login_id: 'lg_2',
+            login_url: PAGE,
+            connection_id: 'lg_2',
+            connect_url: PAGE,
+          }),
+        },
+      }),
+    );
+    const store = new Store(file);
+    expect(store.user('u1').pendingConnection).toEqual({ connectionId: 'lg_1', connectUrl: PAGE, clientSecret: 'fs_1', orderId: null });
+    expect(store.user('u2').pendingConnection).toEqual({ connectionId: 'lg_2', connectUrl: PAGE, orderId: 'o2' });
+    expect(store.user('u3').pendingConnection).toBeNull();
+    expect(store.order('u1', 'o1')?.last).toEqual({
+      order_id: 'ord_o1',
+      status: 'connection_required',
+      connection_id: 'lg_1',
+      connect_url: PAGE,
+      client_secret: 'fs_1',
+    });
+    expect(store.order('u1', 'o2')?.last).toEqual({
+      order_id: 'ord_o2',
+      one_time: true,
+      status: 'connection_required',
+      connection_id: 'lg_2',
+      connect_url: PAGE,
+    });
+    const written = readFileSync(file, 'utf8');
+    expect(written).not.toMatch(/login|connectNames/);
+    // Opened again, it is already in the new shape: nothing to write.
+    const before = writes(file);
+    expect(new Store(file).user('u2').pendingConnection?.connectionId).toBe('lg_2');
+    expect(writes(file)).toBe(before);
+  });
+
+  it.each([
+    ['a user with neither the old nor the new field', { id: 'u1', createdAt: '2026-10-09T00:00:00Z', perflo: null }],
+    ['a user with both the old and the new field', { ...user('u1', null), pendingConnection: null }],
+    ['an old connection with no page', user('u1', { loginId: 'lg_1', orderId: null })],
+  ])('%s fails closed', (_name, record) => {
+    const file = fileIn('legacy-bad');
+    writeFileSync(file, JSON.stringify({ sessions: {}, users: { u1: record }, orders: {} }));
+    expect(() => new Store(file)).toThrow(StoreError);
+  });
+
+  it('an old order answer that names no connection or no page fails closed', () => {
+    const file = fileIn('legacy-order-bad');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        sessions: {},
+        users: {},
+        orders: { o1: waitingOrder('o1', { order_id: 'ord_o1', status: 'login_required', login_id: 'lg_1' }) },
       }),
     );
     expect(() => new Store(file)).toThrow(StoreError);

@@ -28,7 +28,7 @@ describe('what the person reads when an element refuses', () => {
   });
 });
 
-describe('settling a finished sign-in', () => {
+describe('settling a finished connection', () => {
   /** Perflo's word did not come in time. */
   const wait = () => Promise.resolve(false);
 

@@ -10,12 +10,10 @@ import { centsToApiAmount } from './money.js';
 import { LiveUpdates } from './live.js';
 import { nextStep, recordAnswer, TERMINAL_STATUSES, toView } from './orderState.js';
 import {
-  connectionOf,
   isUserTokenRefused,
   PerfloApiError,
   PerfloUnavailableError,
   type AccountResponse,
-  type Connection,
   type OrderResponse,
   type PerfloApi,
 } from './perfloApi.js';
@@ -86,7 +84,7 @@ export class DemoService {
       if (again.status === 'approved' && again.user_access_token) {
         return this.storeToken(user, again.user_id, again.user_access_token);
       }
-      if (again.status === 'login_required') {
+      if (again.status === 'connection_required') {
         throw new DemoError('conflict', 'Payments need to be set up again. Send your request once more.');
       }
     }
@@ -115,15 +113,15 @@ export class DemoService {
    */
   async connect(user: DemoUser): Promise<ConnectView> {
     const { user: fresh, status } = await this.ensureLinked(user);
-    if (status === 'linked' || !fresh.pendingLogin) return { link: 'linked' };
-    const { loginUrl, clientSecret } = fresh.pendingLogin;
-    return { link: 'login_required', page: { url: loginUrl, ...(clientSecret ? { clientSecret } : {}) } };
+    if (status === 'linked' || !fresh.pendingConnection) return { link: 'linked' };
+    const { connectUrl, clientSecret } = fresh.pendingConnection;
+    return { link: 'connection_required', page: { url: connectUrl, ...(clientSecret ? { clientSecret } : {}) } };
   }
 
   /**
    * Makes sure we hold an access token for this user, or a connection for them that works. A stored
    * connection is never handed out on trust: it stops working 30 minutes after Perflo opened it, so
-   * Perflo is asked about it first (GET /v1/connections/{id}, see getConnection). Finished: the user is
+   * Perflo is asked about it first (GET /v1/connections/{connection_id}). Finished: the user is
    * linked. Expired: a new one is opened. If Perflo cannot be reached this throws and the user is told
    * to try again; a connection nobody checked is never the answer. One per user at a time (the link
    * lock), so two pages opening at once make one connection.
@@ -132,10 +130,10 @@ export class DemoService {
     return this.exclusive(`link:${user.id}`, async () => {
       let fresh = this.store.user(user.id);
       if (fresh.perflo) return { user: fresh, status: 'linked' };
-      if (fresh.pendingLogin) {
+      if (fresh.pendingConnection) {
         const looked = await this.lookAtConnection(fresh);
         if (looked.status !== 'expired') {
-          return { user: looked.user, status: looked.status === 'linked' ? 'linked' : 'login_required' };
+          return { user: looked.user, status: looked.status === 'linked' ? 'linked' : 'connection_required' };
         }
         fresh = looked.user;
         this.log.add(fresh.id, 'demo', 'Connection expired: starting a new one');
@@ -151,9 +149,8 @@ export class DemoService {
         this.log.add(fresh.id, 'demo', 'Already approved without a stored token: asking for a new one');
         return { user: await this.reissue(fresh), status: 'linked' };
       }
-      const connection = requireConnection(result);
-      const updated = this.store.updateUser(fresh.id, (u) => (u.pendingLogin = pendingConnection(connection, result.client_secret, null)));
-      return { user: updated, status: 'login_required' };
+      const updated = this.store.updateUser(fresh.id, (u) => (u.pendingConnection = waitingOn(result, null)));
+      return { user: updated, status: 'connection_required' };
     });
   }
 
@@ -161,7 +158,7 @@ export class DemoService {
   async refreshConnection(user: DemoUser): Promise<{ user: DemoUser; status: LinkStatus }> {
     return this.exclusive(`link:${user.id}`, async () => {
       const fresh = this.store.user(user.id);
-      if (!fresh.pendingLogin) {
+      if (!fresh.pendingConnection) {
         return { user: fresh, status: fresh.perflo ? 'linked' : 'expired' };
       }
       return this.lookAtConnection(fresh);
@@ -173,19 +170,19 @@ export class DemoService {
    * at once: it is handed out once), pending, or expired (then it is cleared). Runs under the link lock.
    */
   private async lookAtConnection(fresh: DemoUser): Promise<{ user: DemoUser; status: LinkStatus }> {
-    const pending = fresh.pendingLogin;
+    const pending = fresh.pendingConnection;
     if (!pending) return { user: fresh, status: fresh.perflo ? 'linked' : 'expired' };
-    const connection = await this.api.getConnection(fresh.id, { id: pending.loginId, connectNames: pending.connectNames === true });
+    const connection = await this.api.getConnection(fresh.id, pending.connectionId);
     if (connection.status === 'pending') return { user: fresh, status: 'pending' };
     if (connection.status === 'expired') {
-      return { user: this.store.updateUser(fresh.id, (u) => (u.pendingLogin = null)), status: 'expired' };
+      return { user: this.store.updateUser(fresh.id, (u) => (u.pendingConnection = null)), status: 'expired' };
     }
     if (connection.user_access_token) {
       return { user: this.storeToken(fresh, connection.user_id, connection.user_access_token), status: 'linked' };
     }
     // Approved, but the token was already handed out once and we do not have it.
     if (fresh.perflo && fresh.perflo.userId === connection.user_id) {
-      return { user: this.store.updateUser(fresh.id, (u) => (u.pendingLogin = null)), status: 'linked' };
+      return { user: this.store.updateUser(fresh.id, (u) => (u.pendingConnection = null)), status: 'linked' };
     }
     return { user: await this.reissue(fresh), status: 'linked' };
   }
@@ -283,7 +280,7 @@ export class DemoService {
         if (!fresh.perflo || order.perfloOrderId === null) return;
         try {
           const latest = await this.api.getOrder(fresh.id, order.perfloOrderId);
-          if (latest.status === 'login_required') {
+          if (latest.status === 'connection_required') {
             // Access was removed: same handling as any other read of this order.
             await this.handle(fresh, order, latest, { checkout: false });
             return;
@@ -381,7 +378,7 @@ export class DemoService {
 
   /**
    * A signed event names a Perflo person and the Tiny account Tiny gave Perflo. Neither links nor
-   * unlinks anything by itself: user.connected only wakes the page of an account waiting on a sign-in
+   * unlinks anything by itself: user.connected only wakes the page of an account waiting on a connection
    * (the page links with its own request, which rotates its session), and user.disconnected only
    * makes Tiny ask Perflo again about the person this account is linked to.
    */
@@ -389,7 +386,7 @@ export class DemoService {
     const external = event.data.external_user_id;
     const user = external ? this.store.findUser(external) : null;
     const connected = event.type === 'user.connected';
-    const forThisAccount = user !== null && (connected ? user.pendingLogin !== null : user.perflo?.userId === event.data.user_id);
+    const forThisAccount = user !== null && (connected ? user.pendingConnection !== null : user.perflo?.userId === event.data.user_id);
     if (!user || !forThisAccount) {
       this.log.add(null, 'webhook', `${event.type} for no account here waiting on it`, { event_id: event.id });
       return;
@@ -421,21 +418,20 @@ export class DemoService {
     });
     const step = nextStep(response, order);
 
-    if (step === 'login' && response.status === 'login_required') {
+    if (step === 'connect' && response.status === 'connection_required') {
       if (user.perflo && (await this.account(user)) !== null) {
-        // Perflo still takes our token: the person signed in again (on a new sign-in Tiny opened when
+        // Perflo still takes our token: the user connected again (on a new connection Tiny opened when
         // this order's own one had ended), and Perflo moves the order on by itself within a minute.
-        // Dropping the token here would undo that sign-in.
+        // Dropping the token here would undo that connection.
         this.log.add(user.id, 'demo', 'Payments are on again: waiting for the order to go ahead');
         return { order, user: this.store.user(user.id), notice: null };
       }
       // The user removed access; the old token is dead. Reconnecting resumes this order.
-      const connection = requireConnection(response);
       const updated = this.store.updateUser(user.id, (u) => {
         u.perflo = null;
         // A connection already waiting is kept: it is checked with Perflo before it is handed out, and
         // finishing it turns access back on just the same. Perflo never renews an order's own connection.
-        if (u.pendingLogin === null) u.pendingLogin = pendingConnection(connection, response.client_secret, order.id);
+        if (u.pendingConnection === null) u.pendingConnection = waitingOn(response, order.id);
       });
       return { order, user: updated, notice: null };
     }
@@ -573,24 +569,15 @@ export class DemoService {
   }
 }
 
-/** The connection a parsed answer names; the contract check (perfloApi.ts) already refused one that names none. */
-function requireConnection(answer: Parameters<typeof connectionOf>[0]): Connection {
-  const connection = connectionOf(answer);
-  if (!connection) throw new PerfloUnavailableError('Payments service answer did not match the contract');
-  return connection;
-}
-
-/** A connection as Tiny stores it while it waits (store.ts DemoUser.pendingLogin). */
-function pendingConnection(
-  connection: Connection,
-  clientSecret: string | null | undefined,
+/** The connection an answer names, as Tiny stores it while it waits (store.ts DemoUser.pendingConnection). */
+function waitingOn(
+  answer: { connection_id: string; connect_url: string; client_secret?: string | null },
   orderId: string | null,
-): NonNullable<DemoUser['pendingLogin']> {
+): NonNullable<DemoUser['pendingConnection']> {
   return {
-    loginId: connection.id,
-    loginUrl: connection.url,
-    ...(connection.connectNames ? { connectNames: true as const } : {}),
-    ...(clientSecret ? { clientSecret } : {}),
+    connectionId: answer.connection_id,
+    connectUrl: answer.connect_url,
+    ...(answer.client_secret ? { clientSecret: answer.client_secret } : {}),
     orderId,
   };
 }

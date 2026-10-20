@@ -35,7 +35,6 @@ const eventsQuery = z.object({ after: z.coerce.number().int().min(0).max(Number.
 const frameEvent = z.object({
   type: z.enum(FRAME_EVENT_TYPES),
   frame_session_id: z.string().max(200),
-  login_id: z.string().max(200).optional(),
   connection_id: z.string().max(200).optional(),
   top_up_id: z.string().max(200).optional(),
   order_id: z.string().max(200).optional(),
@@ -219,7 +218,7 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
   /**
    * The browser's Tiny account: the one its session cookie names, or a new
    * anonymous one (no name, no email) on a first visit. Nothing personal is
-   * asked for; the person proves their email to Perflo in the sign-in frame.
+   * asked for; the person proves their email to Perflo on its connect page.
    */
   app.post('/demo/session', (req, res) => {
     parse(noBody, req.body, unreadable);
@@ -288,15 +287,9 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     const event = frameEvent.safeParse(req.body);
     if (!event.success) throw new HttpError(400, 'Unknown frame event.');
     log.add(user.id, 'frame', event.data.type, event.data);
-    if (
-      event.data.type === 'perflo:connection_completed' ||
-      event.data.type === 'perflo:login_completed' ||
-      event.data.type === 'perflo:setup_completed'
-    ) {
+    if (event.data.type === 'perflo:connection_completed' || event.data.type === 'perflo:setup_completed') {
       // The event only says "look now". Which connection is looked at comes from this session's own
-      // record (the one its order made), never from ids in the event. A Perflo with the connect names
-      // sends perflo:connection_completed and perflo:login_completed for the same step: whichever comes
-      // second finds the access already picked up (or reads the same pending answer again).
+      // record (the one its order made), never from ids in the event.
       const wasLinked = user.perflo !== null;
       const { status } = await service.refreshConnection(user);
       rotateIfLinked(req, res, user, wasLinked);
@@ -397,7 +390,7 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     res.json({ events: log.forUser(user.id, after) });
   });
 
-  // Mock mode only: simulates the person turning off Tiny's access, so login_required can be shown.
+  // Mock mode only: simulates the person turning off Tiny's access, so connection_required can be shown.
   app.post('/demo/mock/revoke-access', async (req, res) => {
     if (config.mode !== 'mock') throw new HttpError(404, 'Not found.');
     const user = currentUser(req);

@@ -36,63 +36,27 @@ const money = z.object({ amount, currency: z.literal('USD') });
 const clientSecret = z.string().regex(/^[A-Za-z0-9_.-]{1,256}$/);
 
 /**
- * The connection an answer names, under Perflo's connect names (connection_id, connect_url) and under the
- * old names it still sends beside them (login_id, login_url), with the same values. A Perflo from before
- * the connect names sends only the old ones. Each answer must name an id and a page to open one way or
- * the other (requireConnection); connectionOf reads them.
+ * The connection an answer names when the user has to connect, or reconnect: its id, and the connect page
+ * to open. Perflo sends connect_url as null when it has no page to give; Tiny has nothing to open then, so
+ * such an answer is refused like any other outside the contract.
  */
 const connectionFields = {
-  connection_id: z.string().min(1).optional(),
-  // null when Perflo has no page to give, exactly as login_url beside it; such an answer is refused below.
-  connect_url: link.nullable().optional(),
-  login_id: z.string().min(1).optional(),
-  login_url: link.optional(),
+  connection_id: z.string().min(1),
+  connect_url: link,
 };
 
-/** A connection Perflo opened: its id, its connect page, and whether Perflo named it with the connect names. */
-export interface Connection {
-  id: string;
-  url: string;
-  /** True when Perflo sent connection_id: it then answers GET /v1/connections/{id} (getConnection). */
-  connectNames: boolean;
-}
-
-/**
- * The new names when Perflo sent them, else the old ones. null when no id or no page to open is named,
- * which a parsed answer never is.
- */
-export function connectionOf(answer: {
-  connection_id?: string;
-  connect_url?: string | null;
-  login_id?: string;
-  login_url?: string;
-}): Connection | null {
-  const connectNames = answer.connection_id !== undefined;
-  const id = connectNames ? answer.connection_id : answer.login_id;
-  const url = answer.connect_url !== undefined ? answer.connect_url : answer.login_url;
-  return id && url ? { id, url, connectNames } : null;
-}
-
-function requireConnection(answer: { status: string } & Parameters<typeof connectionOf>[0], ctx: z.RefinementCtx): void {
-  if (answer.status === 'login_required' && connectionOf(answer) === null) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'names no connection id or no page to open' });
-  }
-}
-
-export const usersResponse = z
-  .discriminatedUnion('status', [
-    z.object({ status: z.literal('approved'), user_id: z.string().min(1), user_access_token: z.string().min(1).optional() }),
-    z.object({
-      status: z.literal('login_required'),
-      ...connectionFields,
-      client_secret: clientSecret.optional(),
-      expires_at: z.string(),
-    }),
-  ])
-  .superRefine(requireConnection);
+export const usersResponse = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('approved'), user_id: z.string().min(1), user_access_token: z.string().min(1).optional() }),
+  z.object({
+    status: z.literal('connection_required'),
+    ...connectionFields,
+    client_secret: clientSecret.optional(),
+    expires_at: z.string(),
+  }),
+]);
 export type UsersResponse = z.infer<typeof usersResponse>;
 
-/** GET /v1/connections/{id}, and the same answer at GET /v1/logins/{id}. */
+/** GET /v1/connections/{connection_id}. */
 export const connectionResponse = z.discriminatedUnion('status', [
   z.object({ status: z.literal('pending') }),
   z.object({ status: z.literal('expired') }),
@@ -148,49 +112,47 @@ const orderId = { order_id: z.string(), one_time: z.boolean().optional() };
  */
 const returned = amount.nullable();
 
-export const orderResponse = z
-  .discriminatedUnion('status', [
-    z.object({
-      ...orderId,
-      status: z.literal('ready'),
-      card_id: z.string(),
-      last4: z.string().regex(/^[0-9]{4}$/),
-      card_limit: amount,
-      // Present only on the response that first hands the card out (SPEC 4 clarification).
-      reveal_url: link.optional(),
-      reveal_expires_at: z.string().optional(),
-      // Not used: always null.
-      card_expires_at: z.string().nullable(),
-    }),
-    z.object({
-      ...orderId,
-      status: z.literal('payment_required'),
-      frame_url: link,
-      // null only when Perflo has no link to give, which frame_url being required already rules out.
-      client_secret: clientSecret.nullable().optional(),
-      amount_due: amount,
-    }),
-    z.object({
-      ...orderId,
-      status: z.literal('login_required'),
-      ...connectionFields,
-      client_secret: clientSecret.nullable().optional(),
-    }),
-    z.object({
-      ...orderId,
-      status: z.literal('identity_check_required'),
-      // null when the link cannot be made right now; absent on an idempotent replay of POST /checkout/orders.
-      kyc_url: link.nullable().optional(),
-      message: z.string().optional(),
-    }),
-    z.object({ ...orderId, status: z.literal('issuing') }),
-    z.object({ ...orderId, status: z.literal('declined'), reason: declineReason, message: z.string() }),
-    z.object({ ...orderId, status: z.literal('completed'), amount_spent: amount, amount_returned: returned }),
-    z.object({ ...orderId, status: z.literal('cancelled'), amount_returned: returned.optional() }),
-    z.object({ ...orderId, status: z.literal('expired'), amount_returned: returned.optional() }),
-    z.object({ ...orderId, status: z.literal('failed') }),
-  ])
-  .superRefine(requireConnection);
+export const orderResponse = z.discriminatedUnion('status', [
+  z.object({
+    ...orderId,
+    status: z.literal('ready'),
+    card_id: z.string(),
+    last4: z.string().regex(/^[0-9]{4}$/),
+    card_limit: amount,
+    // Present only on the response that first hands the card out (SPEC 4 clarification).
+    reveal_url: link.optional(),
+    reveal_expires_at: z.string().optional(),
+    // Not used: always null.
+    card_expires_at: z.string().nullable(),
+  }),
+  z.object({
+    ...orderId,
+    status: z.literal('payment_required'),
+    frame_url: link,
+    // null only when Perflo has no link to give, which frame_url being required already rules out.
+    client_secret: clientSecret.nullable().optional(),
+    amount_due: amount,
+  }),
+  z.object({
+    ...orderId,
+    status: z.literal('connection_required'),
+    ...connectionFields,
+    client_secret: clientSecret.nullable().optional(),
+  }),
+  z.object({
+    ...orderId,
+    status: z.literal('identity_check_required'),
+    // null when the link cannot be made right now; absent on an idempotent replay of POST /checkout/orders.
+    kyc_url: link.nullable().optional(),
+    message: z.string().optional(),
+  }),
+  z.object({ ...orderId, status: z.literal('issuing') }),
+  z.object({ ...orderId, status: z.literal('declined'), reason: declineReason, message: z.string() }),
+  z.object({ ...orderId, status: z.literal('completed'), amount_spent: amount, amount_returned: returned }),
+  z.object({ ...orderId, status: z.literal('cancelled'), amount_returned: returned.optional() }),
+  z.object({ ...orderId, status: z.literal('expired'), amount_returned: returned.optional() }),
+  z.object({ ...orderId, status: z.literal('failed') }),
+]);
 export type OrderResponse = z.infer<typeof orderResponse>;
 
 export const revealLinkResponse = z.object({ reveal_url: link, reveal_expires_at: z.string() });
@@ -448,14 +410,9 @@ export class PerfloApi {
     return parsed;
   }
 
-  /**
-   * Where a connection stands. Asked at GET /v1/connections/{id} when Perflo named the connection with
-   * connection_id; otherwise at GET /v1/logins/{id}, because a Perflo from before the connect names has no
-   * /v1/connections. Perflo answers both addresses the same for the same id.
-   */
-  async getConnection(demoUserId: string, connection: Pick<Connection, 'id' | 'connectNames'>): Promise<ConnectionResponse> {
-    const route = connection.connectNames ? 'connections' : 'logins';
-    const r = await this.request(demoUserId, 'GET', `/v1/${route}/${encodeURIComponent(connection.id)}`);
+  /** Where a connection stands: pending, expired, or approved (with the token, the first time only). */
+  async getConnection(demoUserId: string, connectionId: string): Promise<ConnectionResponse> {
+    const r = await this.request(demoUserId, 'GET', `/v1/connections/${encodeURIComponent(connectionId)}`);
     return this.parse(connectionResponse, r.status, r.json, [200]);
   }
 

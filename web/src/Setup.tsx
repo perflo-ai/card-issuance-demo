@@ -104,8 +104,7 @@ export function SetupFlow({ perfloOrigin, open, onLinked, disabled = false }: Pr
   };
 
   const onFrameEvent = (event: FrameEventPayload, link: LinkStatus | undefined) => {
-    // A Perflo with the connect names sends perflo:connection_completed and, beside it, perflo:login_completed.
-    if (event.type === 'perflo:connection_completed' || event.type === 'perflo:login_completed') setStep((s) => Math.max(s, 1));
+    if (event.type === 'perflo:connection_completed') setStep((s) => Math.max(s, 1));
     if (event.type === 'perflo:limits_saved') setStep((s) => Math.max(s, 2));
     if (event.type === 'perflo:setup_completed') void finish(link);
     if (event.type === 'perflo:closed') void closed();
