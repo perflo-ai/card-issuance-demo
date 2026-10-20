@@ -313,6 +313,6 @@ describe('one person, one Tiny account, decided by Perflo', () => {
     const saved = readFileSync(file, 'utf8');
     expect(saved).not.toContain('ada@example.com');
     expect(saved).not.toContain('firstName');
-    expect(Object.keys(store.user('unlinked')).sort()).toEqual(['createdAt', 'id', 'pendingLogin', 'perflo']);
+    expect(Object.keys(store.user('unlinked')).sort()).toEqual(['createdAt', 'id', 'pendingConnection', 'perflo']);
   });
 });

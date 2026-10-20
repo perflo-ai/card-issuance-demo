@@ -100,15 +100,15 @@ const SECRET = `fs_${'a'.repeat(43)}.${'b'.repeat(43)}`;
 const EXPIRES = '2026-10-14T12:00:00.000Z';
 
 describe('requests Perflo gets carry the chosen look, signed as before', () => {
-  it('POST /v1/users carries the look for the sign-in page, and the sign-in keeps its client_secret', async () => {
+  it('POST /v1/users carries the look for the connect page, and the connection keeps its client_secret', async () => {
     const { fake, calls } = scripted({
       'POST /v1/users': [
         {
           status: 202,
           body: {
-            status: 'login_required',
-            login_id: 'lgn_1',
-            login_url: `${BASE}/v1/frames/setup?session=x`,
+            status: 'connection_required',
+            connection_id: 'lg_1',
+            connect_url: `${BASE}/v1/frames/setup?session=x`,
             client_secret: SECRET,
             expires_at: EXPIRES,
           },
@@ -119,12 +119,12 @@ describe('requests Perflo gets carry the chosen look, signed as before', () => {
     const { user } = store.createUser();
     const chosen = service.setLook(user, 'night');
     const result = await service.connect(chosen);
-    expect(result).toEqual({ link: 'login_required', page: { url: `${BASE}/v1/frames/setup?session=x`, clientSecret: SECRET } });
+    expect(result).toEqual({ link: 'connection_required', page: { url: `${BASE}/v1/frames/setup?session=x`, clientSecret: SECRET } });
     expect(calls[0].body).toEqual({ external_user_id: user.id, ...lookFields('night', 'connect') });
     expect(calls[0].body.payment_element_options).toBeUndefined();
     expect(calls[0].keyVersion).toBe(CREDS.keyVersion);
     expect(calls[0].signed).toBe(true);
-    expect(store.user(user.id).pendingLogin?.clientSecret).toBe(SECRET);
+    expect(store.user(user.id).pendingConnection?.clientSecret).toBe(SECRET);
   });
 
   it('a top-up carries the look and the payment form options; a limits link carries the look', async () => {
@@ -267,16 +267,16 @@ describe('the browser names a look by its id, and nothing else', () => {
     await b.post('/demo/session');
     const started = await b.post('/demo/connect');
     expect(started.status).toBe(200);
-    expect(started.body.link).toBe('login_required');
+    expect(started.body.link).toBe('connection_required');
     const { url, clientSecret } = started.body.page as { url: string; clientSecret: string };
     expect(clientSecret).toBe(sessionOf(url));
 
-    // The chat's order waiting on the same sign-in shows the same page.
+    // The chat's order waiting on the same connection shows the same page.
     const asked = await b.post('/demo/chat', { text: 'buy me $50 worth of headphones on amazon' });
     const advanced = await b.post(`/demo/orders/${(asked.body.order as OrderView).id}/advance`);
     expect(advanced.body.order).toMatchObject({ phase: 'needs_setup', frameUrl: url, clientSecret });
 
-    // The page finishes the sign-in (UI elements send no frame event; the page asks Tiny to look).
+    // The page finishes connecting (UI elements send no frame event; the page asks Tiny to look).
     await finishSetup(mock.base, url);
     expect((await b.post('/demo/link/refresh')).body).toEqual({ link: 'linked' });
     expect((await b.post('/demo/connect')).body).toEqual({ link: 'linked' });

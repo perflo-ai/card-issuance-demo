@@ -238,22 +238,17 @@ Every call goes to `PERFLO_API_BASE` (`https://api.perflo.ai` in production). Th
   bytes sent (a GET signs the empty body). Test vectors were computed independently in Python.
 - **Users**: `POST /users` with only Tiny's own user id as `external_user_id`: no email and no name, because
   Tiny never asks for them. The user connects on Perflo's connect page, opened in the chat as the setup frame:
-  they add a passkey or enter the code Perflo emails them, then set their limits. `login_required` opens it on
-  the order that needs it (the first order, or the next one after access was removed, when the user reconnects);
-  on `perflo:connection_completed` or `perflo:setup_completed` the server checks the connection with
+  they add a passkey or enter the code Perflo emails them, then set their limits. `connection_required` (on the
+  `POST /users` 202, and on the order that needs it: the first order, or the next one after access was removed,
+  when the user reconnects) names the connection as `connection_id` and its page as `connect_url`, which opens
+  it. On `perflo:connection_completed` or `perflo:setup_completed` the server checks the connection with
   `GET /connections/{connection_id}` and stores the token (it is handed out once). If Perflo says `approved`
-  but Tiny holds no token, it asks with `reissue: true`.
-- **Connect names**: Tiny reads Perflo's connect names (`connection_id`, `connect_url`,
-  `GET /connections/{connection_id}`, `perflo:connection_completed`) and falls back to the old ones only when
-  Perflo sent none. A connection whose answer carried no `connection_id` (a Perflo from before the connect
-  names) is checked at `GET /logins/{login_id}`, which Perflo still answers, and its page's
-  `perflo:login_completed` is handled the same way. Perflo sends both events for the same step; whichever
-  arrives second finds the access already picked up. The status `login_required` and the event
-  `order.login_required` keep their names: they mean the user has to connect, or reconnect.
+  but Tiny holds no token, it asks with `reissue: true`. A data file written by an earlier version, which kept
+  the connection under its old login names, is read and written back under the new ones when Tiny starts.
 - **Orders**: `POST /checkout/orders` with an `Idempotency-Key` fixed per chat order. Every retry is
   `GET /checkout/orders/{id}` (signature only, no token), never a second POST. Each status is handled:
   `ready` (read the card once through `reveal_url`, later reveals through `/card-reveal`), `payment_required`
-  (add money frame; the order goes ahead when Perflo's webhook says so), `login_required` (the user reconnects
+  (add money frame; the order goes ahead when Perflo's webhook says so), `connection_required` (the user reconnects
   in the setup frame, and the order resumes on its own), `identity_check_required` (opens in a new tab; "try again" reads the order once),
   `issuing` (no webhook for it; the next one, `order.ready` or `order.failed`, moves it on), `declined`,
   `completed`, `cancelled`, `expired`, `failed`.

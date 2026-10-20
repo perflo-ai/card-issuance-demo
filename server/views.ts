@@ -25,7 +25,7 @@ export type OrderPhase =
   | 'needs_setup'
   | 'placing'
   | 'payment_required'
-  | 'login_required'
+  | 'connection_required'
   | 'identity_check_required'
   | 'issuing'
   | 'ready'
@@ -113,9 +113,7 @@ export interface LogEntry {
 /** The postMessage events a Perflo frame sends (SPEC 8). */
 export const FRAME_EVENT_TYPES = [
   'perflo:ready',
-  // Sent beside perflo:login_completed by a Perflo with the connect names, with connection_id added.
   'perflo:connection_completed',
-  'perflo:login_completed',
   'perflo:limits_saved',
   'perflo:top_up_completed',
   'perflo:top_up_cancelled',
@@ -124,7 +122,7 @@ export const FRAME_EVENT_TYPES = [
   'perflo:error',
 ] as const;
 
-export type LinkStatus = 'linked' | 'login_required' | 'pending' | 'expired';
+export type LinkStatus = 'linked' | 'connection_required' | 'pending' | 'expired';
 
 /**
  * A Perflo page Tiny opened for the person: its link, and its client_secret, which Perflo.js opens the
@@ -136,7 +134,7 @@ export interface PerfloPageView {
 }
 
 /** POST /demo/connect: linked already, or the connection to open. */
-export type ConnectView = { link: 'linked' } | { link: 'login_required'; page: PerfloPageView };
+export type ConnectView = { link: 'linked' } | { link: 'connection_required'; page: PerfloPageView };
 
 export type Notice = 'reveal_failed' | 'card_locked' | null;
 

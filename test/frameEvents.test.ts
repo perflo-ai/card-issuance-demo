@@ -19,15 +19,20 @@ describe('readFrameEvent (browser side of SPEC 8 postMessage)', () => {
     });
   });
 
-  it('accepts perflo:connection_completed with its connection_id, and the old perflo:login_completed sent beside it', () => {
+  it('accepts perflo:connection_completed with its connection_id, and reads no login names', () => {
     expect(
-      readFrameEvent({ type: 'perflo:connection_completed', frame_session_id: 'fs_1', login_id: 'lg_1', connection_id: 'lg_1' }),
-    ).toEqual({ type: 'perflo:connection_completed', frame_session_id: 'fs_1', login_id: 'lg_1', connection_id: 'lg_1' });
-    expect(readFrameEvent({ type: 'perflo:login_completed', frame_session_id: 'fs_1', login_id: 'lg_1' })).toEqual({
-      type: 'perflo:login_completed',
+      readFrameEvent({ type: 'perflo:connection_completed', frame_session_id: 'fs_1', connection_id: 'lg_1', login_id: 'lg_1' }),
+    ).toEqual({
+      type: 'perflo:connection_completed',
       frame_session_id: 'fs_1',
-      login_id: 'lg_1',
+      connection_id: 'lg_1',
     });
+    expect(readFrameEvent({ type: 'perflo:setup_completed', frame_session_id: 'fs_1', connection_id: 'lg_1' })).toEqual({
+      type: 'perflo:setup_completed',
+      frame_session_id: 'fs_1',
+      connection_id: 'lg_1',
+    });
+    expect(readFrameEvent({ type: 'perflo:login_completed', frame_session_id: 'fs_1', login_id: 'lg_1' })).toBeNull();
   });
 
   it('ignores bare strings, unknown types and missing session ids', () => {
@@ -41,7 +46,7 @@ describe('readFrameEvent (browser side of SPEC 8 postMessage)', () => {
 describe('pageExpired: a Perflo page says its time is over', () => {
   it('is true only for the error a page sends when its session ran out', () => {
     expect(pageExpired({ type: 'perflo:error', frame_session_id: 'fs_1', code: 'frame_expired' })).toBe(true);
-    expect(pageExpired({ type: 'perflo:error', frame_session_id: 'fs_1', code: 'sign_in_failed' })).toBe(false);
+    expect(pageExpired({ type: 'perflo:error', frame_session_id: 'fs_1', code: 'connection_failed' })).toBe(false);
     expect(pageExpired({ type: 'perflo:error', frame_session_id: 'fs_1' })).toBe(false);
     expect(pageExpired({ type: 'perflo:closed', frame_session_id: 'fs_1', code: 'frame_expired' })).toBe(false);
   });

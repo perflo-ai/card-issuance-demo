@@ -6,7 +6,7 @@ const keys = (current: StepKey, seen: StepKey[]) => orderSteps(current, new Set(
 describe('order steps come only from statuses the server returned', () => {
   it('maps every phase to its step, and finished phases to none', () => {
     expect(stepOf('needs_setup')).toBe('setup');
-    expect(stepOf('login_required')).toBe('setup');
+    expect(stepOf('connection_required')).toBe('setup');
     expect(stepOf('identity_check_required')).toBe('identity');
     expect(stepOf('payment_required')).toBe('money');
     expect(stepOf('placing')).toBe('card');

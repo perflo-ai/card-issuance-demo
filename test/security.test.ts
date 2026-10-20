@@ -154,18 +154,21 @@ describe('a setup link links only the session that started it', () => {
     const aliceFrame = await setupLink(target, alice);
     await finishSetup(mock.base, aliceFrame);
     // Mallory replays Alice's frame event, ids and all, on her own session.
-    const aliceLoginId = Object.values(
-      JSON.parse(readFileSync(demo.dataFile, 'utf8')).users as Record<string, { id: string; pendingLogin: { loginId: string } | null }>,
-    ).find((u) => u.pendingLogin !== null)?.pendingLogin?.loginId as string;
+    const aliceConnectionId = Object.values(
+      JSON.parse(readFileSync(demo.dataFile, 'utf8')).users as Record<
+        string,
+        { id: string; pendingConnection: { connectionId: string } | null }
+      >,
+    ).find((u) => u.pendingConnection !== null)?.pendingConnection?.connectionId as string;
     const replay = await post(target, '/demo/frame-events', mallory, {
       type: 'perflo:setup_completed',
       frame_session_id: new URL(aliceFrame).searchParams.get('session') as string,
-      login_id: aliceLoginId,
+      connection_id: aliceConnectionId,
     });
     expect(replay.status).toBe(200);
     expect(replay.body.link).not.toBe('linked');
     expect((await post(target, '/demo/session', mallory)).body.user.linked).toBe(false);
-    // Alice's own session picks up her login.
+    // Alice's own session picks up her connection.
     expect((await post(target, '/demo/link/refresh', alice)).body).toEqual({ link: 'linked' });
   });
 

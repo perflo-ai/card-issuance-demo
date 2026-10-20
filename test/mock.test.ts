@@ -22,10 +22,10 @@ async function linkedUser(
 ) {
   const created = await signedFetch(mock.base, 'POST', '/v1/users', { body: { external_user_id: externalId, email } });
   expect(created.status).toBe(202);
-  await finishSetup(mock.base, created.json.login_url, limits);
-  const login = await signedFetch(mock.base, 'GET', `/v1/logins/${created.json.login_id}`);
-  const token = login.json.user_access_token as string;
-  const userId = login.json.user_id as string;
+  await finishSetup(mock.base, created.json.connect_url, limits);
+  const connection = await signedFetch(mock.base, 'GET', `/v1/connections/${created.json.connection_id}`);
+  const token = connection.json.user_access_token as string;
+  const userId = connection.json.user_id as string;
   if (balance) {
     const link = await signedFetch(mock.base, 'POST', `/v1/users/${userId}/top-ups`, { token, body: { amount: balance } });
     await payInFrame(mock.base, link.json.frame_url, balance);
@@ -62,32 +62,47 @@ describe('signature check', () => {
   });
 });
 
-describe('users and logins', () => {
-  it('login_required, then approved with the token exactly once', async () => {
+describe('users and connections', () => {
+  it('connection_required, then approved with the token exactly once', async () => {
     const created = await signedFetch(mock.base, 'POST', '/v1/users', {
       body: { external_user_id: 'ext-1', email: 'ada@example.com' },
     });
     expect(created.status).toBe(202);
-    expect(created.json).toMatchObject({ status: 'login_required', login_id: expect.stringMatching(/^lg_/) });
-    expect(created.json.login_url).toContain('/v1/frames/setup?session=fs_');
+    expect(created.json).toEqual({
+      status: 'connection_required',
+      connection_id: expect.stringMatching(/^lg_/),
+      connect_url: expect.stringContaining('/v1/frames/setup?session=fs_'),
+      client_secret: expect.any(String),
+      expires_at: expect.any(String),
+    });
 
-    expect((await signedFetch(mock.base, 'GET', `/v1/logins/${created.json.login_id}`)).json).toEqual({ status: 'pending' });
+    expect((await signedFetch(mock.base, 'GET', `/v1/connections/${created.json.connection_id}`)).json).toEqual({ status: 'pending' });
     // The frame knows the email, so the code is already sent: the first step is the code.
-    expect((await frameCall(mock.base, created.json.login_url, 'state')).json).toMatchObject({
+    expect((await frameCall(mock.base, created.json.connect_url, 'state')).json).toMatchObject({
       purpose: 'setup',
       step: 'login',
       email_masked: 'a***@example.com',
     });
-    await finishSetup(mock.base, created.json.login_url);
+    await finishSetup(mock.base, created.json.connect_url);
 
-    const first = await signedFetch(mock.base, 'GET', `/v1/logins/${created.json.login_id}`);
+    const first = await signedFetch(mock.base, 'GET', `/v1/connections/${created.json.connection_id}`);
     expect(first.json).toMatchObject({
       status: 'approved',
       user_id: expect.stringMatching(/^usr_/),
       user_access_token: expect.stringMatching(/^ptk_test_/),
     });
-    const second = await signedFetch(mock.base, 'GET', `/v1/logins/${created.json.login_id}`);
+    const second = await signedFetch(mock.base, 'GET', `/v1/connections/${created.json.connection_id}`);
     expect(second.json).toEqual({ status: 'approved', user_id: first.json.user_id });
+  });
+
+  it('answers no login names: GET /v1/logins is gone, and an unknown connection is 404', async () => {
+    const created = await signedFetch(mock.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1' } });
+    expect(created.json).not.toHaveProperty('login_id');
+    expect(created.json).not.toHaveProperty('login_url');
+    expect((await signedFetch(mock.base, 'GET', `/v1/logins/${created.json.connection_id}`)).status).toBe(404);
+    const unknown = await signedFetch(mock.base, 'GET', '/v1/connections/lg_nobody');
+    expect(unknown.status).toBe(404);
+    expect(unknown.json.error.code).toBe('not_found');
   });
 
   it('approved without a token for a known external id; reissue mints a new one and revokes the old', async () => {
@@ -103,22 +118,22 @@ describe('users and logins', () => {
     expect((await signedFetch(mock.base, 'GET', `/v1/users/${userId}`, { token: reissued.json.user_access_token })).status).toBe(200);
   });
 
-  it('never grants access by email alone: a new external id must sign in', async () => {
+  it('never grants access by email alone: a new external id must connect', async () => {
     await linkedUser('ext-1', 'ada@example.com');
     const other = await signedFetch(mock.base, 'POST', '/v1/users', {
       body: { external_user_id: 'ext-2', email: 'ada@example.com' },
     });
     expect(other.status).toBe(202);
-    expect(other.json.status).toBe('login_required');
+    expect(other.json.status).toBe('connection_required');
   });
 
   it('a wrong code is refused in plain words', async () => {
     const created = await signedFetch(mock.base, 'POST', '/v1/users', {
       body: { external_user_id: 'ext-1', email: 'ada@example.com' },
     });
-    const wrong = await frameCall(mock.base, created.json.login_url, 'login', { privy_access_token: 'mock-otp:000000' });
+    const wrong = await frameCall(mock.base, created.json.connect_url, 'login', { privy_access_token: 'mock-otp:000000' });
     expect(wrong.status).toBe(401);
-    expect(wrong.json.error.message).toBe('That code is not right. Check it and try again.');
+    expect(wrong.json.error).toEqual({ code: 'connection_failed', message: 'That code is not right. Check it and try again.' });
   });
 
   it('account shape matches SPEC 4', async () => {
@@ -258,7 +273,7 @@ describe('orders', () => {
     expect((await signedFetch(mock.base, 'POST', `/v1/checkout/orders/${placed.json.order_id}/cancel`, { token })).status).toBe(409);
   });
 
-  it('a revoked grant gives 202 login_required on orders and 401 elsewhere; login resumes the order', async () => {
+  it('a revoked grant gives 202 connection_required on orders and 401 elsewhere; reconnecting resumes the order', async () => {
     const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '100.00');
     await fetch(`${mock.base}/mock/control/revoke`, {
       method: 'POST',
@@ -268,10 +283,17 @@ describe('orders', () => {
     expect((await signedFetch(mock.base, 'GET', `/v1/users/${userId}`, { token })).status).toBe(401);
     const placed = await signedFetch(mock.base, 'POST', '/v1/checkout/orders', { token, idem: 'k1', body: order(userId, '20.00') });
     expect(placed.status).toBe(202);
-    expect(placed.json).toMatchObject({ status: 'login_required', login_id: expect.any(String), login_url: expect.any(String) });
-    await finishSetup(mock.base, placed.json.login_url);
-    const login = await signedFetch(mock.base, 'GET', `/v1/logins/${placed.json.login_id}`);
-    expect(login.json.user_access_token).toMatch(/^ptk_test_/);
+    expect(placed.json).toEqual({
+      order_id: expect.any(String),
+      one_time: true,
+      status: 'connection_required',
+      connection_id: expect.stringMatching(/^lg_/),
+      connect_url: expect.stringContaining('/v1/frames/setup?session=fs_'),
+      client_secret: expect.any(String),
+    });
+    await finishSetup(mock.base, placed.json.connect_url);
+    const connection = await signedFetch(mock.base, 'GET', `/v1/connections/${placed.json.connection_id}`);
+    expect(connection.json.user_access_token).toMatch(/^ptk_test_/);
     expect((await signedFetch(mock.base, 'GET', `/v1/checkout/orders/${placed.json.order_id}`)).json.status).toBe('ready');
   });
 
@@ -308,10 +330,11 @@ describe('frames', () => {
     const created = await signedFetch(mock.base, 'POST', '/v1/users', {
       body: { external_user_id: 'ext-1', email: 'ada@example.com' },
     });
-    const page = await fetch(created.json.login_url);
+    const page = await fetch(created.json.connect_url);
     expect(page.headers.get('content-security-policy')).toContain('frame-ancestors https://localhost:5174');
     const html = await page.text();
-    expect(html).toContain(`data-login-id="${created.json.login_id}"`);
+    expect(html).toContain(`data-connection-id="${created.json.connection_id}"`);
+    expect(html).not.toContain('data-login-id');
     expect(html).not.toMatch(/<script>(?!<\/script>)/);
   });
 
@@ -319,9 +342,11 @@ describe('frames', () => {
     const created = await signedFetch(mock.base, 'POST', '/v1/users', {
       body: { external_user_id: 'ext-1', email: 'ada@example.com' },
     });
-    await frameCall(mock.base, created.json.login_url, 'login', { privy_access_token: 'mock-otp:123456' });
-    expect((await frameCall(mock.base, created.json.login_url, 'limits', {})).status).toBe(400);
-    expect((await frameCall(mock.base, created.json.login_url, 'limits', { per_order: '2500.00', per_month: '1000.00' })).status).toBe(400);
+    await frameCall(mock.base, created.json.connect_url, 'login', { privy_access_token: 'mock-otp:123456' });
+    expect((await frameCall(mock.base, created.json.connect_url, 'limits', {})).status).toBe(400);
+    expect((await frameCall(mock.base, created.json.connect_url, 'limits', { per_order: '2500.00', per_month: '1000.00' })).status).toBe(
+      400,
+    );
   });
 });
 
@@ -343,7 +368,7 @@ describe('add money pages: one amount each, opened in their own tab', () => {
     const page = await fetch(link.json.frame_url);
     expect(page.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
     expect(page.headers.get('content-security-policy')).not.toContain('https://localhost:5174');
-    // Sign-in and limits pages are still placed in the partner's page.
+    // Connect and limits pages are still placed in the partner's page.
     const limits = await signedFetch(mock.base, 'POST', `/v1/users/${userId}/limits-link`, { token });
     expect((await fetch(limits.json.frame_url)).headers.get('content-security-policy')).toContain('frame-ancestors https://localhost:5174');
   });
@@ -444,7 +469,7 @@ describe('replays and frame sessions (bapi final behaviour)', () => {
     const created = await signedFetch(mock.base, 'POST', '/v1/users', {
       body: { external_user_id: 'ext-1', email: 'ada@example.com' },
     });
-    const session = new URL(created.json.login_url).searchParams.get('session') as string;
+    const session = new URL(created.json.connect_url).searchParams.get('session') as string;
     expect(session).toMatch(/^fs_[A-Za-z0-9_-]{43}$/);
     expect((await fetch(`${mock.base}/v1/frames/${session}/state`)).status).not.toBe(200);
     expect((await fetch(`${mock.base}/v1/frames/session/state`)).status).toBe(404);
@@ -671,29 +696,8 @@ describe('one-time mode (the default)', () => {
   });
 });
 
-describe('connect names: beside the old ones, with the same values (Perflo after the connect names shipped)', () => {
-  it('POST /v1/users answers connection_id and connect_url equal to login_id and login_url', async () => {
-    const created = await signedFetch(mock.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1' } });
-    expect(created.status).toBe(202);
-    expect(created.json.connection_id).toMatch(/^lg_/);
-    expect(created.json.connection_id).toBe(created.json.login_id);
-    expect(created.json.connect_url).toBe(created.json.login_url);
-  });
-
-  it('GET /v1/connections/{id} answers like GET /v1/logins/{id}, and the token is handed out once across both', async () => {
-    const created = await signedFetch(mock.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1' } });
-    expect((await signedFetch(mock.base, 'GET', `/v1/connections/${created.json.connection_id}`)).json).toEqual({ status: 'pending' });
-    await finishSetup(mock.base, created.json.connect_url);
-    const first = await signedFetch(mock.base, 'GET', `/v1/connections/${created.json.connection_id}`);
-    expect(first.json).toEqual({ status: 'approved', user_id: expect.stringMatching(/^usr_/), user_access_token: expect.any(String) });
-    const again = await signedFetch(mock.base, 'GET', `/v1/logins/${created.json.login_id}`);
-    expect(again.json).toEqual({ status: 'approved', user_id: first.json.user_id });
-    const unknown = await signedFetch(mock.base, 'GET', '/v1/connections/lg_nobody');
-    expect(unknown.status).toBe(404);
-    expect(unknown.json.error.code).toBe('not_found');
-  });
-
-  it('an order waiting on a connection carries both pairs, and so does its order.login_required webhook', async () => {
+describe('connections: only the connect names', () => {
+  it('an order waiting on a connection, and its order.connection_required webhook, carry connection_id and connect_url only', async () => {
     const events: Array<{ type: string; data: Record<string, unknown> }> = [];
     const hooked = await startMock(50, {
       url: 'https://tiny.test/webhooks/perflo',
@@ -717,55 +721,33 @@ describe('connect names: beside the old ones, with the same values (Perflo after
         idem: 'k1',
         body: order(linked.json.user_id, '20.00'),
       });
-      expect(placed.json).toMatchObject({
-        status: 'login_required',
-        connection_id: placed.json.login_id,
-        connect_url: placed.json.login_url,
-      });
-      expect(placed.json.connection_id).toMatch(/^lg_/);
+      expect(placed.json).toMatchObject({ status: 'connection_required', connection_id: expect.stringMatching(/^lg_/) });
       const read = await signedFetch(hooked.base, 'GET', `/v1/checkout/orders/${placed.json.order_id}`);
-      expect(read.json).toMatchObject({ connection_id: placed.json.connection_id, connect_url: placed.json.connect_url });
-      await vi.waitFor(() => expect(events.some((e) => e.type === 'order.login_required')).toBe(true));
-      const announced = events.find((e) => e.type === 'order.login_required') as (typeof events)[number];
+      expect(read.json).toEqual(placed.json);
+      await vi.waitFor(() => expect(events.some((e) => e.type === 'order.connection_required')).toBe(true));
+      expect(events.some((e) => e.type.includes('login'))).toBe(false);
+      const announced = events.find((e) => e.type === 'order.connection_required') as (typeof events)[number];
       expect(announced.data).toMatchObject({
         order_id: placed.json.order_id,
-        login_id: placed.json.login_id,
-        login_url: placed.json.login_url,
-        connection_id: placed.json.login_id,
-        connect_url: placed.json.login_url,
+        status: 'connection_required',
+        connection_id: placed.json.connection_id,
+        connect_url: placed.json.connect_url,
       });
+      expect(announced.data).not.toHaveProperty('login_id');
+      expect(announced.data).not.toHaveProperty('login_url');
     } finally {
       await hooked.close();
     }
   });
 
-  it('the connect page sends perflo:connection_completed with connection_id beside perflo:login_completed', async () => {
+  it('the connect page names the connection in perflo:connection_completed, perflo:limits_saved and perflo:setup_completed', async () => {
     const created = await signedFetch(mock.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1' } });
     const html = await (await fetch(created.json.connect_url)).text();
     expect(html).toContain(`data-connection-id="${created.json.connection_id}"`);
     const script = await (await fetch(`${mock.base}/mock-assets/frame.js`)).text();
-    expect(script).toContain("send('perflo:connection_completed', { login_id: ids.login_id, connection_id: ids.connection_id })");
-    expect(script).toContain("send('perflo:login_completed', { login_id: ids.login_id })");
-  });
-
-  describe('a Perflo from before the connect names', () => {
-    let old: { base: string; close: () => Promise<void> };
-    beforeEach(async () => {
-      old = await startMock(50, undefined, false, undefined, false);
-    });
-    afterEach(async () => {
-      await old.close();
-    });
-
-    it('sends only login_id and login_url, has no GET /v1/connections, and its page names no connection', async () => {
-      const created = await signedFetch(old.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1' } });
-      expect(created.json).toMatchObject({ status: 'login_required', login_id: expect.stringMatching(/^lg_/) });
-      expect(created.json).not.toHaveProperty('connection_id');
-      expect(created.json).not.toHaveProperty('connect_url');
-      expect((await signedFetch(old.base, 'GET', `/v1/connections/${created.json.login_id}`)).status).toBe(404);
-      expect((await signedFetch(old.base, 'GET', `/v1/logins/${created.json.login_id}`)).json).toEqual({ status: 'pending' });
-      // The page sends perflo:connection_completed only when it has a connection id to name.
-      expect(await (await fetch(created.json.login_url)).text()).toContain('data-connection-id=""');
-    });
+    expect(script).toContain("send('perflo:connection_completed', { connection_id: ids.connection_id })");
+    expect(script).toContain("send('perflo:limits_saved', { connection_id: ids.connection_id })");
+    expect(script).toContain("send('perflo:setup_completed', { connection_id: ids.connection_id })");
+    expect(script).not.toMatch(/login_completed|login_id/);
   });
 });

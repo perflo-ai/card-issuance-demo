@@ -49,7 +49,7 @@ const SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const EVENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 export const WEBHOOK_EVENT_TYPES = [
-  'order.login_required',
+  'order.connection_required',
   'order.identity_check_required',
   'order.payment_required',
   'order.ready',

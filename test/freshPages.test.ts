@@ -1,6 +1,6 @@
 /**
- * Perflo pages Tiny stores and opens again later (a sign-in, an order's add money page) must still
- * work when the person opens them. A sign-in and its client_secret work for 30 minutes from when
+ * Perflo pages Tiny stores and opens again later (a connection, an order's add money page) must still
+ * work when the person opens them. A connection and its client_secret work for 30 minutes from when
  * Perflo opened them; Tiny checks with Perflo before handing a stored one out again, and opens a new
  * one when Perflo says it is over. Time is moved on the mock's own clock.
  */
@@ -27,7 +27,7 @@ afterEach(async () => {
   await mock.close();
 });
 
-/** Moves the mock's clock forward: the sign-ins and pages it handed out age. */
+/** Moves the mock's clock forward: the connections and pages it handed out age. */
 function later(ms: number) {
   ahead += ms;
 }
@@ -62,16 +62,16 @@ function counting() {
   return { calls, fetchImpl };
 }
 
-async function signInPage(post: Browser): Promise<{ url: string; clientSecret: string }> {
+async function connectPage(post: Browser): Promise<{ url: string; clientSecret: string }> {
   const res = await post('/demo/connect');
   expect(res.status, JSON.stringify(res.body)).toBe(200);
   const body = res.body as ConnectView;
-  if (body.link !== 'login_required') throw new Error('expected a sign-in to open');
+  if (body.link !== 'connection_required') throw new Error('expected a connection to open');
   return body.page as { url: string; clientSecret: string };
 }
 
-/** The page finished the sign-in (email code, then limits) and asks Tiny to look, as the UI elements page does. */
-async function finishSignIn(post: Browser, url: string) {
+/** The page finished connecting (email code, then limits) and asks Tiny to look, as the UI elements page does. */
+async function finishConnecting(post: Browser, url: string) {
   const done = await finishSetup(mock.base, url);
   expect(done.status).toBe(200);
   expect((await post('/demo/link/refresh')).body).toEqual({ link: 'linked' });
@@ -90,44 +90,44 @@ async function ask(post: Browser, text: string): Promise<OrderView> {
 /** A person with payments set up and money in their balance. */
 async function linkedWithMoney(post: Browser, amount: string) {
   await post('/demo/session');
-  await finishSignIn(post, (await signInPage(post)).url);
+  await finishConnecting(post, (await connectPage(post)).url);
   const link = await post('/demo/top-ups', { amount });
   await payInFrame(mock.base, link.body.frameUrl, amount);
 }
 
 const pageWorks = async (url: string) => (await frameCall(mock.base, url, 'state')).status;
 
-describe('a stored sign-in is checked before it is handed out again', () => {
-  it('past its 30 minutes it is replaced, and Start again gets a sign-in that works to the end', async () => {
+describe('a stored connection is checked before it is handed out again', () => {
+  it('past its 30 minutes it is replaced, and Start again gets a connection that works to the end', async () => {
     const { post } = demoWith();
     await post('/demo/session');
-    const first = await signInPage(post);
+    const first = await connectPage(post);
     later(31 * MINUTE);
     expect(await pageWorks(first.url)).toBe(410);
 
-    const again = await signInPage(post);
+    const again = await connectPage(post);
     expect(again.clientSecret).not.toBe(first.clientSecret);
     expect(await pageWorks(again.url)).toBe(200);
-    await finishSignIn(post, again.url);
+    await finishConnecting(post, again.url);
     expect((await post('/demo/connect')).body).toEqual({ link: 'linked' });
   });
 
-  it('two pages opening the sign-in at once make one sign-in, before and after it expires', async () => {
+  it('two pages opening the connection at once make one connection, before and after it expires', async () => {
     const { calls, fetchImpl } = counting();
     const { post } = demoWith(fetchImpl);
     await post('/demo/session');
-    const [a, b] = await Promise.all([signInPage(post), signInPage(post)]);
+    const [a, b] = await Promise.all([connectPage(post), connectPage(post)]);
     expect(a.clientSecret).toBe(b.clientSecret);
     expect(calls.filter((c) => c === 'POST /v1/users')).toHaveLength(1);
 
     later(31 * MINUTE);
-    const [c, d] = await Promise.all([signInPage(post), signInPage(post)]);
+    const [c, d] = await Promise.all([connectPage(post), connectPage(post)]);
     expect(c.clientSecret).toBe(d.clientSecret);
     expect(c.clientSecret).not.toBe(a.clientSecret);
     expect(calls.filter((call) => call === 'POST /v1/users')).toHaveLength(2);
   });
 
-  it('when Perflo cannot be reached, the person is told to try again, never handed the stored sign-in', async () => {
+  it('when Perflo cannot be reached, the person is told to try again, never handed the stored connection', async () => {
     let reachable = true;
     const fetchImpl: typeof fetch = (input, init) => {
       if (!reachable) return Promise.reject(new TypeError('fetch failed'));
@@ -135,7 +135,7 @@ describe('a stored sign-in is checked before it is handed out again', () => {
     };
     const { post } = demoWith(fetchImpl);
     await post('/demo/session');
-    const first = await signInPage(post);
+    const first = await connectPage(post);
     reachable = false;
     const res = await post('/demo/connect');
     expect(res.status).toBe(503);
@@ -144,27 +144,27 @@ describe('a stored sign-in is checked before it is handed out again', () => {
   });
 });
 
-describe('an order waiting on a sign-in', () => {
-  it('whose sign-in expired gets a new one, and goes through once the person signs in', async () => {
+describe('an order waiting on a connection', () => {
+  it('whose connection expired gets a new one, and goes through once the user reconnects', async () => {
     const { demo, post } = demoWith();
     await linkedWithMoney(post, '100.00');
     expect((await post('/demo/mock/revoke-access')).status).toBe(200);
     const draft = await ask(post, 'buy me $20 worth of books on amazon');
     const blocked = await advance(post, draft.id);
-    expect(blocked.phase).toBe('login_required');
-    const orders = await signInPage(post);
+    expect(blocked.phase).toBe('connection_required');
+    const orders = await connectPage(post);
     expect(orders.clientSecret).toBe(blocked.clientSecret);
 
     later(31 * MINUTE);
-    // Like Perflo, the order keeps naming its own sign-in, past its end.
+    // Like Perflo, the order keeps naming its own connection, past its end.
     const userId = Object.keys(readUsers(demo))[0];
     const read = await demo.api.getOrder(userId, blocked.perfloOrderId as string);
-    expect(read).toMatchObject({ status: 'login_required', client_secret: orders.clientSecret });
+    expect(read).toMatchObject({ status: 'connection_required', client_secret: orders.clientSecret });
     expect(await pageWorks(orders.url)).toBe(410);
 
-    const fresh = await signInPage(post);
+    const fresh = await connectPage(post);
     expect(fresh.clientSecret).not.toBe(orders.clientSecret);
-    await finishSignIn(post, fresh.url);
+    await finishConnecting(post, fresh.url);
     expect((await advance(post, draft.id)).phase).toBe('completed');
   });
 
@@ -185,12 +185,12 @@ describe('an order waiting on a sign-in', () => {
     const userId = Object.keys(readUsers(demo))[0];
     const waiting = await demo.api.getOrder(userId, blocked.perfloOrderId as string);
     later(31 * MINUTE);
-    await finishSignIn(post, (await signInPage(post)).url);
+    await finishConnecting(post, (await connectPage(post)).url);
 
-    // Perflo moves such an order on by itself, within a minute; until then a read still says login_required.
+    // Perflo moves such an order on by itself, within a minute; until then a read still says connection_required.
     stale = waiting;
     const still = await advance(post, draft.id);
-    expect(still.phase).toBe('login_required');
+    expect(still.phase).toBe('connection_required');
     expect((await post('/demo/session')).body.user.linked).toBe(true);
     expect(readUsers(demo)[userId].perflo).not.toBeNull();
 
@@ -203,7 +203,7 @@ describe("an order's add money page", () => {
   it('past its 30 minutes is replaced when the order is read again', async () => {
     const { post } = demoWith();
     await post('/demo/session');
-    await finishSignIn(post, (await signInPage(post)).url);
+    await finishConnecting(post, (await connectPage(post)).url);
     const draft = await ask(post, 'buy me $20 worth of books on amazon');
     const due = await advance(post, draft.id);
     expect(due.phase).toBe('payment_required');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { elementProblem, EXPIRED_TEXT, isExpired, LOAD_FAILED_TEXT } from '../web/src/elements.js';
+import { elementProblem, EXPIRED_TEXT, isAlreadyConnected, isExpired, LOAD_FAILED_TEXT } from '../web/src/elements.js';
 import { settleConnection } from '../web/src/connect.js';
 import type { LinkStatus } from '../server/views.js';
 
@@ -13,9 +13,15 @@ describe('what the person reads when an element refuses', () => {
 
   it('keeps Perflo’s words about what the person did, which say what to do next', () => {
     expect(elementProblem({ code: 'email_invalid', message: 'Enter a valid email address.' })).toBe('Enter a valid email address.');
-    expect(elementProblem({ code: 'sign_in_failed', message: 'That code is not right. Check it and try again.' })).toBe(
+    expect(elementProblem({ code: 'connection_failed', message: 'That code is not right. Check it and try again.' })).toBe(
       'That code is not right. Check it and try again.',
     );
+  });
+
+  it('a user who is already connected has no code to send: the page goes on instead of showing a problem', () => {
+    const connected = { code: 'already_connected', message: 'This user is already connected, so there is no code to send.' };
+    expect(isAlreadyConnected(connected)).toBe(true);
+    expect(isAlreadyConnected({ code: 'connection_failed', message: 'We could not confirm it is you.' })).toBe(false);
   });
 
   it('an expired page asks the person to start again, and empty words never reach them', () => {
@@ -28,7 +34,7 @@ describe('what the person reads when an element refuses', () => {
   });
 });
 
-describe('settling a finished sign-in', () => {
+describe('settling a finished connection', () => {
   /** Perflo's word did not come in time. */
   const wait = () => Promise.resolve(false);
 

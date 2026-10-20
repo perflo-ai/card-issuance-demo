@@ -19,7 +19,7 @@ const ORDER: readonly StepKey[] = ['setup', 'identity', 'money', 'card', 'pay'];
 export function stepOf(phase: OrderPhase): StepKey | null {
   switch (phase) {
     case 'needs_setup':
-    case 'login_required':
+    case 'connection_required':
       return 'setup';
     case 'identity_check_required':
       return 'identity';

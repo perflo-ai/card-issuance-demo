@@ -106,9 +106,9 @@ describe('first order, end to end in mock mode', () => {
     expect(setup.phase).toBe('needs_setup');
     expect(setup.frameUrl).toContain(`${mock.base}/v1/frames/setup?session=`);
 
-    // While the frame is still on the limits step, the login is pending.
-    const loginEvent = await b.post('/demo/frame-events', { type: 'perflo:login_completed', frame_session_id: 'fs_x' });
-    expect(loginEvent.body).toEqual({ link: 'pending' });
+    // While the frame is still on the limits step, the connection is pending.
+    const connectionEvent = await b.post('/demo/frame-events', { type: 'perflo:connection_completed', frame_session_id: 'fs_x' });
+    expect(connectionEvent.body).toEqual({ link: 'pending' });
     await setUp(b, setup.frameUrl as string);
 
     const due = await advance(b, draft.id);
@@ -150,7 +150,7 @@ describe('anonymous sessions and setting up payments in the chat', () => {
     expect(await signUp(b)).toEqual({ linked: false, stopAtCheckout: false, look: 'brand' });
     const store = JSON.parse(readFileSync(demo.dataFile, 'utf8'));
     expect(Object.keys(store.users)).toHaveLength(1);
-    expect(Object.keys(Object.values(store.users)[0] as object).sort()).toEqual(['createdAt', 'id', 'pendingLogin', 'perflo']);
+    expect(Object.keys(Object.values(store.users)[0] as object).sort()).toEqual(['createdAt', 'id', 'pendingConnection', 'perflo']);
   });
 
   it('payments are set up in the chat, on the first order: POST /users carries no email or name', async () => {
@@ -182,7 +182,7 @@ describe('anonymous sessions and setting up payments in the chat', () => {
     await signUp(b);
     const draft = await ask(b, 'buy me $5 worth of stickers on amazon');
     const first = (await advance(b, draft.id)).frameUrl as string;
-    // Half an hour later the login has expired: the look says so, and the next step asks for a new link.
+    // Half an hour later the connection has expired: the look says so, and the next step asks for a new link.
     vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 31 * 60_000 });
     try {
       expect((await b.post('/demo/link/refresh')).body).toEqual({ link: 'expired' });
@@ -385,14 +385,14 @@ describe('other order states through the demo', () => {
     expect(closed.body.error.message).toBe('This card is closed, so there are no details to show.');
   });
 
-  it('access turned off: the order asks to sign in again, then continues on its own', async () => {
+  it('access turned off: the order asks to reconnect, then continues on its own', async () => {
     const demo = makeDemo(mock.base);
     const b = browser(demo);
     await linkedWithMoney(b, '100.00');
     expect((await b.post('/demo/mock/revoke-access')).status).toBe(200);
     const draft = await ask(b, 'buy me $20 worth of books on amazon');
     const blocked = await advance(b, draft.id);
-    expect(blocked.phase).toBe('login_required');
+    expect(blocked.phase).toBe('connection_required');
     expect((await b.post('/demo/session')).body.user.linked).toBe(false);
     await setUp(b, blocked.frameUrl as string);
     expect((await advance(b, draft.id)).phase).toBe('completed');
@@ -496,49 +496,49 @@ describe('Add money: the amount is always the one typed in Tiny', () => {
   });
 });
 
-describe('connect names: Tiny uses the new ones Perflo sends, and the old ones only when it sends none', () => {
-  /** Where each check of a connection went, in order: `connections` or `logins`. */
+describe('connections: Tiny reads only connection_id and connect_url, and checks at GET /v1/connections', () => {
+  /** Every check of a connection Tiny made, by the address it asked. */
   const checks = (demo: ReturnType<typeof makeDemo>, userId: string) =>
     demo.log
       .forUser(userId)
-      .map((e) => /^GET \/v1\/(connections|logins)\//.exec(e.summary)?.[1])
-      .filter((route): route is string => route !== undefined);
+      .map((e) => /^GET (\/v1\/[a-z]+)\//.exec(e.summary)?.[1])
+      .filter((route): route is string => route !== undefined && route !== '/v1/checkout' && route !== '/v1/users');
 
-  /** Connects on the first order, then reconnects on an order after access was turned off. */
-  async function connectThenReconnect(demo: ReturnType<typeof makeDemo>) {
+  it('checks a connection at GET /v1/connections/{id}, for the first connection and for a reconnection', async () => {
+    const demo = makeDemo(mock.base);
     const b = browser(demo);
     await signUp(b);
     const userId = Object.keys(JSON.parse(readFileSync(demo.dataFile, 'utf8')).users)[0];
     const first = await ask(b, 'buy me $1.00 worth of gum on amazon');
     const setup = await advance(b, first.id);
-    const firstConnection = demo.store.user(userId).pendingLogin;
+    const firstConnection = demo.store.user(userId).pendingConnection;
     await setUp(b, setup.frameUrl as string);
     await addMoney(b, '100.00');
     expect((await b.post('/demo/mock/revoke-access')).status).toBe(200);
     const second = await ask(b, 'buy me $20 worth of books on amazon');
     const blocked = await advance(b, second.id);
-    expect(blocked.phase).toBe('login_required');
-    const reconnection = demo.store.user(userId).pendingLogin;
+    expect(blocked.phase).toBe('connection_required');
+    const reconnection = demo.store.user(userId).pendingConnection;
     await setUp(b, blocked.frameUrl as string);
     expect((await advance(b, second.id)).phase).toBe('completed');
-    return { userId, firstConnection, reconnection, secondOrderId: second.id };
-  }
 
-  it('checks a connection at GET /v1/connections/{id}, for the first connection and for a reconnection', async () => {
-    const demo = makeDemo(mock.base);
-    const { userId, firstConnection, reconnection, secondOrderId } = await connectThenReconnect(demo);
-    expect(firstConnection).toMatchObject({ loginId: expect.stringMatching(/^lg_/), connectNames: true, orderId: null });
-    expect(reconnection).toMatchObject({ loginId: expect.stringMatching(/^lg_/), connectNames: true, orderId: secondOrderId });
+    expect(firstConnection).toEqual({
+      connectionId: expect.stringMatching(/^lg_/),
+      connectUrl: setup.frameUrl,
+      clientSecret: expect.any(String),
+      orderId: null,
+    });
+    expect(reconnection).toMatchObject({ connectionId: expect.stringMatching(/^lg_/), connectUrl: blocked.frameUrl, orderId: second.id });
     expect(checks(demo, userId).length).toBeGreaterThan(0);
-    expect(new Set(checks(demo, userId))).toEqual(new Set(['connections']));
-    // The connect page link opens the connection, like login_url beside it: the log keeps neither query.
+    expect(new Set(checks(demo, userId))).toEqual(new Set(['/v1/connections']));
+    // The connect page link opens the connection: the log keeps only its origin and path.
     const created = demo.log.forUser(userId).find((e) => e.summary.startsWith('POST /v1/users'));
     const logged = (created?.detail as { response: Record<string, string> }).response;
+    expect(logged).toMatchObject({ status: 'connection_required', connection_id: firstConnection?.connectionId });
     expect(logged.connect_url).toMatch(/\/v1\/frames\/setup\?\[redacted\]$/);
-    expect(logged.login_url).toMatch(/\/v1\/frames\/setup\?\[redacted\]$/);
   });
 
-  it('perflo:connection_completed links like perflo:login_completed; the old event sent beside it reads nothing more', async () => {
+  it('perflo:connection_completed links the account; the old perflo:login_completed is not an event Tiny reads', async () => {
     const demo = makeDemo(mock.base);
     const b = browser(demo);
     await signUp(b);
@@ -551,38 +551,22 @@ describe('connect names: Tiny uses the new ones Perflo sends, and the old ones o
       link: 'pending',
     });
     await finishSetup(mock.base, setup.frameUrl as string);
-    const connectionId = demo.store.user(userId).pendingLogin?.loginId;
+    const connectionId = demo.store.user(userId).pendingConnection?.connectionId;
+    const before = checks(demo, userId).length;
+    const old = await b.post('/demo/frame-events', { type: 'perflo:login_completed', frame_session_id: session, login_id: connectionId });
+    expect(old.status).toBe(400);
+    expect(checks(demo, userId)).toHaveLength(before);
+    expect((await b.post('/demo/session')).body.user.linked).toBe(false);
+
     const completed = await b.post('/demo/frame-events', {
       type: 'perflo:connection_completed',
       frame_session_id: session,
-      login_id: connectionId,
       connection_id: connectionId,
     });
     expect(completed.body).toEqual({ link: 'linked' });
     expect((await b.post('/demo/session')).body.user.linked).toBe(true);
-    const before = checks(demo, userId).length;
-    const old = await b.post('/demo/frame-events', { type: 'perflo:login_completed', frame_session_id: session, login_id: connectionId });
-    expect(old.body).toEqual({ link: 'linked' });
-    expect(checks(demo, userId)).toHaveLength(before);
-    // The developer log keeps the id the page sent with the event that named it.
+    // The developer log keeps the id the page sent with the event.
     const logged = demo.log.forUser(userId).filter((e) => e.summary === 'perflo:connection_completed');
     expect(logged.map((e) => (e.detail as { connection_id?: string }).connection_id)).toEqual([undefined, connectionId]);
-  });
-
-  describe('against a Perflo from before the connect names', () => {
-    beforeEach(async () => {
-      await mock.close();
-      mock = await startMock(50, undefined, false, undefined, false);
-    });
-
-    it('checks at GET /v1/logins/{id} and never asks the new address, for the first connection and for a reconnection', async () => {
-      const demo = makeDemo(mock.base);
-      const { userId, firstConnection, reconnection } = await connectThenReconnect(demo);
-      expect(firstConnection).toMatchObject({ loginId: expect.stringMatching(/^lg_/) });
-      expect(firstConnection).not.toHaveProperty('connectNames');
-      expect(reconnection).not.toHaveProperty('connectNames');
-      expect(checks(demo, userId).length).toBeGreaterThan(0);
-      expect(new Set(checks(demo, userId))).toEqual(new Set(['logins']));
-    });
   });
 });

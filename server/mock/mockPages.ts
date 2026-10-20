@@ -8,8 +8,6 @@ const escapeHtml = (value: string) =>
   value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
 
 export interface FrameIds {
-  loginId: string | null;
-  /** The same id as loginId, from a Perflo with the connect names; null from one before them. */
   connectionId: string | null;
   topUpId: string | null;
   orderId: string | null;
@@ -17,7 +15,7 @@ export interface FrameIds {
 
 export function framePage(partnerOrigin: string, ids: FrameIds): string {
   return `<!doctype html>
-<html lang="en" data-partner-origin="${escapeHtml(partnerOrigin)}" data-login-id="${escapeHtml(ids.loginId ?? '')}" data-connection-id="${escapeHtml(ids.connectionId ?? '')}" data-top-up-id="${escapeHtml(ids.topUpId ?? '')}" data-order-id="${escapeHtml(ids.orderId ?? '')}">
+<html lang="en" data-partner-origin="${escapeHtml(partnerOrigin)}" data-connection-id="${escapeHtml(ids.connectionId ?? '')}" data-top-up-id="${escapeHtml(ids.topUpId ?? '')}" data-order-id="${escapeHtml(ids.orderId ?? '')}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -82,7 +80,6 @@ const js = String.raw`(function () {
   var app = document.getElementById('app');
   var root = document.documentElement;
   var ids = {
-    login_id: root.getAttribute('data-login-id') || undefined,
     connection_id: root.getAttribute('data-connection-id') || undefined,
     top_up_id: root.getAttribute('data-top-up-id') || undefined,
     order_id: root.getAttribute('data-order-id') || undefined
@@ -195,9 +192,7 @@ const js = String.raw`(function () {
       busy(verify, true, 'Checking...');
       var token = 'mock-otp:' + (typedEmail ? typedEmail + ':' : '') + code.value.trim();
       call('login', { privy_access_token: token }).then(function (result) {
-        // A Perflo with the connect names sends the new event and, beside it, the old one.
-        if (ids.connection_id) send('perflo:connection_completed', { login_id: ids.login_id, connection_id: ids.connection_id });
-        send('perflo:login_completed', { login_id: ids.login_id });
+        send('perflo:connection_completed', { connection_id: ids.connection_id });
         state.step = result.next;
         render();
       }).catch(function (error) { busy(verify, false, 'Verify'); showError(error); });
@@ -240,7 +235,7 @@ const js = String.raw`(function () {
     save.addEventListener('click', function () {
       busy(save, true);
       call('limits', { per_order: perOrder.value, per_month: perMonth.value }).then(function (result) {
-        send('perflo:limits_saved', {});
+        send('perflo:limits_saved', { connection_id: ids.connection_id });
         state.step = result.next;
         render();
       }).catch(function (error) { busy(save, false); showError(error); });
@@ -313,7 +308,7 @@ const js = String.raw`(function () {
 
   function finishSetup() {
     return call('complete', { step: 'setup' }).then(function () {
-      send('perflo:setup_completed', { login_id: ids.login_id });
+      send('perflo:setup_completed', { connection_id: ids.connection_id });
       state.step = 'done';
       state.finished = true;
       render();

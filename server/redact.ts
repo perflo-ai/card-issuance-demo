@@ -1,7 +1,7 @@
 /**
  * The one redactor. Everything that reaches the event log or stdout passes
  * through it. Tokens, card data and secrets are replaced outright; URLs that
- * carry a capability in their query (login_url, frame_url, kyc_url) keep only
+ * carry a capability in their query (connect_url, frame_url, kyc_url) keep only
  * origin and path; emails are masked.
  */
 

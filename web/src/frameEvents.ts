@@ -3,7 +3,7 @@ import { FRAME_EVENT_TYPES } from '../../server/views';
 
 const EVENT_TYPES: ReadonlySet<string> = new Set(FRAME_EVENT_TYPES);
 
-const OPTIONAL_IDS = ['login_id', 'connection_id', 'top_up_id', 'order_id', 'code'] as const;
+const OPTIONAL_IDS = ['connection_id', 'top_up_id', 'order_id', 'code'] as const;
 
 /** SPEC 8: the payload is always an object; bare strings and unknown shapes are ignored. */
 export function readFrameEvent(data: unknown): FrameEventPayload | null {

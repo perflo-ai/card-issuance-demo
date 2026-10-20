@@ -35,7 +35,7 @@ import { frameAssets, framePage, kycPage } from './mockPages.js';
 export const MOCK_CODE = '123456';
 export const MOCK_BRAND = 'Tiny';
 const FRAME_TTL_MS = 30 * 60_000;
-const LOGIN_TTL_MS = 30 * 60_000;
+const CONNECTION_TTL_MS = 30 * 60_000;
 const CARD_TTL_MS = 12 * 60 * 60_000;
 const REVEAL_TTL_MS = 900_000;
 const NO_KYC_LIMIT_CENTS = 20_000;
@@ -75,8 +75,8 @@ interface MUser {
   kycRef: string;
 }
 
-interface MLogin {
-  loginId: string;
+interface MConnection {
+  connectionId: string;
   userId: string;
   status: 'pending' | 'approved';
   tokenDelivered: boolean;
@@ -93,7 +93,7 @@ interface MFrame {
   id: string;
   purpose: Purpose;
   userId: string;
-  loginId: string | null;
+  connectionId: string | null;
   orderId: string | null;
   amountCents: number | null;
   step: Step;
@@ -117,7 +117,7 @@ interface MCard {
 }
 
 type OrderStatus =
-  | 'awaiting_login'
+  | 'awaiting_connection'
   | 'awaiting_payment'
   | 'identity_check_required'
   | 'issuing'
@@ -142,7 +142,7 @@ interface MOrder {
   /** What the shop's charge took from the card, fees included. */
   usedCents: number;
   readyAt: number | null;
-  loginId: string | null;
+  connectionId: string | null;
   frameId: string | null;
   declined: { reason: string; message: string } | null;
   spentCents: number;
@@ -174,13 +174,7 @@ export interface MockOptions {
   /** Where to send webhooks and the secret to sign them with. Unset: no webhooks are sent. */
   webhook?: { url: string; secret: string; fetchImpl?: typeof fetch };
   /**
-   * Send Perflo's connect names beside the old ones (connection_id and connect_url, GET /v1/connections,
-   * perflo:connection_completed), as Perflo does since they shipped. false: answer like a Perflo from
-   * before them, with the old names only. Default: true.
-   */
-  connectNames?: boolean;
-  /**
-   * The mock's clock (epoch ms), which every lifetime it keeps is measured on: sign-ins and pages (30
+   * The mock's clock (epoch ms), which every lifetime it keeps is measured on: connections and pages (30
    * minutes, like Perflo), cards, card links, orders. Tests move it forward; default: the real time.
    */
   now?: () => number;
@@ -206,13 +200,12 @@ const amountString = z.string().refine(isApiAmount, 'amount must have two decima
 
 export function createMockPerflo(options: MockOptions) {
   const slowIssueMs = options.slowIssueMs ?? 3000;
-  const connectNames = options.connectNames ?? true;
   const now = options.now ?? (() => Date.now());
   const users = new Map<string, MUser>();
   const tokens = new Map<string, string>();
-  /** Tokens whose grant the person revoked: orders with them answer login_required (SPEC 4). */
+  /** Tokens whose grant the person revoked: orders with them answer connection_required (SPEC 4). */
   const revokedTokens = new Map<string, string>();
-  const logins = new Map<string, MLogin>();
+  const connections = new Map<string, MConnection>();
   const frames = new Map<string, MFrame>();
   const orders = new Map<string, MOrder>();
   const topUps = new Map<string, MTopUp>();
@@ -225,22 +218,18 @@ export function createMockPerflo(options: MockOptions) {
   const frameUrl = (purpose: Purpose, frameId: string) =>
     `${options.selfOrigin}/v1/frames/${purpose}?session=${encodeURIComponent(frameId)}`;
 
-  /** A connection's id and page under the old names and, unless answering like an older Perflo, the new ones. */
-  const connectionFields = (login: MLogin) => {
-    const loginUrl = frameUrl('setup', login.frameId);
-    return {
-      login_id: login.loginId,
-      login_url: loginUrl,
-      ...(connectNames ? { connection_id: login.loginId, connect_url: loginUrl } : {}),
-    };
-  };
+  /** A connection's id and its connect page, as every answer that names one carries them. */
+  const connectionFields = (connection: MConnection) => ({
+    connection_id: connection.connectionId,
+    connect_url: frameUrl('setup', connection.frameId),
+  });
 
   function newFrame(purpose: Purpose, userId: string, extra: Partial<MFrame> = {}): MFrame {
     const frame: MFrame = {
       id: `fs_${randomBytes(32).toString('base64url')}`,
       purpose,
       userId,
-      loginId: null,
+      connectionId: null,
       orderId: null,
       amountCents: null,
       step: purpose === 'setup' ? 'login' : purpose === 'limits' ? 'limits' : 'top_up',
@@ -253,20 +242,20 @@ export function createMockPerflo(options: MockOptions) {
     return frame;
   }
 
-  function newLogin(user: MUser, orderId: string | null): MLogin {
-    const loginId = id('lg_');
-    const frame = newFrame('setup', user.userId, { loginId, orderId });
-    const login: MLogin = {
-      loginId,
+  function newConnection(user: MUser, orderId: string | null): MConnection {
+    const connectionId = id('lg_');
+    const frame = newFrame('setup', user.userId, { connectionId, orderId });
+    const connection: MConnection = {
+      connectionId,
       userId: user.userId,
       status: 'pending',
       tokenDelivered: false,
-      expiresAt: now() + LOGIN_TTL_MS,
+      expiresAt: now() + CONNECTION_TTL_MS,
       frameId: frame.id,
       orderId,
     };
-    logins.set(loginId, login);
-    return login;
+    connections.set(connectionId, connection);
+    return connection;
   }
 
   function mintToken(user: MUser): string {
@@ -356,12 +345,12 @@ export function createMockPerflo(options: MockOptions) {
   function evaluate(order: MOrder): void {
     const user = users.get(order.userId) as MUser;
     if (!user.grant || !user.token) {
-      // Like bapi: an order opens one sign-in when it starts waiting, and keeps naming it after it has
-      // ended (bapi's GET and sweep never renew it). Signing in on any new sign-in moves the order on.
-      if (order.status !== 'awaiting_login' || !order.loginId) {
-        order.loginId = newLogin(user, order.orderId).loginId;
+      // Like bapi: an order opens one connection when it starts waiting, and keeps naming it after it has
+      // ended (bapi's GET and sweep never renew it). Finishing any new connection moves the order on.
+      if (order.status !== 'awaiting_connection' || !order.connectionId) {
+        order.connectionId = newConnection(user, order.orderId).connectionId;
       }
-      order.status = 'awaiting_login';
+      order.status = 'awaiting_connection';
       return;
     }
     const decline = (reason: string, message: string) => {
@@ -412,7 +401,7 @@ export function createMockPerflo(options: MockOptions) {
       order.status = 'ready';
     }
     if (order.card && !order.card.closed && now() > order.card.expiresAt) closeCard(order.card);
-    if (order.status === 'awaiting_payment' || order.status === 'identity_check_required' || order.status === 'awaiting_login') {
+    if (order.status === 'awaiting_payment' || order.status === 'identity_check_required' || order.status === 'awaiting_connection') {
       if (now() - order.createdAt < DAY_MS) evaluate(order);
     }
   }
@@ -461,15 +450,15 @@ export function createMockPerflo(options: MockOptions) {
           },
         };
       }
-      case 'awaiting_login': {
-        const login = logins.get(order.loginId as string) as MLogin;
+      case 'awaiting_connection': {
+        const connection = connections.get(order.connectionId as string) as MConnection;
         return {
           status: 202,
           body: {
             ...base,
-            status: 'login_required',
-            ...connectionFields(login),
-            client_secret: login.frameId,
+            status: 'connection_required',
+            ...connectionFields(connection),
+            client_secret: connection.frameId,
           },
         };
       }
@@ -701,31 +690,28 @@ export function createMockPerflo(options: MockOptions) {
       };
       users.set(user.userId, user);
     }
-    const login = newLogin(user, null);
+    const connection = newConnection(user, null);
     send(202, {
-      status: 'login_required',
-      ...connectionFields(login),
-      client_secret: login.frameId,
-      expires_at: new Date(login.expiresAt).toISOString(),
+      status: 'connection_required',
+      ...connectionFields(connection),
+      client_secret: connection.frameId,
+      expires_at: new Date(connection.expiresAt).toISOString(),
     });
   });
 
-  /** One connection, two addresses (an older Perflo answers only the first): the same answer for the same id. */
-  const readConnection = (req: Request<{ id: string }>, res: Response) => {
-    const login = logins.get(req.params.id);
-    if (!login) throw new HttpError(404, 'not_found', 'That connection was not found.');
-    if (login.status === 'pending') {
-      return res.json({ status: login.expiresAt > now() ? 'pending' : 'expired' });
+  v2.get('/connections/:connectionId', (req, res) => {
+    const connection = connections.get(req.params.connectionId);
+    if (!connection) throw new HttpError(404, 'not_found', 'That connection was not found.');
+    if (connection.status === 'pending') {
+      return res.json({ status: connection.expiresAt > now() ? 'pending' : 'expired' });
     }
-    const user = users.get(login.userId) as MUser;
-    if (!login.tokenDelivered && user.token) {
-      login.tokenDelivered = true;
+    const user = users.get(connection.userId) as MUser;
+    if (!connection.tokenDelivered && user.token) {
+      connection.tokenDelivered = true;
       return res.json({ status: 'approved', user_id: user.userId, user_access_token: user.token });
     }
     res.json({ status: 'approved', user_id: user.userId });
-  };
-  v2.get('/logins/:id', readConnection);
-  if (connectNames) v2.get('/connections/:id', readConnection);
+  });
 
   v2.get('/users/:userId', (req, res) => {
     const user = userFromToken(req, req.params.userId);
@@ -841,7 +827,7 @@ export function createMockPerflo(options: MockOptions) {
       loadCents: 0,
       usedCents: 0,
       readyAt: null,
-      loginId: null,
+      connectionId: null,
       frameId: null,
       declined: null,
       spentCents: 0,
@@ -898,7 +884,7 @@ export function createMockPerflo(options: MockOptions) {
       // A one-time card closes with its order; a reused card stays open for the person's other orders.
       const card = order.card as MCard;
       if (!card.reusable) card.closed = true;
-    } else if (!['awaiting_login', 'awaiting_payment', 'identity_check_required'].includes(order.status)) {
+    } else if (!['awaiting_connection', 'awaiting_payment', 'identity_check_required'].includes(order.status)) {
       throw new HttpError(409, 'order_not_cancellable', 'This order can no longer be cancelled.');
     }
     user.balanceCents += returned;
@@ -921,8 +907,7 @@ export function createMockPerflo(options: MockOptions) {
   const frameIds = (sessionId: string) => {
     const frame = frames.get(sessionId);
     return {
-      loginId: frame?.loginId ?? null,
-      connectionId: connectNames ? (frame?.loginId ?? null) : null,
+      connectionId: frame?.connectionId ?? null,
       topUpId: frame?.topUpId ?? null,
       orderId: frame?.orderId ?? null,
     };
@@ -936,7 +921,7 @@ export function createMockPerflo(options: MockOptions) {
     if (purpose !== 'setup' && purpose !== 'top-up' && purpose !== 'limits') {
       return res.status(404).type('text/plain').send('Not found');
     }
-    // The add money page opens in a tab of its own and refuses to be framed; sign-in and limits are placed in the partner's page.
+    // The add money page opens in a tab of its own and refuses to be framed; the connect and limits pages are placed in the partner's page.
     const ancestors = purpose === 'top-up' ? "'none'" : options.partnerOrigin;
     res
       .set('Content-Security-Policy', `default-src 'self'; frame-ancestors ${ancestors}; base-uri 'none'; form-action 'self'`)
@@ -978,7 +963,7 @@ export function createMockPerflo(options: MockOptions) {
     const user = users.get(frame.userId) as MUser;
     const email = user.email ?? match?.[1] ?? null;
     if (!match || match[2] !== MOCK_CODE || !email) {
-      throw new HttpError(401, 'sign_in_failed', 'That code is not right. Check it and try again.');
+      throw new HttpError(401, 'connection_failed', 'That code is not right. Check it and try again.');
     }
     user.email = email;
     frame.loggedIn = true;
@@ -1005,8 +990,8 @@ export function createMockPerflo(options: MockOptions) {
     user.grant = { perOrderCents: perOrder, perMonthCents: perMonth };
     if (frame.purpose === 'setup') {
       mintToken(user);
-      const login = logins.get(frame.loginId as string) as MLogin;
-      login.status = 'approved';
+      const connection = connections.get(frame.connectionId as string) as MConnection;
+      connection.status = 'approved';
       const due = shortfall(frame);
       frame.step = due > 0 ? 'top_up' : 'done';
       if (due > 0) frame.amountCents = due;
