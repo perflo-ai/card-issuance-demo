@@ -3,7 +3,7 @@
  * one wording. Plain language: no provider names, no technical words.
  */
 
-import type { DeclineReason, IdentityStatus, LookId, OrderPhase } from '../../server/views';
+import type { AutoTopUpView, DeclineReason, IdentityStatus, LinkedCardView, LookId, OrderPhase } from '../../server/views';
 import { apiAmountToCents, formatUsd } from '../../server/money';
 import type { StepKey } from './progress';
 
@@ -202,3 +202,29 @@ export const PAYMENT_TAB_TEXT = {
   cancelled: 'Payment cancelled.',
   closed: 'The payment page was closed. If you paid, the money shows in your balance.',
 } as const;
+
+/** "Visa ending 4242, expires 12/30": what a linked card is called wherever it is listed. */
+export function linkedCardName(card: Pick<LinkedCardView, 'brand' | 'last4' | 'expMonth' | 'expYear'>): string {
+  const brand = card.brand ? card.brand.charAt(0).toUpperCase() + card.brand.slice(1) : 'Card';
+  const expires =
+    card.expMonth !== null && card.expYear !== null
+      ? `, expires ${expiry(String(card.expMonth).padStart(2, '0'), String(card.expYear))}`
+      : '';
+  return `${brand} ending ${card.last4}${expires}`;
+}
+
+/** Where automatic top-ups stand, in one line. Perflo never says why they are paused, so neither does Tiny. */
+export function autoTopUpText(auto: AutoTopUpView, cards: LinkedCardView[]): string {
+  if (auto.status === 'off') return 'Off';
+  const limit = auto.monthlyLimit ? `, up to ${money(auto.monthlyLimit)} a month` : '';
+  const card = cards.find((c) => c.id === auto.linkedCardId);
+  const from = card ? `, from the card ending ${card.last4}` : '';
+  return `${auto.status === 'on' ? 'On' : 'Paused'}${limit}${from}`;
+}
+
+/** Said once a card is saved. */
+export function cardSavedText(last4: string, autoTopUp: { monthlyLimit: string } | null): string {
+  return autoTopUp
+    ? `Card ending ${last4} saved. Automatic top-ups are on, up to ${money(autoTopUp.monthlyLimit)} a month.`
+    : `Card ending ${last4} saved.`;
+}

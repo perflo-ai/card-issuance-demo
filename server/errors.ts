@@ -73,6 +73,26 @@ const PAYMENTS: Record<PartnerErrorCode, { status: number; message?: string; ope
   // Tiny always sends the amount the person typed, so this means Tiny left it out.
   amount_required: { status: 502, message: TRY_AGAIN, operatorNote: 'payments asked for an amount Tiny did not send: a bug in Tiny' },
   limits_invalid: { status: 400 },
+  // Linking a card. A card token is single use and lasts 15 minutes: the person enters the card again.
+  card_token_invalid: { status: 409, message: 'That card could not be saved. Enter it again and press Save.' },
+  // Tiny's page and Tiny's server disagreed about automatic top-ups: never the person's doing.
+  consent_missing: {
+    status: 502,
+    message: TRY_AGAIN,
+    operatorNote: 'Tiny asked for automatic top-ups with a card token that carries no agreement: a bug in Tiny',
+  },
+  consent_mismatch: {
+    status: 502,
+    message: TRY_AGAIN,
+    operatorNote: 'Tiny sent a monthly limit other than the one the card form showed: a bug in Tiny',
+  },
+  monthly_limit_invalid: { status: 400 },
+  card_not_supported: { status: 409 },
+  card_declined: { status: 402 },
+  auto_top_up_already_on: { status: 409 },
+  auto_top_up_paused: { status: 409 },
+  auto_top_up_unavailable: { status: 409 },
+  too_many_attempts: { status: 429 },
 };
 
 export function toBrowserError(error: unknown): BrowserError {

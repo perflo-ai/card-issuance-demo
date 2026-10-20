@@ -2,7 +2,7 @@
  * The partner-side flow: everything Tiny's backend does against Perflo.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { DemoConfig } from './config.js';
 import type { EventLog } from './eventLog.js';
 import { DEFAULT_LOOK, lookFields, type LookId } from './looks.js';
@@ -14,6 +14,7 @@ import {
   PerfloApiError,
   PerfloUnavailableError,
   type AccountResponse,
+  type LinkedCard,
   type OrderResponse,
   type PerfloApi,
 } from './perfloApi.js';
@@ -21,7 +22,16 @@ import { revealCard, RevealError, simulateCheckout, type RevealedCard } from './
 import type { DemoOrder, DemoUser, Store } from './store.js';
 import { cardClosedData, type WebhookEvent } from './webhooks.js';
 
-import type { ConnectView, LinkStatus, Notice, PerfloPageView } from './views.js';
+import type {
+  AutoTopUpChoice,
+  AutoTopUpView,
+  ConnectView,
+  LinkCardView,
+  LinkedCardView,
+  LinkStatus,
+  Notice,
+  PerfloPageView,
+} from './views.js';
 
 export type { LinkStatus, Notice } from './views.js';
 
@@ -567,6 +577,88 @@ export class DemoService {
     );
     return { ...pageOf(link), amount: link.amount };
   }
+
+  /** The card element's client_secret, opened in the person's current look. */
+  async linkedCardForm(user: DemoUser): Promise<{ clientSecret: string }> {
+    const perflo = this.linkedOrThrow(user);
+    const form = await this.api.linkedCardForm(user.id, perflo.userId, perflo.token, lookFields(user.look ?? DEFAULT_LOOK));
+    return { clientSecret: form.client_secret };
+  }
+
+  /**
+   * Saves the card behind one card token. The Idempotency-Key comes from that token: each Save makes a new
+   * token, so each Save gets its own key, and "Try again" on a Save whose answer never came resends the
+   * same token, so Perflo replays that Save instead of linking twice. One at a time per key, so a double
+   * click waits for the first answer and gets the same one.
+   */
+  async linkCard(user: DemoUser, cardToken: string, autoTopUp: AutoTopUpChoice): Promise<LinkCardView> {
+    const perflo = this.linkedOrThrow(user);
+    const key = linkCardIdempotencyKey(user.id, cardToken, autoTopUp);
+    return this.exclusive(`link-card:${key}`, async () => {
+      const answer = await this.api.linkCard(user.id, perflo.userId, perflo.token, key, {
+        card_token: cardToken,
+        auto_top_up: autoTopUp ? { monthly_limit: autoTopUp.monthlyLimit } : null,
+      });
+      if (answer.status === 'requires_action') {
+        this.log.add(user.id, 'demo', 'The card needs confirming in the card form');
+        return { status: 'requires_action' };
+      }
+      this.log.add(
+        user.id,
+        'demo',
+        `Card ending ${answer.linked_card.last4} linked${answer.auto_top_up ? `, automatic top-ups on up to ${answer.auto_top_up.monthly_limit} a month` : ''}`,
+      );
+      return {
+        status: 'linked',
+        linkedCard: cardView(answer.linked_card),
+        autoTopUp: answer.auto_top_up ? { status: 'on', monthlyLimit: answer.auto_top_up.monthly_limit } : null,
+      };
+    });
+  }
+
+  async linkedCards(user: DemoUser): Promise<LinkedCardView[]> {
+    const perflo = this.linkedOrThrow(user);
+    const { linked_cards } = await this.api.linkedCards(user.id, perflo.userId, perflo.token);
+    return linked_cards.map((card) => ({ ...cardView(card), usedForAutoTopUp: card.used_for_auto_top_up }));
+  }
+
+  /** Perflo turns automatic top-ups off when they were using this card. */
+  async removeLinkedCard(user: DemoUser, linkedCardId: string): Promise<void> {
+    const perflo = this.linkedOrThrow(user);
+    await this.api.removeLinkedCard(user.id, perflo.userId, perflo.token, linkedCardId);
+  }
+
+  async autoTopUp(user: DemoUser): Promise<AutoTopUpView> {
+    const perflo = this.linkedOrThrow(user);
+    const state = await this.api.autoTopUp(user.id, perflo.userId, perflo.token);
+    return { status: state.status, monthlyLimit: state.monthly_limit, linkedCardId: state.linked_card_id };
+  }
+
+  /** The card stays linked. Already off is a success. */
+  async turnOffAutoTopUp(user: DemoUser): Promise<void> {
+    const perflo = this.linkedOrThrow(user);
+    await this.api.turnOffAutoTopUp(user.id, perflo.userId, perflo.token);
+  }
+
+  private linkedOrThrow(user: DemoUser): NonNullable<DemoUser['perflo']> {
+    if (!user.perflo) throw new DemoError('not_linked', 'Payments are not set up yet');
+    return user.perflo;
+  }
+}
+
+/**
+ * The Idempotency-Key for linking the card behind one card token: the same Save (account, token and
+ * choice) always gives the same key, and nothing about the token can be read back from it.
+ */
+export function linkCardIdempotencyKey(demoUserId: string, cardToken: string, autoTopUp: AutoTopUpChoice): string {
+  const hash = createHash('sha256')
+    .update(['linked-card', demoUserId, cardToken, autoTopUp ? autoTopUp.monthlyLimit : ''].join('\n'), 'utf8')
+    .digest('hex');
+  return `lc-save-${hash}`;
+}
+
+function cardView(card: LinkedCard): Omit<LinkedCardView, 'usedForAutoTopUp'> {
+  return { id: card.id, brand: card.brand, last4: card.last4, expMonth: card.exp_month, expYear: card.exp_year };
 }
 
 /** The connection an answer names, as Tiny stores it while it waits (store.ts DemoUser.pendingConnection). */

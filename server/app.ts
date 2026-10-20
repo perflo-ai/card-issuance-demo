@@ -10,7 +10,8 @@ import type { DemoConfig } from './config.js';
 import type { EventLog } from './eventLog.js';
 import { parseOrderMessage } from './intent.js';
 import { DEFAULT_LOOK } from './looks.js';
-import { formatUsd, readTypedAmount } from './money.js';
+import { apiAmountToCents, formatUsd, isApiAmount, readTypedAmount } from './money.js';
+import { CARD_TOKEN, LINKED_CARD_ID } from './perfloApi.js';
 import { toView } from './orderState.js';
 import { rateLimit, sameOriginOnly, securityHeaders } from './security.js';
 import { HttpError, toBrowserError } from './errors.js';
@@ -30,6 +31,20 @@ const perfloOrderId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const noBody = z.object({}).strict();
 /** A look is named by its id only: the appearance Perflo gets comes from server/looks.ts, never from here. */
 const lookBody = z.object({ look: z.enum(LOOK_IDS) }).strict();
+/**
+ * Save on the card form: the token the card element gave, and automatic top-ups up to a monthly limit
+ * ("250.00", the API's own format) or null for the card only. Perflo decides the limit's bounds.
+ */
+const linkCardBody = z
+  .object({
+    cardToken: z.string().regex(CARD_TOKEN),
+    autoTopUp: z
+      .object({ monthlyLimit: z.string().refine((value) => isApiAmount(value) && apiAmountToCents(value) > 0) })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+const linkedCardId = z.string().regex(LINKED_CARD_ID);
 const eventsQuery = z.object({ after: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0) });
 
 const frameEvent = z.object({
@@ -349,6 +364,44 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     if ('problem' in typed) throw new HttpError(400, typed.problem);
     const page = await service.topUpLink(user, typed.cents);
     res.json({ frameUrl: page.url, ...(page.clientSecret ? { clientSecret: page.clientSecret } : {}), amount: page.amount });
+  });
+
+  /** The card element's client_secret: Tiny's page mounts Perflo's card fields with it. */
+  app.post('/demo/linked-cards/form', async (req, res) => {
+    const user = currentUser(req);
+    parse(noBody, req.body, unreadable);
+    res.json(await service.linkedCardForm(user));
+  });
+
+  /** Save: links the card behind the token the card element just made, with or without automatic top-ups. */
+  app.post('/demo/linked-cards', async (req, res) => {
+    const user = currentUser(req);
+    const body = parse(linkCardBody, req.body, new HttpError(400, 'The card could not be saved. Enter it again and press Save.'));
+    res.json(await service.linkCard(user, body.cardToken, body.autoTopUp));
+  });
+
+  app.get('/demo/linked-cards', async (req, res) => {
+    const user = currentUser(req);
+    res.json({ linkedCards: await service.linkedCards(user) });
+  });
+
+  app.post('/demo/linked-cards/:id/remove', async (req, res) => {
+    const user = currentUser(req);
+    parse(noBody, req.body, unreadable);
+    await service.removeLinkedCard(user, parse(linkedCardId, req.params.id, new HttpError(404, 'That card was not found.')));
+    res.json({ ok: true });
+  });
+
+  app.get('/demo/auto-top-up', async (req, res) => {
+    const user = currentUser(req);
+    res.json({ autoTopUp: await service.autoTopUp(user) });
+  });
+
+  app.post('/demo/auto-top-up/turn-off', async (req, res) => {
+    const user = currentUser(req);
+    parse(noBody, req.body, unreadable);
+    await service.turnOffAutoTopUp(user);
+    res.json({ ok: true });
   });
 
   app.post('/demo/orders/:perfloOrderId/card-details', async (req, res) => {

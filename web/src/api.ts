@@ -5,6 +5,10 @@ import type {
   LinkStatus,
   LogEntry,
   LookId,
+  AutoTopUpChoice,
+  AutoTopUpView,
+  LinkCardView,
+  LinkedCardView,
   MeView,
   Notice,
   OrderView,
@@ -103,6 +107,14 @@ export const api = {
     request<{ card: CardDetailsView }>('POST', `/demo/orders/${encodeURIComponent(perfloOrderId)}/card-details`),
   cancelCard: (perfloOrderId: string) =>
     request<{ amountReturned: string | null; order?: OrderView }>('POST', `/demo/cards/${encodeURIComponent(perfloOrderId)}/cancel`),
+  /** The card element's client_secret, opened in the person's current look. */
+  linkedCardForm: () => request<{ clientSecret: string }>('POST', '/demo/linked-cards/form'),
+  /** One Save. Sending the same token and choice again is that Save tried again: payments answer it once. */
+  linkCard: (save: { cardToken: string; autoTopUp: AutoTopUpChoice }) => request<LinkCardView>('POST', '/demo/linked-cards', save),
+  linkedCards: () => request<{ linkedCards: LinkedCardView[] }>('GET', '/demo/linked-cards'),
+  removeLinkedCard: (id: string) => request<{ ok: true }>('POST', `/demo/linked-cards/${encodeURIComponent(id)}/remove`),
+  autoTopUp: () => request<{ autoTopUp: AutoTopUpView }>('GET', '/demo/auto-top-up'),
+  turnOffAutoTopUp: () => request<{ ok: true }>('POST', '/demo/auto-top-up/turn-off'),
   events: (after: number) => request<{ events: LogEntry[] }>('GET', `/demo/events?after=${after}`),
   mockRevoke: () => request<{ ok: true }>('POST', '/demo/mock/revoke-access'),
   mockStopAtCheckout: (on: boolean) => request<{ user: MeView }>('POST', '/demo/mock/stop-at-checkout', { on }),
