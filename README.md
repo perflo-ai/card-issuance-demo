@@ -154,11 +154,11 @@ them, Perflo.js does not load and pages that came with no `client_secret` open f
   so the switch is on the UI elements page only.
 
 **Look.** The Payments panel has a **Look** picker with three example looks: Tiny's brand (the brand saved in Perflo
-Builder, nothing sent), a flat light look (variables, condensed inputs, tabs on the payment form) and a dark look
-(variables plus `rules` for inputs, labels and buttons, an accordion on the payment form). The browser sends only the
-look's id; the `appearance` and `payment_element_options` Perflo gets come from the fixed list in `server/looks.ts`,
-on the request that opens the page: `POST /v1/users`, `POST /v1/users/{id}/top-ups`, `POST /v1/users/{id}/limits-link`
-and `POST /v1/checkout/orders` (`payment_element_options` only on the two that take a payment). They are signed like
+Builder, nothing sent), a flat light look (variables and condensed inputs) and a dark look (variables plus `rules` for
+inputs, labels and buttons). The browser sends only the look's id; the `appearance` Perflo gets comes from the fixed
+list in `server/looks.ts`, on the request that opens the page: `POST /v1/users`, `POST /v1/users/{id}/top-ups`,
+`POST /v1/users/{id}/limits-link` and `POST /v1/checkout/orders`. How the payment form works is Perflo's own, so no
+look sets it. They are signed like
 every other request (`X-Partner-Key-Version` and the rest). A page already open keeps the look it was opened with,
 and an order keeps the look it was made with, so a retry with its Idempotency-Key sends the same body.
 
@@ -344,7 +344,7 @@ server/
   checkout.ts     card reveal (revealCard) and the simulated checkout
   errors.ts       what the browser is told for each failure
   security.ts     response headers, same-origin check, rate limit
-  looks.ts        the example looks (appearance, payment_element_options) Tiny sends Perflo
+  looks.ts        the example looks (appearance) Tiny sends Perflo
   logger.ts       JSON logs with request ids
   orderState.ts   pure status handling and the browser view
   intent.ts       the scripted assistant's parser
