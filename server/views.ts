@@ -46,7 +46,7 @@ export interface OrderView {
   amountCents: number;
   description: string;
   phase: OrderPhase;
-  /** Perflo page to embed: the setup or sign-in page, or the add money page. */
+  /** Perflo page to embed: the connect page (setup), or the add money page. */
   frameUrl?: string;
   /** The same page's client_secret, for Perflo.js; absent when Perflo did not send one. */
   clientSecret?: string;
@@ -113,6 +113,8 @@ export interface LogEntry {
 /** The postMessage events a Perflo frame sends (SPEC 8). */
 export const FRAME_EVENT_TYPES = [
   'perflo:ready',
+  // Sent beside perflo:login_completed by a Perflo with the connect names, with connection_id added.
+  'perflo:connection_completed',
   'perflo:login_completed',
   'perflo:limits_saved',
   'perflo:top_up_completed',
@@ -133,8 +135,8 @@ export interface PerfloPageView {
   clientSecret?: string;
 }
 
-/** POST /demo/sign-in: linked already, or the sign-in to open. */
-export type SignInView = { link: 'linked' } | { link: 'login_required'; page: PerfloPageView };
+/** POST /demo/connect: linked already, or the connection to open. */
+export type ConnectView = { link: 'linked' } | { link: 'login_required'; page: PerfloPageView };
 
 export type Notice = 'reveal_failed' | 'card_locked' | null;
 

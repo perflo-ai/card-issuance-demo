@@ -30,15 +30,15 @@ const BASE = 'https://perflo.test';
 
 describe('the example looks', () => {
   it('sends nothing for the brand default, so those requests are what Tiny sent before looks existed', () => {
-    expect(lookFields('brand', 'sign_in')).toEqual({});
+    expect(lookFields('brand', 'connect')).toEqual({});
     expect(lookFields('brand', 'limits')).toEqual({});
     expect(lookFields('brand', 'payment')).toEqual({});
   });
 
   it('sends the payment form options only to a page that takes a payment', () => {
     for (const look of ['flat', 'night'] as const) {
-      expect(lookFields(look, 'sign_in').appearance).toBeDefined();
-      expect(lookFields(look, 'sign_in').payment_element_options).toBeUndefined();
+      expect(lookFields(look, 'connect').appearance).toBeDefined();
+      expect(lookFields(look, 'connect').payment_element_options).toBeUndefined();
       expect(lookFields(look, 'limits').payment_element_options).toBeUndefined();
       expect(lookFields(look, 'payment').payment_element_options).toBeDefined();
     }
@@ -118,9 +118,9 @@ describe('requests Perflo gets carry the chosen look, signed as before', () => {
     const { service, store } = live(fake);
     const { user } = store.createUser();
     const chosen = service.setLook(user, 'night');
-    const result = await service.signIn(chosen);
+    const result = await service.connect(chosen);
     expect(result).toEqual({ link: 'login_required', page: { url: `${BASE}/v1/frames/setup?session=x`, clientSecret: SECRET } });
-    expect(calls[0].body).toEqual({ external_user_id: user.id, ...lookFields('night', 'sign_in') });
+    expect(calls[0].body).toEqual({ external_user_id: user.id, ...lookFields('night', 'connect') });
     expect(calls[0].body.payment_element_options).toBeUndefined();
     expect(calls[0].keyVersion).toBe(CREDS.keyVersion);
     expect(calls[0].signed).toBe(true);
@@ -256,7 +256,7 @@ describe('the browser names a look by its id, and nothing else', () => {
   it('refuses appearance or payment form options on every page the browser opens', async () => {
     const b = browser();
     await b.post('/demo/session');
-    expect((await b.post('/demo/sign-in', { appearance: { theme: 'dark' } })).status).toBe(400);
+    expect((await b.post('/demo/connect', { appearance: { theme: 'dark' } })).status).toBe(400);
     expect((await b.post('/demo/top-ups', { amount: '10.00', appearance: { theme: 'dark' } })).status).toBe(400);
     expect((await b.post('/demo/top-ups', { payment_element_options: { layout: 'tabs' } })).status).toBe(400);
     expect((await b.post('/demo/limits-link', { appearance: { theme: 'dark' } })).status).toBe(400);
@@ -265,7 +265,7 @@ describe('the browser names a look by its id, and nothing else', () => {
   it('gives the page each client_secret beside its link, and keeps it out of the developer log', async () => {
     const b = browser();
     await b.post('/demo/session');
-    const started = await b.post('/demo/sign-in');
+    const started = await b.post('/demo/connect');
     expect(started.status).toBe(200);
     expect(started.body.link).toBe('login_required');
     const { url, clientSecret } = started.body.page as { url: string; clientSecret: string };
@@ -279,7 +279,7 @@ describe('the browser names a look by its id, and nothing else', () => {
     // The page finishes the sign-in (UI elements send no frame event; the page asks Tiny to look).
     await finishSetup(mock.base, url);
     expect((await b.post('/demo/link/refresh')).body).toEqual({ link: 'linked' });
-    expect((await b.post('/demo/sign-in')).body).toEqual({ link: 'linked' });
+    expect((await b.post('/demo/connect')).body).toEqual({ link: 'linked' });
 
     const topUp = await b.post('/demo/top-ups', { amount: '25.00' });
     expect(topUp.body.clientSecret).toBe(sessionOf(topUp.body.frameUrl));

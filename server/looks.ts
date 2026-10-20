@@ -81,7 +81,7 @@ export function isLookId(value: unknown): value is LookId {
 }
 
 /** Which page a request opens: only a page that takes a payment gets the payment form's options. */
-export type Opens = 'sign_in' | 'limits' | 'payment';
+export type Opens = 'connect' | 'limits' | 'payment';
 
 /**
  * The fields to spread into a request body for this look. Empty for the brand default, so a request

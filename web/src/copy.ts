@@ -91,7 +91,7 @@ export function phaseLabel(phase: OrderPhase): string {
     case 'payment_required':
       return 'Needs money added';
     case 'login_required':
-      return 'Needs sign-in';
+      return 'Needs to reconnect';
     case 'identity_check_required':
       return 'Needs identity check';
     case 'issuing':

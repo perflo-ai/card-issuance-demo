@@ -19,6 +19,17 @@ describe('readFrameEvent (browser side of SPEC 8 postMessage)', () => {
     });
   });
 
+  it('accepts perflo:connection_completed with its connection_id, and the old perflo:login_completed sent beside it', () => {
+    expect(
+      readFrameEvent({ type: 'perflo:connection_completed', frame_session_id: 'fs_1', login_id: 'lg_1', connection_id: 'lg_1' }),
+    ).toEqual({ type: 'perflo:connection_completed', frame_session_id: 'fs_1', login_id: 'lg_1', connection_id: 'lg_1' });
+    expect(readFrameEvent({ type: 'perflo:login_completed', frame_session_id: 'fs_1', login_id: 'lg_1' })).toEqual({
+      type: 'perflo:login_completed',
+      frame_session_id: 'fs_1',
+      login_id: 'lg_1',
+    });
+  });
+
   it('ignores bare strings, unknown types and missing session ids', () => {
     expect(readFrameEvent('perflo:setup_completed')).toBeNull();
     expect(readFrameEvent({ type: 'perflo:hacked', frame_session_id: 'fs_1' })).toBeNull();

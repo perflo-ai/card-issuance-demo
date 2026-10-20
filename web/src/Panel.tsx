@@ -367,9 +367,7 @@ export function Panel(props: Props) {
           </label>
           {linked && (
             <>
-              <p className="muted small">
-                Acts as if you turned off Tiny&apos;s access yourself, so the next order asks you to sign in again.
-              </p>
+              <p className="muted small">Acts as if you turned off Tiny&apos;s access yourself, so the next order asks you to reconnect.</p>
               <button className="secondary" disabled={busy !== null} onClick={() => void revoke()}>
                 {busy === 'revoke' ? 'Turning off...' : "Turn off Tiny's access"}
               </button>

@@ -160,7 +160,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
   );
 
   /**
-   * The person did something Perflo answers later (paid, finished the ID check, signed in again):
+   * The person did something Perflo answers later (paid, finished the ID check, reconnected):
    * show that Tiny is waiting, until the order moves on. If it has not after a while, say so calmly.
    */
   const expect = useCallback((id: string, from: OrderPhase, what: Waiting) => {
@@ -342,11 +342,11 @@ export function OrderCard(props: CardProps) {
   }, [order.phase]);
 
   /**
-   * The setup or sign-in page, asked of Tiny's server each time it is opened: it checks with Perflo that
-   * the sign-in still works and opens a new one when it does not. Already linked: carry on with the order.
+   * The connect page (setup), asked of Tiny's server each time it is opened: it checks with Perflo that
+   * the connection still works and opens a new one when it does not. Already linked: carry on with the order.
    */
-  const openSignIn = async (): Promise<PerfloPageView | null> => {
-    const result = await api.signIn();
+  const openConnection = async (): Promise<PerfloPageView | null> => {
+    const result = await api.connect();
     if (result.link === 'login_required') return result.page;
     await linked();
     return null;
@@ -431,9 +431,9 @@ export function OrderCard(props: CardProps) {
           {order.phase === 'needs_setup' ? (
             <p className="muted">I need you to set up payments once. After that I can pay for things like this without stopping to ask.</p>
           ) : (
-            <p className="muted">Payments for Tiny were turned off. Sign in again to allow this order.</p>
+            <p className="muted">Payments for Tiny were turned off. Reconnect to allow this order.</p>
           )}
-          <SetupFlow perfloOrigin={perfloOrigin} disabled={busy} open={openSignIn} onLinked={linked} />
+          <SetupFlow perfloOrigin={perfloOrigin} disabled={busy} open={openConnection} onLinked={linked} />
           {action === 'place' && (
             <p className="working" role="status">
               {waitingText('placing')}

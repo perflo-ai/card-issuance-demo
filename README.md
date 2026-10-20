@@ -67,7 +67,7 @@ Things to try, in order:
 7. `buy me $2600 worth of chairs on amazon` is declined in plain words, and so is anything above your per-order limit.
 8. Test controls in the side panel:
    - **Stop at the checkout page**: the order stays open, so you can **Cancel order** and see the money return.
-   - **Turn off Tiny's access**: your next order asks you to sign in again, then continues by itself.
+   - **Turn off Tiny's access**: your next order asks you to reconnect, then continues by itself.
 9. **Add money** in the side panel: type the amount in Tiny's own field, and Perflo's payment page for that amount
    opens in a new tab. **Change limits** opens Perflo's frame in the panel.
 
@@ -138,13 +138,13 @@ Do not deploy this version of the demo before those are deployed to the API it p
 them, Perflo.js does not load and pages that came with no `client_secret` open from their link as before.
 
 - **Embedded pages** (the chat). The flow above, unchanged, with every Perflo page opened through
-  `perflo.embeddedPage({ clientSecret }).mount(...)`: the sign-in page in the chat and Change limits in the Payments
+  `perflo.embeddedPage({ clientSecret }).mount(...)`: the connect page in the chat and Change limits in the Payments
   panel. Add money is never framed (see "Adding money" below). The page sends the same events as before (`perflo:setup_completed`
   and the rest), and Tiny accepts them only from the window Perflo.js placed, from the Perflo origin.
 - **UI elements** (Tiny's own page). Tiny's own headings and buttons around Perflo's elements:
-  1. **Sign in**: the code element, with Tiny's **Send code** and **Verify** buttons (`elements.sendCode()`,
+  1. **Connect**: the code element, with Tiny's **Send code** and **Verify** buttons (`elements.sendCode()`,
      `elements.verifyCode()`). The code is typed inside the element and never reaches Tiny's page.
-  2. **Allow Tiny to pay**: the limits element, shown once the code is verified. The person picks limits and presses
+  2. **Allow Tiny to pay**: the limits element, shown once the code is verified. The user picks limits and presses
      Allow inside it. When it reports complete, Tiny's server picks up the access token as it does for the embedded page.
   3. **Add money**: Tiny's own amount field, then Perflo's payment page for that amount in a new tab, exactly as in
      the Payments panel. Perflo.js has no amount or payment element (it refuses those kinds).
@@ -165,7 +165,7 @@ and an order keeps the look it was made with, so a retry with its Idempotency-Ke
 **Content Security Policy.** The built app allows `script-src` and `frame-src` for the origin of `PERFLO_API_BASE` and
 nothing else: `https://api.perflo.ai` in production, or whichever develop or staging host the demo is pointed at. No
 host is written into the code. Perflo.js makes no network calls, so `connect-src` stays `'self'`. `frame-src` is for
-the sign-in and limits pages; the add money page opens in its own tab, so it needs no entry here.
+the connect and limits pages; the add money page opens in its own tab, so it needs no entry here.
 
 **Adding money** (`web/src/paymentTab.ts`, the one hand-off every top-up goes through). Tiny never builds a money
 input inside Perflo: the person types the amount in Tiny's own field, Tiny's server sends it as `amount` on
@@ -208,7 +208,7 @@ listens on that port over plain HTTP on every interface; without it, it runs on
    shows into `PERFLO_WEBHOOK_SECRET`, redeploy, then press **Send a test**.
 4. **Data:** users, orders and access tokens live in `DEMO_DATA_FILE` (default
    `data/demo-store.json`). On a host without a volume that file is lost on every deploy, and
-   people must connect again. Point `DEMO_DATA_FILE` at a mounted volume to keep it. A file that
+   users must connect again. Point `DEMO_DATA_FILE` at a mounted volume to keep it. A file that
    cannot be read or does not have the expected shape stops the server with a message naming it;
    Tiny never guesses its way past it.
 5. **Origin:** set `DEMO_PUBLIC_ORIGIN` to the address people open (for example
@@ -228,7 +228,7 @@ entrypoint (`scripts/docker-entrypoint.sh`) hands `/data` to `node` before start
 ## How it talks to Perflo
 
 Every call goes to `PERFLO_API_BASE` (`https://api.perflo.ai` in production). The shared routes
-(users, logins, frames) are under `/v1`, for example `POST /v1/users`; the checkout routes are under
+(users, connections, frames) are under `/v1`, for example `POST /v1/users`; the checkout routes are under
 `/v1/checkout`, for example `POST /v1/checkout/orders`. The paths below leave out the `/v1` prefix.
 
 - **Signing**: `server/signing.ts` mirrors `perflo-backend-api/src/partner/partnerSignature.ts` byte for
@@ -237,14 +237,24 @@ Every call goes to `PERFLO_API_BASE` (`https://api.perflo.ai` in production). Th
   `keyVersion\nMETHOD\npath\ntimestamp\nsha256hex(raw body)`, path without the query string, over the exact
   bytes sent (a GET signs the empty body). Test vectors were computed independently in Python.
 - **Users**: `POST /users` with only Tiny's own user id as `external_user_id`: no email and no name, because
-  Tiny never asks for them. The person types and proves their email in the setup frame. `login_required`
-  opens the setup frame in the chat, on the order that needs it (the first order, or the next one after access was removed); on `perflo:setup_completed` the server reads `GET /logins/{id}` and stores the token (it
-  is handed out once). If Perflo says `approved` but Tiny holds no token, it asks with `reissue: true`.
+  Tiny never asks for them. The user connects on Perflo's connect page, opened in the chat as the setup frame:
+  they add a passkey or enter the code Perflo emails them, then set their limits. `login_required` opens it on
+  the order that needs it (the first order, or the next one after access was removed, when the user reconnects);
+  on `perflo:connection_completed` or `perflo:setup_completed` the server checks the connection with
+  `GET /connections/{connection_id}` and stores the token (it is handed out once). If Perflo says `approved`
+  but Tiny holds no token, it asks with `reissue: true`.
+- **Connect names**: Tiny reads Perflo's connect names (`connection_id`, `connect_url`,
+  `GET /connections/{connection_id}`, `perflo:connection_completed`) and falls back to the old ones only when
+  Perflo sent none. A connection whose answer carried no `connection_id` (a Perflo from before the connect
+  names) is checked at `GET /logins/{login_id}`, which Perflo still answers, and its page's
+  `perflo:login_completed` is handled the same way. Perflo sends both events for the same step; whichever
+  arrives second finds the access already picked up. The status `login_required` and the event
+  `order.login_required` keep their names: they mean the user has to connect, or reconnect.
 - **Orders**: `POST /checkout/orders` with an `Idempotency-Key` fixed per chat order. Every retry is
   `GET /checkout/orders/{id}` (signature only, no token), never a second POST. Each status is handled:
   `ready` (read the card once through `reveal_url`, later reveals through `/card-reveal`), `payment_required`
-  (add money frame; the order goes ahead when Perflo's webhook says so), `login_required` (setup frame, the
-  order resumes on its own), `identity_check_required` (opens in a new tab; "try again" reads the order once),
+  (add money frame; the order goes ahead when Perflo's webhook says so), `login_required` (the user reconnects
+  in the setup frame, and the order resumes on its own), `identity_check_required` (opens in a new tab; "try again" reads the order once),
   `issuing` (no webhook for it; the next one, `order.ready` or `order.failed`, moves it on), `declined`,
   `completed`, `cancelled`, `expired`, `failed`.
 - **Webhooks** (`server/webhooks.ts`, `POST /webhooks/perflo`): the raw body is checked before anything parses
@@ -255,8 +265,8 @@ Every call goes to `PERFLO_API_BASE` (`https://api.perflo.ai` in production). Th
   on twice. A new event is answered 200 at once and acted on after: an `order.*` event reads
   `GET /checkout/orders/{id}` (the source of truth; the event body only says which order), does what that status
   needs (a ready card is checked out), and pushes the result to the person's open pages. `user.connected`
-  tells the page of an account waiting on a sign-in to pick up the access (its own request, so its session
-  is rotated as for any link); `user.disconnected` for the Perflo person an account is linked to makes Tiny
+  tells the page of an account waiting on a connection to pick up the access (its own request, so its session
+  is rotated as for any link); `user.disconnected` for the Perflo user an account is linked to makes Tiny
   ask Perflo whether its token still works and drop it if not. Neither links or unlinks anything by itself,
   and one that matches no account in that state is logged and ignored. `ping`
   (Builder's test) is logged. An event for an order this copy of Tiny did not place is logged and ignored.
@@ -296,7 +306,7 @@ Every call goes to `PERFLO_API_BASE` (`https://api.perflo.ai` in production). Th
 - **Requests from the page**: every change request must carry Tiny's own Origin and a JSON body; the
   session cookie is `HttpOnly`, `Secure`, `SameSite=Strict` and lasts 30 days; linking an account to
   Perflo gives the browser a new session id. The setup link goes only to the session that asked for it
-  and never into the log, and a login is only ever completed for the session that started it.
+  and never into the log, and a connection is only ever completed for the session that started it.
 - **Frames**: embedded with `allow="payment"`. Messages are accepted only from the `PERFLO_API_BASE` origin,
   from that frame's window, and only in the SPEC object shape.
 - **Accounts**: a first visit gets an anonymous Tiny account (a session cookie, no personal details).
@@ -331,7 +341,7 @@ Every call goes to `PERFLO_API_BASE` (`https://api.perflo.ai` in production). Th
 server/
   index.ts        starts the demo (and the mock), https on 5174
   app.ts          the /demo routes the browser calls
-  service.ts      the partner flow: link, logins, orders, card, cancel, links
+  service.ts      the partner flow: link, connections, orders, card, cancel, links
   perfloApi.ts    signed, validated Partner API v2 client
   signing.ts      canonical string, HMAC, verification
   webhooks.ts     webhook signature check and event shape

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { elementProblem, EXPIRED_TEXT, isExpired, LOAD_FAILED_TEXT } from '../web/src/elements.js';
-import { settleSignIn } from '../web/src/signIn.js';
+import { settleConnection } from '../web/src/connect.js';
 import type { LinkStatus } from '../server/views.js';
 
 describe('what the person reads when an element refuses', () => {
@@ -38,15 +38,15 @@ describe('settling a finished sign-in', () => {
       looks++;
       return Promise.resolve<LinkStatus>('linked');
     };
-    expect(await settleSignIn('linked', look, wait, new AbortController().signal)).toBe('linked');
-    expect(await settleSignIn('expired', look, wait, new AbortController().signal)).toBe('expired');
+    expect(await settleConnection('linked', look, wait, new AbortController().signal)).toBe('linked');
+    expect(await settleConnection('expired', look, wait, new AbortController().signal)).toBe('expired');
     expect(looks).toBe(0);
   });
 
   it('still pending: waits, then looks once; a look that fails counts as pending', async () => {
     let looks = 0;
     expect(
-      await settleSignIn(
+      await settleConnection(
         'pending',
         () => {
           looks++;
@@ -57,13 +57,15 @@ describe('settling a finished sign-in', () => {
       ),
     ).toBe('linked');
     expect(looks).toBe(1);
-    expect(await settleSignIn(undefined, () => Promise.reject(new Error('offline')), wait, new AbortController().signal)).toBe('pending');
+    expect(await settleConnection(undefined, () => Promise.reject(new Error('offline')), wait, new AbortController().signal)).toBe(
+      'pending',
+    );
   });
 
   it('stopped while waiting: answers null and does not look', async () => {
     const stop = new AbortController();
     let looked = false;
-    const settled = settleSignIn(
+    const settled = settleConnection(
       'pending',
       () => {
         looked = true;

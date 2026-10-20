@@ -4,14 +4,14 @@ import { useFocusWhenClosed } from './browser';
 import { SETUP_STEPS, stalledText, waitingText } from './copy';
 import { untilConnected } from './live';
 import { PerfloFrame } from './PerfloFrame';
-import { settleSignIn, SIGN_IN_WAIT_MS } from './signIn';
+import { CONNECT_WAIT_MS, settleConnection } from './connect';
 import { StepList } from './Steps';
 import type { LinkStatus, PerfloPageView } from '../../server/views';
 
 interface Props {
   perfloOrigin: string;
   /**
-   * The setup page to show, asked of Tiny's server each time (it checks with Perflo that the sign-in
+   * The setup page to show, asked of Tiny's server each time (it checks with Perflo that the connection
    * still works), or null when there is nothing to open. A throw is shown as the error.
    */
   open: () => Promise<PerfloPageView | null>;
@@ -78,10 +78,10 @@ export function SetupFlow({ perfloOrigin, open, onLinked, disabled = false }: Pr
     try {
       // The page's event already looked once. Perflo's user.connected webhook tells Tiny's server
       // when the approval lands, and the server says so here; nothing is asked meanwhile.
-      const status = await settleSignIn(
+      const status = await settleConnection(
         first,
         () => api.refreshLink().then((r) => r.link),
-        (signal) => untilConnected(SIGN_IN_WAIT_MS, signal),
+        (signal) => untilConnected(CONNECT_WAIT_MS, signal),
         controller.signal,
       );
       if (status === null) return;
@@ -104,7 +104,8 @@ export function SetupFlow({ perfloOrigin, open, onLinked, disabled = false }: Pr
   };
 
   const onFrameEvent = (event: FrameEventPayload, link: LinkStatus | undefined) => {
-    if (event.type === 'perflo:login_completed') setStep((s) => Math.max(s, 1));
+    // A Perflo with the connect names sends perflo:connection_completed and, beside it, perflo:login_completed.
+    if (event.type === 'perflo:connection_completed' || event.type === 'perflo:login_completed') setStep((s) => Math.max(s, 1));
     if (event.type === 'perflo:limits_saved') setStep((s) => Math.max(s, 2));
     if (event.type === 'perflo:setup_completed') void finish(link);
     if (event.type === 'perflo:closed') void closed();

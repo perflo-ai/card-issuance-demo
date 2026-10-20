@@ -45,10 +45,15 @@ export interface DemoUser {
   createdAt: string;
   perflo: PerfloLink | null;
   /**
-   * The login we are waiting on, from POST /users or an order's login_required. `clientSecret` opens the
-   * same sign-in with Perflo.js; absent when Perflo did not send one (or stored by an earlier version).
+   * The connection to Perflo we are waiting on, from POST /users or an order's login_required. `loginId`
+   * and `loginUrl` hold its id and its connect page (connection_id and connect_url, or login_id and
+   * login_url from a Perflo from before the connect names: the same values); the field names are kept
+   * so data files written by earlier versions still open. `connectNames`: Perflo named it with the
+   * connect names, so it is checked at GET /v1/connections/{id}; absent, at GET /v1/logins/{id}.
+   * `clientSecret` opens the same connect page with Perflo.js; absent when Perflo did not send one (or
+   * stored by an earlier version).
    */
-  pendingLogin: { loginId: string; loginUrl: string; clientSecret?: string; orderId: string | null } | null;
+  pendingLogin: { loginId: string; loginUrl: string; connectNames?: true; clientSecret?: string; orderId: string | null } | null;
   /** Mock mode test control: fill the checkout but do not buy, so the card stays open. */
   testStopAtCheckout?: boolean;
   /** The example look Perflo's pages are opened in from now on (server/looks.ts). Absent: the brand default. */
@@ -132,6 +137,7 @@ const pendingLogin = z
   .object({
     loginId: z.string().min(1),
     loginUrl: z.string().url(),
+    connectNames: z.literal(true).optional(),
     clientSecret: z.string().min(1).optional(),
     orderId: z.string().nullable(),
   })
