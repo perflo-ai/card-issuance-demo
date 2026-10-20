@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type FrameEventPayload } from './api';
 import { isExpired } from './elements';
-import { pageExpired, readFrameEvent } from './frameEvents';
+import { frameOrigins, pageExpired, readFrameEvent, type PerfloOrigins } from './frameEvents';
 import { hasPerfloJs, loadPerflo } from './perflo';
 import type { LinkStatus, PerfloPageView } from '../../server/views';
 
 interface Props {
   page: PerfloPageView;
   title: string;
-  perfloOrigin: string;
+  origins: PerfloOrigins;
   height?: number;
   onEvent: (event: FrameEventPayload, link: LinkStatus | undefined) => void;
   /**
@@ -25,9 +25,10 @@ const CANNOT_OPEN = 'This payment page could not be opened. Try again.';
  * A Perflo embedded page inside Tiny. With Perflo.js (live mode) it is opened from the page's
  * client_secret, in the look Tiny's server asked for when it opened the page. Without Perflo.js (the
  * test payments service), or when Perflo sent no client_secret, it is embedded from its link.
- * Either way, only messages from that page's own window, from the payments origin, are accepted.
+ * Either way, only messages from that page's own window, from Perflo's origin for it, are accepted
+ * (frameOrigins: the API origin for a page Perflo.js placed; the API or checkout origin for a link).
  */
-export function PerfloFrame({ page, title, perfloOrigin, height = 560, onEvent, onExpired }: Props) {
+export function PerfloFrame({ page, title, origins, height = 560, onEvent, onExpired }: Props) {
   const handler = useRef(onEvent);
   handler.current = onEvent;
   const expired = useRef(onExpired);
@@ -37,17 +38,15 @@ export function PerfloFrame({ page, title, perfloOrigin, height = 560, onEvent, 
   const [failed, setFailed] = useState(false);
   const viaScript = hasPerfloJs() && page.clientSecret !== undefined;
 
-  let linkAllowed = false;
-  try {
-    linkAllowed = new URL(page.url).origin === perfloOrigin;
-  } catch {
-    linkAllowed = false;
-  }
+  // A string, so the listener below is only replaced when the origins really change.
+  const speaking = frameOrigins(origins, viaScript, page.url).join(' ');
+  const linkAllowed = !viaScript && speaking !== '';
 
   useEffect(() => {
-    if (!viaScript && !linkAllowed) return;
+    if (speaking === '') return;
+    const allowed = speaking.split(' ');
     const listen = (message: MessageEvent) => {
-      if (message.origin !== perfloOrigin) return;
+      if (!allowed.includes(message.origin)) return;
       // Perflo.js places the page's own window inside `box`; without it, it is the iframe below.
       const source = viaScript ? box.current?.querySelector('iframe')?.contentWindow : frame.current?.contentWindow;
       if (!source || message.source !== source) return;
@@ -61,7 +60,7 @@ export function PerfloFrame({ page, title, perfloOrigin, height = 560, onEvent, 
     };
     window.addEventListener('message', listen);
     return () => window.removeEventListener('message', listen);
-  }, [viaScript, linkAllowed, perfloOrigin]);
+  }, [viaScript, speaking]);
 
   const clientSecret = page.clientSecret;
   useEffect(() => {

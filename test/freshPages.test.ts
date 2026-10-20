@@ -72,7 +72,7 @@ async function connectPage(post: Browser): Promise<{ url: string; clientSecret: 
 
 /** The page finished connecting (email code, then limits) and asks Tiny to look, as the UI elements page does. */
 async function finishConnecting(post: Browser, url: string) {
-  const done = await finishSetup(mock.base, url);
+  const done = await finishSetup(url);
   expect(done.status).toBe(200);
   expect((await post('/demo/link/refresh')).body).toEqual({ link: 'linked' });
 }
@@ -92,10 +92,10 @@ async function linkedWithMoney(post: Browser, amount: string) {
   await post('/demo/session');
   await finishConnecting(post, (await connectPage(post)).url);
   const link = await post('/demo/top-ups', { amount });
-  await payInFrame(mock.base, link.body.frameUrl, amount);
+  await payInFrame(link.body.frameUrl, amount);
 }
 
-const pageWorks = async (url: string) => (await frameCall(mock.base, url, 'state')).status;
+const pageWorks = async (url: string) => (await frameCall(url, 'state')).status;
 
 describe('a stored connection is checked before it is handed out again', () => {
   it('past its 30 minutes it is replaced, and Start again gets a connection that works to the end', async () => {

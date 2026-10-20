@@ -83,6 +83,7 @@ function live(fake: typeof fetch) {
     mode: 'live',
     perfloApiBase: BASE,
     perfloOrigin: BASE,
+    checkoutOrigin: null,
     credentials: CREDS,
     dataFile: join(mkdtempSync(join(tmpdir(), 'tiny-looks-')), 's.json'),
     listen: { kind: 'local' },
@@ -277,7 +278,7 @@ describe('the browser names a look by its id, and nothing else', () => {
     expect(advanced.body.order).toMatchObject({ phase: 'needs_setup', frameUrl: url, clientSecret });
 
     // The page finishes connecting (UI elements send no frame event; the page asks Tiny to look).
-    await finishSetup(mock.base, url);
+    await finishSetup(url);
     expect((await b.post('/demo/link/refresh')).body).toEqual({ link: 'linked' });
     expect((await b.post('/demo/connect')).body).toEqual({ link: 'linked' });
 

@@ -105,7 +105,7 @@ describe('the live feed belongs to the session that opened it', () => {
     const draft = (await a.post('/demo/chat', { text: 'buy me $5 worth of stickers on amazon' })).body.order as { id: string };
     const setup = (await a.post(`/demo/orders/${draft.id}/advance`)).body.order as { frameUrl: string };
     const copied = await openStream(base, oldCookie);
-    await finishSetup(mockBase(), setup.frameUrl);
+    await finishSetup(setup.frameUrl);
     const linked = await a.post('/demo/frame-events', {
       type: 'perflo:setup_completed',
       frame_session_id: new URL(setup.frameUrl).searchParams.get('session'),
@@ -172,7 +172,7 @@ describe('the live feed belongs to the session that opened it', () => {
     const id = a.userId();
     const draft = (await a.post('/demo/chat', { text: 'buy me $5 worth of stickers on amazon' })).body.order as { id: string };
     const setup = (await a.post(`/demo/orders/${draft.id}/advance`)).body.order as { frameUrl: string };
-    await finishSetup(mockBase(), setup.frameUrl);
+    await finishSetup(setup.frameUrl);
     await a.post('/demo/frame-events', {
       type: 'perflo:setup_completed',
       frame_session_id: new URL(setup.frameUrl).searchParams.get('session'),

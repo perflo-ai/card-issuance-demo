@@ -32,6 +32,7 @@ function setup(fake: typeof fetch, linked = true) {
     mode: 'live',
     perfloApiBase: BASE,
     perfloOrigin: BASE,
+    checkoutOrigin: null,
     credentials: CREDS,
     dataFile: join(mkdtempSync(join(tmpdir(), 'tiny-replay-')), 's.json'),
     listen: { kind: 'local' },

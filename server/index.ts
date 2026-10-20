@@ -57,16 +57,22 @@ async function main(): Promise<void> {
       keyVersion: config.credentials.keyVersion,
       secret: config.credentials.secret,
       selfOrigin: base.origin,
+      ...(config.checkoutOrigin ? { checkoutOrigin: config.checkoutOrigin } : {}),
       partnerOrigin: DEMO_ORIGIN,
       reuseCards: config.mockReuseCards,
       // Tiny's own webhook address on this computer, signed with the same secret Tiny checks.
       webhook: { url: `${DEMO_ORIGIN}${WEBHOOK_PATH}`, secret: config.webhookSecret },
     });
-    const mockServer = base.protocol === 'https:' ? createHttpsServer(certificate, mock) : createHttpServer(mock);
-    const port = Number(base.port || (base.protocol === 'https:' ? 443 : 80));
-    await listen(mockServer, port, 'mock payments service');
-    servers.push(mockServer);
-    logger.info('mock payments service listening', { origin: base.origin });
+    // The API, and with PERFLO_CHECKOUT_ORIGIN the checkout host's pages too: the same mock on a second port.
+    const origins = [{ origin: base.origin, label: 'mock payments service' }];
+    if (config.checkoutOrigin) origins.push({ origin: config.checkoutOrigin, label: 'mock checkout pages' });
+    for (const { origin, label } of origins) {
+      const url = new URL(origin);
+      const mockServer = url.protocol === 'https:' ? createHttpsServer(certificate, mock) : createHttpServer(mock);
+      await listen(mockServer, Number(url.port || (url.protocol === 'https:' ? 443 : 80)), label);
+      servers.push(mockServer);
+      logger.info(`${label} listening`, { origin });
+    }
   }
 
   // A host terminates HTTPS in front of the demo; here it needs the local certificate.
@@ -94,6 +100,7 @@ async function main(): Promise<void> {
     at: config.listen.kind === 'hosted' ? `port ${config.listen.port}` : DEMO_ORIGIN,
     mode: config.mode,
     payments: config.perfloOrigin,
+    ...(config.checkoutOrigin ? { pages: config.checkoutOrigin } : {}),
   });
   stopOnSignal(servers);
 }

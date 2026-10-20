@@ -18,6 +18,13 @@
  * fee), money stays on the card when an order is paid, cancelling one order leaves the card open for the
  * others, and the card closes at its 12 hours, returning what is left.
  *
+ * Checkout host: with `checkoutOrigin` set, the mock also answers on that origin (the same handler on a
+ * second port) and hands out the connect, limits and add money links there, as Perflo does on its
+ * checkout host: `<checkout>/setup|limits|top-up?session=`, each page calling under its own folder
+ * (`/setup/session/...`). Unset, every page is at `<self>/v1/frames/<page>`, as on a Perflo without one.
+ * ponytail: no host gate, so either port answers every mock route (Perflo's checkout host answers its
+ * pages only); add one if the demo ever needs to be shown calling the wrong host.
+ *
  * Webhooks: with `webhook` set, the mock tells the partner's backend about every order and person
  * status change, signed exactly as Perflo signs them, retried when the partner does not answer 2xx.
  * Like Perflo's own sweep, it also moves orders on by itself (a slow card becoming ready, an order
@@ -166,6 +173,8 @@ export interface MockOptions {
   secret: string;
   /** This mock's own origin, used in the links it hands out. */
   selfOrigin: string;
+  /** Where the page links are handed out, as on Perflo's checkout host. Unset: on `selfOrigin`. */
+  checkoutOrigin?: string;
   /** The partner website allowed to embed frames and receive postMessage. */
   partnerOrigin: string;
   slowIssueMs?: number;
@@ -216,7 +225,7 @@ export function createMockPerflo(options: MockOptions) {
   const spends: Array<{ userId: string; at: number; cents: number }> = [];
 
   const frameUrl = (purpose: Purpose, frameId: string) =>
-    `${options.selfOrigin}/v1/frames/${purpose}?session=${encodeURIComponent(frameId)}`;
+    `${options.checkoutOrigin ? `${options.checkoutOrigin}/${purpose}` : `${options.selfOrigin}/v1/frames/${purpose}`}?session=${encodeURIComponent(frameId)}`;
 
   /** A connection's id and its connect page, as every answer that names one carries them. */
   const connectionFields = (connection: MConnection) => ({
@@ -915,12 +924,8 @@ export function createMockPerflo(options: MockOptions) {
 
   const maskEmail = (email: string | null) => (email ? `${email[0]}***${email.slice(email.indexOf('@'))}` : undefined);
 
-  const framesRouter = express.Router();
-  framesRouter.get('/:purpose', (req, res) => {
-    const purpose = req.params.purpose;
-    if (purpose !== 'setup' && purpose !== 'top-up' && purpose !== 'limits') {
-      return res.status(404).type('text/plain').send('Not found');
-    }
+  /** A page, whose own calls go to `api` on the origin it was served from. */
+  const servePage = (purpose: Purpose, api: string, req: Request, res: Response) => {
     // The add money page opens in a tab of its own and refuses to be framed; the connect and limits pages are placed in the partner's page.
     const ancestors = purpose === 'top-up' ? "'none'" : options.partnerOrigin;
     res
@@ -928,10 +933,21 @@ export function createMockPerflo(options: MockOptions) {
       .set('Cache-Control', 'no-store')
       .set('Referrer-Policy', 'no-referrer')
       .type('html')
-      .send(framePage(options.partnerOrigin, frameIds(typeof req.query.session === 'string' ? req.query.session : '')));
-  });
+      .send(framePage(options.partnerOrigin, frameIds(typeof req.query.session === 'string' ? req.query.session : ''), api));
+  };
 
-  framesRouter.get('/session/state', (req, res) => {
+  const PURPOSES: readonly Purpose[] = ['setup', 'top-up', 'limits'];
+  const framesRouter = express.Router();
+  framesRouter.get('/:purpose', (req, res) => {
+    const purpose = PURPOSES.find((p) => p === req.params.purpose);
+    if (purpose === undefined) return res.status(404).type('text/plain').send('Not found');
+    servePage(purpose, '/v1/frames/session', req, res);
+  });
+  /** The calls every page makes, under /session: at /v1/frames/session, and under each page on the checkout host. */
+  const sessionRouter = express.Router();
+  framesRouter.use(sessionRouter);
+
+  sessionRouter.get('/session/state', (req, res) => {
     const frame = liveFrame(req);
     const user = users.get(frame.userId) as MUser;
     const order = frame.orderId ? orders.get(frame.orderId) : undefined;
@@ -953,7 +969,7 @@ export function createMockPerflo(options: MockOptions) {
     return Math.max(0, quote(order.amountCents).totalCents - user.balanceCents);
   };
 
-  framesRouter.post('/session/login', (req, res) => {
+  sessionRouter.post('/session/login', (req, res) => {
     const frame = liveFrame(req);
     if (frame.purpose !== 'setup' || frame.step !== 'login') throw new HttpError(409, 'frame_step_invalid', 'This step is already done.');
     const body = z.object({ privy_access_token: z.string().max(400) }).safeParse(req.body);
@@ -973,7 +989,7 @@ export function createMockPerflo(options: MockOptions) {
 
   const limitsBody = z.object({ per_order: amountString, per_month: amountString });
 
-  framesRouter.post('/session/limits', (req, res) => {
+  sessionRouter.post('/session/limits', (req, res) => {
     const frame = liveFrame(req);
     if (frame.step !== 'limits') throw new HttpError(409, 'frame_step_invalid', 'This step is already done.');
     const body = limitsBody.safeParse(req.body);
@@ -1002,7 +1018,7 @@ export function createMockPerflo(options: MockOptions) {
   });
 
   /** Starts the payment for the page's own amount: the page asks for no amount, and none is accepted here. */
-  framesRouter.post('/session/top-up', (req, res) => {
+  sessionRouter.post('/session/top-up', (req, res) => {
     const frame = liveFrame(req);
     if (frame.step === 'cancelled') throw new HttpError(409, 'frame_step_invalid', 'This payment was cancelled.');
     if (frame.step !== 'top_up') throw new HttpError(409, 'frame_step_invalid', 'This step is already done.');
@@ -1039,7 +1055,7 @@ export function createMockPerflo(options: MockOptions) {
    * The person stopped the payment on its page (its X or Cancel, after they confirm), as bapi's
    * /frames/session/top-up/cancel. A payment that already went through is not undone: it answers paid.
    */
-  framesRouter.post('/session/top-up/cancel', (req, res) => {
+  sessionRouter.post('/session/top-up/cancel', (req, res) => {
     const frame = liveFrame(req);
     const topUp = frame.topUpId ? topUps.get(frame.topUpId) : undefined;
     if (topUp?.paid) return res.json({ status: 'paid' });
@@ -1049,7 +1065,7 @@ export function createMockPerflo(options: MockOptions) {
     res.json({ status: 'cancelled' });
   });
 
-  framesRouter.post('/session/complete', (req, res) => {
+  sessionRouter.post('/session/complete', (req, res) => {
     const frame = liveFrame(req);
     const body = z.object({ step: z.enum(['top_up', 'setup']) }).safeParse(req.body);
     if (!body.success) throw new HttpError(400, 'invalid_request', 'Unknown step.');
@@ -1073,7 +1089,7 @@ export function createMockPerflo(options: MockOptions) {
     res.json({ next: 'done', ...(orderStatus ? { order_status: orderStatus } : {}) });
   });
 
-  framesRouter.post('/session/revoke', (req, res) => {
+  sessionRouter.post('/session/revoke', (req, res) => {
     const frame = liveFrame(req);
     revokeAccess(users.get(frame.userId) as MUser);
     res.json({ revoked: true });
@@ -1090,6 +1106,12 @@ export function createMockPerflo(options: MockOptions) {
 
   // Frames are not signed, so mount them before the signature check.
   app.use('/v1/frames', framesRouter);
+  if (options.checkoutOrigin) {
+    for (const purpose of PURPOSES) {
+      app.get(`/${purpose}`, (req, res) => servePage(purpose, `/${purpose}/session`, req, res));
+      app.use(`/${purpose}`, sessionRouter);
+    }
+  }
   app.use('/v1', v2);
 
   app.get('/mock-assets/:file', (req, res) => {

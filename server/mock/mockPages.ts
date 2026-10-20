@@ -13,9 +13,10 @@ export interface FrameIds {
   orderId: string | null;
 }
 
-export function framePage(partnerOrigin: string, ids: FrameIds): string {
+/** `api`: where the page's own calls go on its own origin (`/v1/frames/session`, or `/setup/session` on the checkout host). */
+export function framePage(partnerOrigin: string, ids: FrameIds, api: string): string {
   return `<!doctype html>
-<html lang="en" data-partner-origin="${escapeHtml(partnerOrigin)}" data-connection-id="${escapeHtml(ids.connectionId ?? '')}" data-top-up-id="${escapeHtml(ids.topUpId ?? '')}" data-order-id="${escapeHtml(ids.orderId ?? '')}">
+<html lang="en" data-partner-origin="${escapeHtml(partnerOrigin)}" data-api="${escapeHtml(api)}" data-connection-id="${escapeHtml(ids.connectionId ?? '')}" data-top-up-id="${escapeHtml(ids.topUpId ?? '')}" data-order-id="${escapeHtml(ids.orderId ?? '')}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -103,7 +104,7 @@ const js = String.raw`(function () {
     var headers = { 'X-Perflo-Frame-Session': session };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     var init = body === undefined ? { headers: headers } : { method: 'POST', headers: headers, body: JSON.stringify(body) };
-    return fetch('/v1/frames/session/' + path, init).then(function (res) {
+    return fetch(root.getAttribute('data-api') + '/' + path, init).then(function (res) {
       return res.json().catch(function () { return null; }).then(function (json) {
         if (!res.ok) {
           var error = new Error((json && json.error && json.error.message) || 'Something went wrong. Try again.');
