@@ -174,6 +174,12 @@ export interface MockOptions {
   /** Where to send webhooks and the secret to sign them with. Unset: no webhooks are sent. */
   webhook?: { url: string; secret: string; fetchImpl?: typeof fetch };
   /**
+   * Send Perflo's connect names beside the old ones (connection_id and connect_url, GET /v1/connections,
+   * perflo:connection_completed), as Perflo does since they shipped. false: answer like a Perflo from
+   * before them, with the old names only. Default: true.
+   */
+  connectNames?: boolean;
+  /**
    * The mock's clock (epoch ms), which every lifetime it keeps is measured on: sign-ins and pages (30
    * minutes, like Perflo), cards, card links, orders. Tests move it forward; default: the real time.
    */
@@ -200,6 +206,7 @@ const amountString = z.string().refine(isApiAmount, 'amount must have two decima
 
 export function createMockPerflo(options: MockOptions) {
   const slowIssueMs = options.slowIssueMs ?? 3000;
+  const connectNames = options.connectNames ?? true;
   const now = options.now ?? (() => Date.now());
   const users = new Map<string, MUser>();
   const tokens = new Map<string, string>();
@@ -217,6 +224,16 @@ export function createMockPerflo(options: MockOptions) {
 
   const frameUrl = (purpose: Purpose, frameId: string) =>
     `${options.selfOrigin}/v1/frames/${purpose}?session=${encodeURIComponent(frameId)}`;
+
+  /** A connection's id and page under the old names and, unless answering like an older Perflo, the new ones. */
+  const connectionFields = (login: MLogin) => {
+    const loginUrl = frameUrl('setup', login.frameId);
+    return {
+      login_id: login.loginId,
+      login_url: loginUrl,
+      ...(connectNames ? { connection_id: login.loginId, connect_url: loginUrl } : {}),
+    };
+  };
 
   function newFrame(purpose: Purpose, userId: string, extra: Partial<MFrame> = {}): MFrame {
     const frame: MFrame = {
@@ -451,8 +468,7 @@ export function createMockPerflo(options: MockOptions) {
           body: {
             ...base,
             status: 'login_required',
-            login_id: login.loginId,
-            login_url: frameUrl('setup', login.frameId),
+            ...connectionFields(login),
             client_secret: login.frameId,
           },
         };
@@ -688,16 +704,16 @@ export function createMockPerflo(options: MockOptions) {
     const login = newLogin(user, null);
     send(202, {
       status: 'login_required',
-      login_id: login.loginId,
-      login_url: frameUrl('setup', login.frameId),
+      ...connectionFields(login),
       client_secret: login.frameId,
       expires_at: new Date(login.expiresAt).toISOString(),
     });
   });
 
-  v2.get('/logins/:loginId', (req, res) => {
-    const login = logins.get(req.params.loginId);
-    if (!login) throw new HttpError(404, 'not_found', 'That sign-in was not found.');
+  /** One connection, two addresses (an older Perflo answers only the first): the same answer for the same id. */
+  const readConnection = (req: Request<{ id: string }>, res: Response) => {
+    const login = logins.get(req.params.id);
+    if (!login) throw new HttpError(404, 'not_found', 'That connection was not found.');
     if (login.status === 'pending') {
       return res.json({ status: login.expiresAt > now() ? 'pending' : 'expired' });
     }
@@ -707,7 +723,9 @@ export function createMockPerflo(options: MockOptions) {
       return res.json({ status: 'approved', user_id: user.userId, user_access_token: user.token });
     }
     res.json({ status: 'approved', user_id: user.userId });
-  });
+  };
+  v2.get('/logins/:id', readConnection);
+  if (connectNames) v2.get('/connections/:id', readConnection);
 
   v2.get('/users/:userId', (req, res) => {
     const user = userFromToken(req, req.params.userId);
@@ -902,7 +920,12 @@ export function createMockPerflo(options: MockOptions) {
   /** Ids the server-rendered page carries for its postMessage events (never tokens). */
   const frameIds = (sessionId: string) => {
     const frame = frames.get(sessionId);
-    return { loginId: frame?.loginId ?? null, topUpId: frame?.topUpId ?? null, orderId: frame?.orderId ?? null };
+    return {
+      loginId: frame?.loginId ?? null,
+      connectionId: connectNames ? (frame?.loginId ?? null) : null,
+      topUpId: frame?.topUpId ?? null,
+      orderId: frame?.orderId ?? null,
+    };
   };
 
   const maskEmail = (email: string | null) => (email ? `${email[0]}***${email.slice(email.indexOf('@'))}` : undefined);

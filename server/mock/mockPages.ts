@@ -9,13 +9,15 @@ const escapeHtml = (value: string) =>
 
 export interface FrameIds {
   loginId: string | null;
+  /** The same id as loginId, from a Perflo with the connect names; null from one before them. */
+  connectionId: string | null;
   topUpId: string | null;
   orderId: string | null;
 }
 
 export function framePage(partnerOrigin: string, ids: FrameIds): string {
   return `<!doctype html>
-<html lang="en" data-partner-origin="${escapeHtml(partnerOrigin)}" data-login-id="${escapeHtml(ids.loginId ?? '')}" data-top-up-id="${escapeHtml(ids.topUpId ?? '')}" data-order-id="${escapeHtml(ids.orderId ?? '')}">
+<html lang="en" data-partner-origin="${escapeHtml(partnerOrigin)}" data-login-id="${escapeHtml(ids.loginId ?? '')}" data-connection-id="${escapeHtml(ids.connectionId ?? '')}" data-top-up-id="${escapeHtml(ids.topUpId ?? '')}" data-order-id="${escapeHtml(ids.orderId ?? '')}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -81,6 +83,7 @@ const js = String.raw`(function () {
   var root = document.documentElement;
   var ids = {
     login_id: root.getAttribute('data-login-id') || undefined,
+    connection_id: root.getAttribute('data-connection-id') || undefined,
     top_up_id: root.getAttribute('data-top-up-id') || undefined,
     order_id: root.getAttribute('data-order-id') || undefined
   };
@@ -192,6 +195,8 @@ const js = String.raw`(function () {
       busy(verify, true, 'Checking...');
       var token = 'mock-otp:' + (typedEmail ? typedEmail + ':' : '') + code.value.trim();
       call('login', { privy_access_token: token }).then(function (result) {
+        // A Perflo with the connect names sends the new event and, beside it, the old one.
+        if (ids.connection_id) send('perflo:connection_completed', { login_id: ids.login_id, connection_id: ids.connection_id });
         send('perflo:login_completed', { login_id: ids.login_id });
         state.step = result.next;
         render();

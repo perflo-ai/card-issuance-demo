@@ -4,7 +4,7 @@
  * next. No I/O here, so every status in SPEC 4 is covered by unit tests.
  */
 
-import type { OrderResponse } from './perfloApi.js';
+import { connectionOf, type OrderResponse } from './perfloApi.js';
 import type { DemoOrder, DemoUser } from './store.js';
 import type { OrderView } from './views.js';
 
@@ -90,13 +90,17 @@ export function toView(order: DemoOrder, user: DemoUser): OrderView {
         ...(last.client_secret ? { clientSecret: last.client_secret } : {}),
         amountDue: last.amount_due,
       };
-    case 'login_required':
+    case 'login_required': {
+      // The user reconnects on the connect page this order names (connect_url, or login_url from a
+      // Perflo from before the connect names).
+      const page = connectionOf(last)?.url;
       return {
         ...base,
         phase: 'login_required',
-        frameUrl: last.login_url,
+        ...(page ? { frameUrl: page } : {}),
         ...(last.client_secret ? { clientSecret: last.client_secret } : {}),
       };
+    }
     case 'identity_check_required':
       // No link means Perflo could not make one right now; the browser says so and offers a retry.
       return { ...base, phase: 'identity_check_required', ...(last.kyc_url ? { kycUrl: last.kyc_url } : {}) };

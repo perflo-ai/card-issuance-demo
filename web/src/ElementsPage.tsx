@@ -14,7 +14,7 @@ import {
   type Theme,
 } from './perflo';
 import { stalledText } from './copy';
-import { settleSignIn, SIGN_IN_WAIT_MS } from './signIn';
+import { CONNECT_WAIT_MS, settleConnection } from './connect';
 import type { LinkStatus } from '../../server/views';
 
 /** Every open group of elements, so the light and dark switch reaches all of them. */
@@ -28,8 +28,8 @@ interface Props {
 
 /**
  * Tiny's own page built from Perflo's UI elements: Tiny's headings and buttons, Perflo's pieces
- * placed inside them. Sign in (the code element, with Tiny's "Send code" and "Verify"), then the
- * limits element (the person presses Allow inside it). Then add money: Tiny's own amount field, and
+ * placed inside them. Connect (the code element, with Tiny's "Send code" and "Verify"), then the
+ * limits element (the user presses Allow inside it). Then add money: Tiny's own amount field, and
  * Perflo's payment page for that amount in a new tab (Perflo has no amount or payment element). The
  * look comes from Tiny's server when each one is opened; the light and dark switch changes the open
  * elements live.
@@ -88,7 +88,7 @@ export function ElementsPage({ linked, onLinked, onAccountChanged }: Props) {
           </div>
         </div>
         <p className="muted small">
-          Perflo&apos;s sign-in and limits pieces, placed in Tiny&apos;s layout with Tiny&apos;s own headings and buttons. Light and Dark
+          Perflo&apos;s connect and limits pieces, placed in Tiny&apos;s layout with Tiny&apos;s own headings and buttons. Light and Dark
           change them right away. You type the amount to add in Tiny, and pay on Perflo&apos;s page in a new tab.
         </p>
         {themeError && (
@@ -100,12 +100,12 @@ export function ElementsPage({ linked, onLinked, onAccountChanged }: Props) {
           <div className="elements-steps">
             <section aria-labelledby="add-money-title">
               <h3 id="add-money-title">Add money</h3>
-              <p className="muted small">Signed in. Money you add stays in your balance for Tiny to use.</p>
+              <p className="muted small">Connected. Money you add stays in your balance for Tiny to use.</p>
               <AddMoney id="elements-amount" onAccountChanged={onAccountChanged} />
             </section>
           </div>
         ) : (
-          <SignIn themeNow={themeNow} register={register} onLinked={onLinked} />
+          <Connect themeNow={themeNow} register={register} onLinked={onLinked} />
         )}
       </div>
     </section>
@@ -171,11 +171,11 @@ function place(
   return () => element.destroy();
 }
 
-type SignInStep = 'opening' | 'code' | 'limits' | 'finishing' | 'slow' | 'expired' | 'unavailable';
+type ConnectStep = 'opening' | 'code' | 'limits' | 'finishing' | 'slow' | 'expired' | 'unavailable';
 
-function SignIn({ themeNow, register, onLinked }: PartProps & { onLinked: () => void }) {
+function Connect({ themeNow, register, onLinked }: PartProps & { onLinked: () => void }) {
   const [secret, setSecret] = useState<string | null>(null);
-  const [step, setStep] = useState<SignInStep>('opening');
+  const [step, setStep] = useState<ConnectStep>('opening');
   const [codeComplete, setCodeComplete] = useState(false);
   const [busy, setBusy] = useState<'send' | 'verify' | null>(null);
   const [sent, setSent] = useState(false);
@@ -192,7 +192,7 @@ function SignIn({ themeNow, register, onLinked }: PartProps & { onLinked: () => 
     setSent(false);
     setCodeComplete(false);
     try {
-      const result = await api.signIn();
+      const result = await api.connect();
       if (result.link === 'linked') {
         onLinked();
         return;
@@ -223,7 +223,7 @@ function SignIn({ themeNow, register, onLinked }: PartProps & { onLinked: () => 
     setStep('finishing');
     const look = () => api.refreshLink().then((r) => r.link);
     const first = await look().catch((): LinkStatus => 'pending');
-    const status = await settleSignIn(first, look, (signal) => untilConnected(SIGN_IN_WAIT_MS, signal), controller.signal);
+    const status = await settleConnection(first, look, (signal) => untilConnected(CONNECT_WAIT_MS, signal), controller.signal);
     if (status === null) return;
     if (status === 'linked') onLinked();
     else if (status === 'expired') setStep('expired');
@@ -285,11 +285,11 @@ function SignIn({ themeNow, register, onLinked }: PartProps & { onLinked: () => 
     setStep('limits');
   };
 
-  const signingIn = step === 'code' || step === 'limits';
+  const connecting = step === 'code' || step === 'limits';
   return (
     <div className="elements-steps">
-      <section aria-labelledby="sign-in-title">
-        <h3 id="sign-in-title">Sign in</h3>
+      <section aria-labelledby="connect-title">
+        <h3 id="connect-title">Connect</h3>
         {step === 'opening' && <p className="muted">Loading...</p>}
         {step === 'unavailable' && !problem && <p className="muted">{NOT_OFFERED_TEXT}</p>}
         {step === 'unavailable' && problem && (
@@ -297,7 +297,7 @@ function SignIn({ themeNow, register, onLinked }: PartProps & { onLinked: () => 
             Try again
           </button>
         )}
-        <div ref={codeBox} hidden={!signingIn} />
+        <div ref={codeBox} hidden={!connecting} />
         {step === 'code' && (
           <div className="row">
             <button className="secondary" disabled={busy !== null} onClick={() => void sendCode()}>
@@ -330,7 +330,7 @@ function SignIn({ themeNow, register, onLinked }: PartProps & { onLinked: () => 
       )}
       {step === 'expired' && (
         <div className="problem">
-          <p>That sign-in expired.</p>
+          <p>That connection attempt expired.</p>
           <button className="secondary" onClick={() => void open()}>
             Start again
           </button>

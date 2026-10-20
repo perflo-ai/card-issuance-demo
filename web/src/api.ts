@@ -8,7 +8,7 @@ import type {
   MeView,
   Notice,
   OrderView,
-  SignInView,
+  ConnectView,
 } from '../../server/views';
 
 /** A page link answer: the link, and the client_secret Perflo.js opens it with when Perflo sent one. */
@@ -75,6 +75,7 @@ export interface FrameEventPayload {
   type: string;
   frame_session_id: string;
   login_id?: string;
+  connection_id?: string;
   top_up_id?: string;
   order_id?: string;
   code?: string;
@@ -98,7 +99,7 @@ export const api = {
   topUp: (amount: string) => request<PageLink & { amount: string }>('POST', '/demo/top-ups', { amount }),
   /** Only the look's id goes to Tiny's server; what Perflo is sent for it is decided there. */
   look: (look: LookId) => request<{ user: MeView }>('POST', '/demo/look', { look }),
-  signIn: () => request<SignInView>('POST', '/demo/sign-in'),
+  connect: () => request<ConnectView>('POST', '/demo/connect'),
   cardDetails: (perfloOrderId: string) =>
     request<{ card: CardDetailsView }>('POST', `/demo/orders/${encodeURIComponent(perfloOrderId)}/card-details`),
   cancelCard: (perfloOrderId: string) =>

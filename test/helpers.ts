@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { DemoConfig } from '../server/config.js';
 import { EventLog } from '../server/eventLog.js';
 import { createLogger } from '../server/logger.js';
-import { createMockPerflo } from '../server/mock/mockPerflo.js';
+import { createMockPerflo, type MockOptions } from '../server/mock/mockPerflo.js';
 import { PerfloApi } from '../server/perfloApi.js';
 import { DemoService } from '../server/service.js';
 import { signatureHeaders } from '../server/signing.js';
@@ -26,9 +26,11 @@ export const TEST_ORIGIN = `https://${TEST_HOST}`;
 
 export async function startMock(
   slowIssueMs = 50,
-  webhook?: { url: string; secret: string },
+  webhook?: MockOptions['webhook'],
   reuseCards = false,
   now?: () => number,
+  /** false: answer like a Perflo from before the connect names (connection_id, connect_url, /v1/connections). */
+  connectNames = true,
 ): Promise<{ base: string; close: () => Promise<void> }> {
   let handler: RequestListener = () => undefined;
   const server = createServer((req, res) => handler(req, res));
@@ -42,6 +44,7 @@ export async function startMock(
     partnerOrigin: PARTNER_ORIGIN,
     slowIssueMs,
     reuseCards,
+    connectNames,
     ...(webhook ? { webhook } : {}),
     ...(now ? { now } : {}),
   });

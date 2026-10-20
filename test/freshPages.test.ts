@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDemoApp } from '../server/app.js';
 import { PerfloApi } from '../server/perfloApi.js';
 import { DemoService } from '../server/service.js';
-import type { OrderView, SignInView } from '../server/views.js';
+import type { OrderView, ConnectView } from '../server/views.js';
 import { CREDS, finishSetup, frameCall, makeDemo, payInFrame, startMock, urlOf, type LooseJson } from './helpers.js';
 
 const MINUTE = 60_000;
@@ -63,9 +63,9 @@ function counting() {
 }
 
 async function signInPage(post: Browser): Promise<{ url: string; clientSecret: string }> {
-  const res = await post('/demo/sign-in');
+  const res = await post('/demo/connect');
   expect(res.status, JSON.stringify(res.body)).toBe(200);
-  const body = res.body as SignInView;
+  const body = res.body as ConnectView;
   if (body.link !== 'login_required') throw new Error('expected a sign-in to open');
   return body.page as { url: string; clientSecret: string };
 }
@@ -109,7 +109,7 @@ describe('a stored sign-in is checked before it is handed out again', () => {
     expect(again.clientSecret).not.toBe(first.clientSecret);
     expect(await pageWorks(again.url)).toBe(200);
     await finishSignIn(post, again.url);
-    expect((await post('/demo/sign-in')).body).toEqual({ link: 'linked' });
+    expect((await post('/demo/connect')).body).toEqual({ link: 'linked' });
   });
 
   it('two pages opening the sign-in at once make one sign-in, before and after it expires', async () => {
@@ -137,7 +137,7 @@ describe('a stored sign-in is checked before it is handed out again', () => {
     await post('/demo/session');
     const first = await signInPage(post);
     reachable = false;
-    const res = await post('/demo/sign-in');
+    const res = await post('/demo/connect');
     expect(res.status).toBe(503);
     expect(res.body).toEqual({ error: { message: 'Payments are not reachable right now. Try again in a moment.' } });
     expect(JSON.stringify(res.body)).not.toContain(first.clientSecret);

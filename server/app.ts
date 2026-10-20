@@ -36,6 +36,7 @@ const frameEvent = z.object({
   type: z.enum(FRAME_EVENT_TYPES),
   frame_session_id: z.string().max(200),
   login_id: z.string().max(200).optional(),
+  connection_id: z.string().max(200).optional(),
   top_up_id: z.string().max(200).optional(),
   order_id: z.string().max(200).optional(),
   code: z.string().max(100).optional(),
@@ -287,11 +288,17 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     const event = frameEvent.safeParse(req.body);
     if (!event.success) throw new HttpError(400, 'Unknown frame event.');
     log.add(user.id, 'frame', event.data.type, event.data);
-    if (event.data.type === 'perflo:login_completed' || event.data.type === 'perflo:setup_completed') {
-      // The event only says "look now". Which login is looked at comes from this session's own
-      // record (the one its order made), never from ids in the event.
+    if (
+      event.data.type === 'perflo:connection_completed' ||
+      event.data.type === 'perflo:login_completed' ||
+      event.data.type === 'perflo:setup_completed'
+    ) {
+      // The event only says "look now". Which connection is looked at comes from this session's own
+      // record (the one its order made), never from ids in the event. A Perflo with the connect names
+      // sends perflo:connection_completed and perflo:login_completed for the same step: whichever comes
+      // second finds the access already picked up (or reads the same pending answer again).
       const wasLinked = user.perflo !== null;
-      const { status } = await service.refreshLogin(user);
+      const { status } = await service.refreshConnection(user);
       rotateIfLinked(req, res, user, wasLinked);
       return res.json({ link: status });
     }
@@ -306,12 +313,12 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     res.json({ user: meView(service.setLook(user, body.data.look)) });
   });
 
-  /** The sign-in the UI elements page opens: the one waiting, or a new one. */
-  app.post('/demo/sign-in', async (req, res) => {
+  /** The connection the UI elements page and the chat's setup open: the one waiting, or a new one. */
+  app.post('/demo/connect', async (req, res) => {
     const user = currentUser(req);
     parse(noBody, req.body, unreadable);
     const wasLinked = user.perflo !== null;
-    const result = await service.signIn(user);
+    const result = await service.connect(user);
     rotateIfLinked(req, res, user, wasLinked);
     res.json(result);
   });
@@ -320,7 +327,7 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     const user = currentUser(req);
     parse(noBody, req.body, unreadable);
     const wasLinked = user.perflo !== null;
-    const { status } = await service.refreshLogin(user);
+    const { status } = await service.refreshConnection(user);
     rotateIfLinked(req, res, user, wasLinked);
     res.json({ link: status });
   });

@@ -670,3 +670,102 @@ describe('one-time mode (the default)', () => {
     expect([first.json.one_time, second.json.one_time]).toEqual([true, true]);
   });
 });
+
+describe('connect names: beside the old ones, with the same values (Perflo after the connect names shipped)', () => {
+  it('POST /v1/users answers connection_id and connect_url equal to login_id and login_url', async () => {
+    const created = await signedFetch(mock.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1' } });
+    expect(created.status).toBe(202);
+    expect(created.json.connection_id).toMatch(/^lg_/);
+    expect(created.json.connection_id).toBe(created.json.login_id);
+    expect(created.json.connect_url).toBe(created.json.login_url);
+  });
+
+  it('GET /v1/connections/{id} answers like GET /v1/logins/{id}, and the token is handed out once across both', async () => {
+    const created = await signedFetch(mock.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1' } });
+    expect((await signedFetch(mock.base, 'GET', `/v1/connections/${created.json.connection_id}`)).json).toEqual({ status: 'pending' });
+    await finishSetup(mock.base, created.json.connect_url);
+    const first = await signedFetch(mock.base, 'GET', `/v1/connections/${created.json.connection_id}`);
+    expect(first.json).toEqual({ status: 'approved', user_id: expect.stringMatching(/^usr_/), user_access_token: expect.any(String) });
+    const again = await signedFetch(mock.base, 'GET', `/v1/logins/${created.json.login_id}`);
+    expect(again.json).toEqual({ status: 'approved', user_id: first.json.user_id });
+    const unknown = await signedFetch(mock.base, 'GET', '/v1/connections/lg_nobody');
+    expect(unknown.status).toBe(404);
+    expect(unknown.json.error.code).toBe('not_found');
+  });
+
+  it('an order waiting on a connection carries both pairs, and so does its order.login_required webhook', async () => {
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const hooked = await startMock(50, {
+      url: 'https://tiny.test/webhooks/perflo',
+      secret: WEBHOOK_SECRET,
+      fetchImpl: async (_input, init) => {
+        events.push(JSON.parse(String(Buffer.from(init?.body as Uint8Array))));
+        return new Response(null, { status: 200 });
+      },
+    });
+    try {
+      const created = await signedFetch(hooked.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1' } });
+      await finishSetup(hooked.base, created.json.connect_url);
+      const linked = await signedFetch(hooked.base, 'GET', `/v1/connections/${created.json.connection_id}`);
+      await fetch(`${hooked.base}/mock/control/revoke`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: linked.json.user_id }),
+      });
+      const placed = await signedFetch(hooked.base, 'POST', '/v1/checkout/orders', {
+        token: linked.json.user_access_token,
+        idem: 'k1',
+        body: order(linked.json.user_id, '20.00'),
+      });
+      expect(placed.json).toMatchObject({
+        status: 'login_required',
+        connection_id: placed.json.login_id,
+        connect_url: placed.json.login_url,
+      });
+      expect(placed.json.connection_id).toMatch(/^lg_/);
+      const read = await signedFetch(hooked.base, 'GET', `/v1/checkout/orders/${placed.json.order_id}`);
+      expect(read.json).toMatchObject({ connection_id: placed.json.connection_id, connect_url: placed.json.connect_url });
+      await vi.waitFor(() => expect(events.some((e) => e.type === 'order.login_required')).toBe(true));
+      const announced = events.find((e) => e.type === 'order.login_required') as (typeof events)[number];
+      expect(announced.data).toMatchObject({
+        order_id: placed.json.order_id,
+        login_id: placed.json.login_id,
+        login_url: placed.json.login_url,
+        connection_id: placed.json.login_id,
+        connect_url: placed.json.login_url,
+      });
+    } finally {
+      await hooked.close();
+    }
+  });
+
+  it('the connect page sends perflo:connection_completed with connection_id beside perflo:login_completed', async () => {
+    const created = await signedFetch(mock.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1' } });
+    const html = await (await fetch(created.json.connect_url)).text();
+    expect(html).toContain(`data-connection-id="${created.json.connection_id}"`);
+    const script = await (await fetch(`${mock.base}/mock-assets/frame.js`)).text();
+    expect(script).toContain("send('perflo:connection_completed', { login_id: ids.login_id, connection_id: ids.connection_id })");
+    expect(script).toContain("send('perflo:login_completed', { login_id: ids.login_id })");
+  });
+
+  describe('a Perflo from before the connect names', () => {
+    let old: { base: string; close: () => Promise<void> };
+    beforeEach(async () => {
+      old = await startMock(50, undefined, false, undefined, false);
+    });
+    afterEach(async () => {
+      await old.close();
+    });
+
+    it('sends only login_id and login_url, has no GET /v1/connections, and its page names no connection', async () => {
+      const created = await signedFetch(old.base, 'POST', '/v1/users', { body: { external_user_id: 'ext-1' } });
+      expect(created.json).toMatchObject({ status: 'login_required', login_id: expect.stringMatching(/^lg_/) });
+      expect(created.json).not.toHaveProperty('connection_id');
+      expect(created.json).not.toHaveProperty('connect_url');
+      expect((await signedFetch(old.base, 'GET', `/v1/connections/${created.json.login_id}`)).status).toBe(404);
+      expect((await signedFetch(old.base, 'GET', `/v1/logins/${created.json.login_id}`)).json).toEqual({ status: 'pending' });
+      // The page sends perflo:connection_completed only when it has a connection id to name.
+      expect(await (await fetch(created.json.login_url)).text()).toContain('data-connection-id=""');
+    });
+  });
+});
