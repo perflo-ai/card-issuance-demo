@@ -46,7 +46,7 @@ describe('readFrameEvent (browser side of SPEC 8 postMessage)', () => {
 describe('pageExpired: a Perflo page says its time is over', () => {
   it('is true only for the error a page sends when its session ran out', () => {
     expect(pageExpired({ type: 'perflo:error', frame_session_id: 'fs_1', code: 'frame_expired' })).toBe(true);
-    expect(pageExpired({ type: 'perflo:error', frame_session_id: 'fs_1', code: 'sign_in_failed' })).toBe(false);
+    expect(pageExpired({ type: 'perflo:error', frame_session_id: 'fs_1', code: 'connection_failed' })).toBe(false);
     expect(pageExpired({ type: 'perflo:error', frame_session_id: 'fs_1' })).toBe(false);
     expect(pageExpired({ type: 'perflo:closed', frame_session_id: 'fs_1', code: 'frame_expired' })).toBe(false);
   });

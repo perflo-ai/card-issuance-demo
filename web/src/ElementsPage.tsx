@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { AddMoney } from './AddMoney';
 import { api } from './api';
 import { useOnMount } from './browser';
-import { elementProblem, isExpired, LOAD_FAILED_TEXT, NOT_OFFERED_TEXT } from './elements';
+import { elementProblem, isAlreadyConnected, isExpired, LOAD_FAILED_TEXT, NOT_OFFERED_TEXT } from './elements';
 import { untilConnected } from './live';
 import {
   hasPerfloJs,
@@ -265,6 +265,10 @@ function Connect({ themeNow, register, onLinked }: PartProps & { onLinked: () =>
     setBusy('send');
     const result = await group.current.sendCode();
     setBusy(null);
+    if (result.error && isAlreadyConnected(result.error)) {
+      setStep('limits');
+      return;
+    }
     if (result.error) {
       refused(result.error);
       return;

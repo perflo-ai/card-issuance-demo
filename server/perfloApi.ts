@@ -182,7 +182,7 @@ export const PARTNER_ERROR_CODES = [
   'idempotency_key_required',
   'frame_expired',
   'frame_step_invalid',
-  'sign_in_failed',
+  'connection_failed',
   'wrong_person',
   'email_missing',
   'limits_invalid',

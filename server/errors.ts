@@ -68,7 +68,7 @@ const PAYMENTS: Record<PartnerErrorCode, { status: number; message?: string; ope
   wrong_person: { status: 409 },
   frame_expired: { status: 410 },
   frame_step_invalid: { status: 409 },
-  sign_in_failed: { status: 409 },
+  connection_failed: { status: 409 },
   amount_invalid: { status: 400 },
   // Tiny always sends the amount the person typed, so this means Tiny left it out.
   amount_required: { status: 502, message: TRY_AGAIN, operatorNote: 'payments asked for an amount Tiny did not send: a bug in Tiny' },

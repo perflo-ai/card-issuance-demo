@@ -963,7 +963,7 @@ export function createMockPerflo(options: MockOptions) {
     const user = users.get(frame.userId) as MUser;
     const email = user.email ?? match?.[1] ?? null;
     if (!match || match[2] !== MOCK_CODE || !email) {
-      throw new HttpError(401, 'sign_in_failed', 'That code is not right. Check it and try again.');
+      throw new HttpError(401, 'connection_failed', 'That code is not right. Check it and try again.');
     }
     user.email = email;
     frame.loggedIn = true;

@@ -48,6 +48,14 @@ export function elementProblem(error: ElementError): string {
   return words.length > 0 ? words : GENERIC_TEXT;
 }
 
+/**
+ * True when sendCode() refuses because the user is already connected on this browser: there is no code to
+ * send, verifyCode() goes through, so the page goes on to the limits instead of showing a problem.
+ */
+export function isAlreadyConnected(error: ElementError): boolean {
+  return error.code === 'already_connected';
+}
+
 /** True when the refusal means the page's session is over, so the person starts again. */
 export function isExpired(error: ElementError): boolean {
   return error.code === 'session_expired';

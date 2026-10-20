@@ -133,7 +133,7 @@ describe('users and connections', () => {
     });
     const wrong = await frameCall(mock.base, created.json.connect_url, 'login', { privy_access_token: 'mock-otp:000000' });
     expect(wrong.status).toBe(401);
-    expect(wrong.json.error.message).toBe('That code is not right. Check it and try again.');
+    expect(wrong.json.error).toEqual({ code: 'connection_failed', message: 'That code is not right. Check it and try again.' });
   });
 
   it('account shape matches SPEC 4', async () => {
