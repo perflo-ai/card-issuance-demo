@@ -1,6 +1,6 @@
 /**
- * The example looks Tiny can ask Perflo to draw its pages in, sent as `appearance` (and, for pages that
- * take a payment, `payment_element_options`) on the request that opens the page.
+ * The example looks Tiny can ask Perflo to draw its pages in, sent as `appearance` on the request that
+ * opens the page. How the payment form works is Perflo's own; a look only sets how the pages look.
  *
  * A fixed list on purpose: the browser only ever names a look by its id, and the objects sent to
  * Perflo come from here, never from anything the browser sent. A partner building its own look puts
@@ -24,15 +24,8 @@ export interface Appearance {
   rules?: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
-/** The payment form's own options (Stripe's names), as far as these looks use them. */
-export interface PaymentElementOptions {
-  layout?: 'tabs' | 'accordion' | { type: 'tabs' | 'accordion'; radios?: 'always' | 'never'; spacedAccordionItems?: boolean };
-  wallets?: { applePay?: 'auto' | 'never'; googlePay?: 'auto' | 'never' };
-}
-
 interface Look {
   appearance?: Appearance;
-  paymentElementOptions?: PaymentElementOptions;
 }
 
 const LOOKS: Readonly<Record<LookId, Look>> = {
@@ -50,7 +43,6 @@ const LOOKS: Readonly<Record<LookId, Look>> = {
         spacingUnit: '4px',
       },
     },
-    paymentElementOptions: { layout: 'tabs' },
   },
   night: {
     appearance: {
@@ -70,7 +62,6 @@ const LOOKS: Readonly<Record<LookId, Look>> = {
         '.Button': { fontWeight: '600' },
       },
     },
-    paymentElementOptions: { layout: { type: 'accordion', radios: 'always' } },
   },
 };
 
@@ -80,18 +71,14 @@ export function isLookId(value: unknown): value is LookId {
   return typeof value === 'string' && (LOOK_IDS as readonly string[]).includes(value);
 }
 
-/** Which page a request opens: only a page that takes a payment gets the payment form's options. */
-export type Opens = 'connect' | 'limits' | 'payment';
-
 /**
  * The fields to spread into a request body for this look. Empty for the brand default, so a request
  * with it is exactly what Tiny sent before looks existed. A fresh copy each time: nothing a caller
  * does to it reaches the list.
  */
-export function lookFields(look: LookId, opens: Opens): { appearance?: Appearance; payment_element_options?: PaymentElementOptions } {
+export function lookFields(look: LookId): { appearance?: Appearance } {
   const chosen = LOOKS[look];
-  const out: { appearance?: Appearance; payment_element_options?: PaymentElementOptions } = {};
+  const out: { appearance?: Appearance } = {};
   if (chosen.appearance) out.appearance = structuredClone(chosen.appearance);
-  if (opens === 'payment' && chosen.paymentElementOptions) out.payment_element_options = structuredClone(chosen.paymentElementOptions);
   return out;
 }

@@ -97,7 +97,7 @@ export class DemoService {
    * connect page is to be drawn in.
    */
   private userBody(user: DemoUser) {
-    return { external_user_id: user.id, ...lookFields(user.look ?? DEFAULT_LOOK, 'connect') };
+    return { external_user_id: user.id, ...lookFields(user.look ?? DEFAULT_LOOK) };
   }
 
   /** The look Perflo's pages are opened in from now on. A page already open keeps the look it was opened with. */
@@ -196,7 +196,7 @@ export class DemoService {
       ...(order.intent.description ? { description: order.intent.description } : {}),
       external_order_id: order.id,
       // The look fixed on the order when it was made, so a second POST with its Idempotency-Key is the same body.
-      ...lookFields(order.look ?? DEFAULT_LOOK, 'payment'),
+      ...lookFields(order.look ?? DEFAULT_LOOK),
     };
   }
 
@@ -548,7 +548,7 @@ export class DemoService {
 
   async limitsLink(user: DemoUser): Promise<PerfloPageView> {
     if (!user.perflo) throw new DemoError('not_linked', 'Payments are not set up yet');
-    const link = await this.api.limitsLink(user.id, user.perflo.userId, user.perflo.token, lookFields(user.look ?? DEFAULT_LOOK, 'limits'));
+    const link = await this.api.limitsLink(user.id, user.perflo.userId, user.perflo.token, lookFields(user.look ?? DEFAULT_LOOK));
     return pageOf(link);
   }
 
@@ -563,7 +563,7 @@ export class DemoService {
       user.perflo.userId,
       user.perflo.token,
       centsToApiAmount(amountCents),
-      lookFields(user.look ?? DEFAULT_LOOK, 'payment'),
+      lookFields(user.look ?? DEFAULT_LOOK),
     );
     return { ...pageOf(link), amount: link.amount };
   }

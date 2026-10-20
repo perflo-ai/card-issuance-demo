@@ -30,27 +30,22 @@ const BASE = 'https://perflo.test';
 
 describe('the example looks', () => {
   it('sends nothing for the brand default, so those requests are what Tiny sent before looks existed', () => {
-    expect(lookFields('brand', 'connect')).toEqual({});
-    expect(lookFields('brand', 'limits')).toEqual({});
-    expect(lookFields('brand', 'payment')).toEqual({});
+    expect(lookFields('brand')).toEqual({});
   });
 
-  it('sends the payment form options only to a page that takes a payment', () => {
+  it('sends the look only, never how the payment form works, to every page', () => {
     for (const look of ['flat', 'night'] as const) {
-      expect(lookFields(look, 'connect').appearance).toBeDefined();
-      expect(lookFields(look, 'connect').payment_element_options).toBeUndefined();
-      expect(lookFields(look, 'limits').payment_element_options).toBeUndefined();
-      expect(lookFields(look, 'payment').payment_element_options).toBeDefined();
+      expect(Object.keys(lookFields(look))).toEqual(['appearance']);
     }
-    expect(lookFields('night', 'payment').appearance?.theme).toBe('dark');
-    expect(lookFields('night', 'payment').appearance?.rules?.['.Input']).toBeDefined();
-    expect(lookFields('flat', 'payment').appearance?.theme).toBe('light');
+    expect(lookFields('night').appearance?.theme).toBe('dark');
+    expect(lookFields('night').appearance?.rules?.['.Input']).toBeDefined();
+    expect(lookFields('flat').appearance?.theme).toBe('light');
   });
 
   it('hands out a copy: changing what one request got never changes the list', () => {
-    const first = lookFields('night', 'payment');
+    const first = lookFields('night');
     (first.appearance as { theme?: string }).theme = 'light';
-    expect(lookFields('night', 'payment').appearance?.theme).toBe('dark');
+    expect(lookFields('night').appearance?.theme).toBe('dark');
   });
 });
 
@@ -120,14 +115,14 @@ describe('requests Perflo gets carry the chosen look, signed as before', () => {
     const chosen = service.setLook(user, 'night');
     const result = await service.connect(chosen);
     expect(result).toEqual({ link: 'connection_required', page: { url: `${BASE}/v1/frames/setup?session=x`, clientSecret: SECRET } });
-    expect(calls[0].body).toEqual({ external_user_id: user.id, ...lookFields('night', 'connect') });
-    expect(calls[0].body.payment_element_options).toBeUndefined();
+    expect(calls[0].body).toEqual({ external_user_id: user.id, ...lookFields('night') });
+    expect(calls[0].body).not.toHaveProperty('payment_element_options');
     expect(calls[0].keyVersion).toBe(CREDS.keyVersion);
     expect(calls[0].signed).toBe(true);
     expect(store.user(user.id).pendingConnection?.clientSecret).toBe(SECRET);
   });
 
-  it('a top-up carries the look and the payment form options; a limits link carries the look', async () => {
+  it('a top-up and a limits link carry the look, and nothing about the payment form', async () => {
     const { fake, calls } = scripted({
       'POST /v1/users/usr_1/top-ups': [
         {
@@ -155,9 +150,9 @@ describe('requests Perflo gets carry the chosen look, signed as before', () => {
       amount: '25.00',
     });
     expect(await service.limitsLink(chosen)).toEqual({ url: `${BASE}/v1/frames/limits?session=z`, clientSecret: SECRET });
-    expect(calls[0].body).toEqual({ amount: '25.00', ...lookFields('flat', 'payment') });
-    expect(calls[0].body.payment_element_options).toEqual({ layout: 'tabs' });
-    expect(calls[1].body).toEqual(lookFields('flat', 'limits'));
+    expect(calls[0].body).toEqual({ amount: '25.00', ...lookFields('flat') });
+    expect(calls[0].body).not.toHaveProperty('payment_element_options');
+    expect(calls[1].body).toEqual(lookFields('flat'));
     expect(calls.every((c) => c.signed && c.keyVersion === CREDS.keyVersion)).toBe(true);
   });
 
@@ -199,8 +194,8 @@ describe('requests Perflo gets carry the chosen look, signed as before', () => {
     // The person picks another look after asking for the order: the order keeps its own.
     user = service.setLook(user, 'flat');
     const result = await service.advanceOrder(user, order.id);
-    expect(calls[0].body.appearance).toEqual(lookFields('night', 'payment').appearance);
-    expect(calls[0].body.payment_element_options).toEqual(lookFields('night', 'payment').payment_element_options);
+    expect(calls[0].body.appearance).toEqual(lookFields('night').appearance);
+    expect(calls[0].body).not.toHaveProperty('payment_element_options');
     expect(calls[0].body.user_id).toBe('usr_1');
     expect(calls[0].signed).toBe(true);
     const fresh = store.user(user.id);
