@@ -602,13 +602,15 @@ button:disabled {
 select {
   font: inherit;
 }
-/* Add money: Tiny's own amount field. The payment itself opens on Perflo's page in a new tab. */
-.add-money {
+/* Add money: Tiny's own amount field. The payment itself opens on Perflo's page in a new tab. Link your card: Perflo's card fields in the same kind of form. */
+.add-money,
+.link-card {
   display: grid;
   gap: 8px;
   margin: 12px 0;
 }
-.add-money label {
+.add-money label,
+.link-card label:not(.check) {
   font-size: 13px;
   font-weight: 600;
   color: var(--ink-2);

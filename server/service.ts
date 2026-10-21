@@ -2,7 +2,7 @@
  * The partner-side flow: everything Tiny's backend does against Perflo.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { DemoConfig } from './config.js';
 import type { EventLog } from './eventLog.js';
 import { DEFAULT_LOOK, lookFields, type LookId } from './looks.js';
@@ -14,6 +14,8 @@ import {
   PerfloApiError,
   PerfloUnavailableError,
   type AccountResponse,
+  type LinkCardResponse,
+  type LinkedCard,
   type OrderResponse,
   type PerfloApi,
 } from './perfloApi.js';
@@ -21,7 +23,16 @@ import { revealCard, RevealError, simulateCheckout, type RevealedCard } from './
 import type { DemoOrder, DemoUser, Store } from './store.js';
 import { cardClosedData, type WebhookEvent } from './webhooks.js';
 
-import type { ConnectView, LinkStatus, Notice, PerfloPageView } from './views.js';
+import type {
+  AutoTopUpChoice,
+  AutoTopUpView,
+  ConnectView,
+  LinkCardView,
+  LinkedCardView,
+  LinkStatus,
+  Notice,
+  PerfloPageView,
+} from './views.js';
 
 export type { LinkStatus, Notice } from './views.js';
 
@@ -29,6 +40,8 @@ export class DemoError extends Error {
   constructor(
     readonly code: 'not_linked' | 'not_found' | 'conflict' | 'bad_request',
     message: string,
+    /** For the server log only, when the operator has something to fix. */
+    readonly operatorNote?: string,
   ) {
     super(message);
     this.name = 'DemoError';
@@ -45,6 +58,12 @@ export class DemoService {
    * to the order before its answer (with the order id) is stored here; such a webhook waits for these.
    */
   private readonly placing = new Set<Promise<unknown>>();
+  /**
+   * How many Idempotency-Keys a card token's Save has used up, kept only while a Save of it failed on
+   * Perflo's side (see linkCard). ponytail: in memory; a restart starts at the first key again, which
+   * at worst replays that one failure once.
+   */
+  private readonly linkKeyGenerations = new Map<string, number>();
   /** The person's open pages, which hear about changes as they happen. */
   /** Each stream is checked against the store before every write: only a session that still opens this account hears it. */
   readonly live = new LiveUpdates((sessionId, demoUserId) => this.store.userForSession(sessionId)?.id === demoUserId);
@@ -567,6 +586,111 @@ export class DemoService {
     );
     return { ...pageOf(link), amount: link.amount };
   }
+
+  /** The card element's client_secret, opened in the person's current look. */
+  async linkedCardForm(user: DemoUser): Promise<{ clientSecret: string }> {
+    const perflo = this.linkedOrThrow(user);
+    const form = await this.api.linkedCardForm(user.id, perflo.userId, perflo.token, lookFields(user.look ?? DEFAULT_LOOK));
+    return { clientSecret: form.client_secret };
+  }
+
+  /**
+   * Saves the card behind one card token. Each Save makes a new token, so each Save gets its own
+   * Idempotency-Key, from that token. "Try again" sends the same token again. After no answer at all it
+   * keeps the key, so Perflo replays the first send if it got through. After an answered failure on
+   * Perflo's side (a 5xx, such as a 503 while payments are down) it takes a new key: Perflo records that
+   * answer under the old key and would only replay it, and it gives the card token back after an outage,
+   * so the new key links it once (payments key the link on the token).
+   * One at a time per token, so a double click waits for the first answer and gets the same one.
+   */
+  async linkCard(user: DemoUser, cardToken: string, autoTopUp: AutoTopUpChoice): Promise<LinkCardView> {
+    const perflo = this.linkedOrThrow(user);
+    const base = linkCardIdempotencyKey(user.id, cardToken, autoTopUp);
+    return this.exclusive(`link-card:${base}`, async () => {
+      const generation = this.linkKeyGenerations.get(base) ?? 0;
+      let answer: LinkCardResponse;
+      try {
+        answer = await this.api.linkCard(user.id, perflo.userId, perflo.token, `${base}-${generation}`, {
+          card_token: cardToken,
+          auto_top_up: autoTopUp ? { monthly_limit: autoTopUp.monthlyLimit } : null,
+        });
+      } catch (error) {
+        const noAnswer = error instanceof PerfloUnavailableError && error.retryable;
+        const failedThere =
+          (error instanceof PerfloApiError && error.httpStatus >= 500) || (error instanceof PerfloUnavailableError && !error.retryable);
+        if (failedThere) this.linkKeyGenerations.set(base, generation + 1);
+        else if (!noAnswer) this.linkKeyGenerations.delete(base);
+        if (error instanceof PerfloApiError && error.code === 'conflict') {
+          // The one conflict on this route: Tiny's brand is not published in Perflo, so no card can be linked.
+          throw new DemoError(
+            'conflict',
+            'Saving a card is not available in Tiny yet. Try again later.',
+            'payments refused the link because Tiny has no published brand: publish it in Perflo Builder',
+          );
+        }
+        throw error;
+      }
+      this.linkKeyGenerations.delete(base);
+      if (answer.status === 'requires_action') {
+        this.log.add(user.id, 'demo', 'The card needs confirming in the card form');
+        return { status: 'requires_action' };
+      }
+      this.log.add(
+        user.id,
+        'demo',
+        `Card ending ${answer.linked_card.last4} linked${answer.auto_top_up ? `, automatic top-ups on up to ${answer.auto_top_up.monthly_limit} a month` : ''}`,
+      );
+      return {
+        status: 'linked',
+        linkedCard: cardView(answer.linked_card),
+        autoTopUp: answer.auto_top_up ? { status: 'on', monthlyLimit: answer.auto_top_up.monthly_limit } : null,
+      };
+    });
+  }
+
+  async linkedCards(user: DemoUser): Promise<LinkedCardView[]> {
+    const perflo = this.linkedOrThrow(user);
+    const { linked_cards } = await this.api.linkedCards(user.id, perflo.userId, perflo.token);
+    return linked_cards.map((card) => ({ ...cardView(card), usedForAutoTopUp: card.used_for_auto_top_up }));
+  }
+
+  /** Perflo turns automatic top-ups off when they were using this card. */
+  async removeLinkedCard(user: DemoUser, linkedCardId: string): Promise<void> {
+    const perflo = this.linkedOrThrow(user);
+    await this.api.removeLinkedCard(user.id, perflo.userId, perflo.token, linkedCardId);
+  }
+
+  async autoTopUp(user: DemoUser): Promise<AutoTopUpView> {
+    const perflo = this.linkedOrThrow(user);
+    const state = await this.api.autoTopUp(user.id, perflo.userId, perflo.token);
+    return { status: state.status, monthlyLimit: state.monthly_limit, linkedCardId: state.linked_card_id };
+  }
+
+  /** The card stays linked. Already off is a success. */
+  async turnOffAutoTopUp(user: DemoUser): Promise<void> {
+    const perflo = this.linkedOrThrow(user);
+    await this.api.turnOffAutoTopUp(user.id, perflo.userId, perflo.token);
+  }
+
+  private linkedOrThrow(user: DemoUser): NonNullable<DemoUser['perflo']> {
+    if (!user.perflo) throw new DemoError('not_linked', 'Payments are not set up yet');
+    return user.perflo;
+  }
+}
+
+/**
+ * The Idempotency-Key for linking the card behind one card token: the same Save (account, token and
+ * choice) always gives the same key, and nothing about the token can be read back from it.
+ */
+export function linkCardIdempotencyKey(demoUserId: string, cardToken: string, autoTopUp: AutoTopUpChoice): string {
+  const hash = createHash('sha256')
+    .update(['linked-card', demoUserId, cardToken, autoTopUp ? autoTopUp.monthlyLimit : ''].join('\n'), 'utf8')
+    .digest('hex');
+  return `lc-save-${hash}`;
+}
+
+function cardView(card: LinkedCard): Omit<LinkedCardView, 'usedForAutoTopUp'> {
+  return { id: card.id, brand: card.brand, last4: card.last4, expMonth: card.exp_month, expYear: card.exp_year };
 }
 
 /** The connection an answer names, as Tiny stores it while it waits (store.ts DemoUser.pendingConnection). */

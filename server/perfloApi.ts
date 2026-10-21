@@ -160,6 +160,56 @@ export const revealLinkResponse = z.object({ reveal_url: link, reveal_expires_at
 const revealOrReplay = z.union([revealLinkResponse, z.object({ message: z.string() })]);
 export const cancelResponse = z.object({ status: z.literal('cancelled'), amount_returned: returned });
 
+/**
+ * Perflo's id for a card linked through Tiny, and the single-use token the card element hands back for one
+ * Save: both as Perflo makes them (perflo-backend-api src/partnerV2/ids.ts, src/widget/perflo.js).
+ */
+export const LINKED_CARD_ID = /^lc_[A-Za-z0-9_-]{22,64}$/;
+export const CARD_TOKEN = /^ctok_[A-Za-z0-9_-]{43}$/;
+const linkedCardId = z.string().regex(LINKED_CARD_ID);
+/** The brand is null when the card network did not name one. */
+const linkedCard = z.object({
+  id: linkedCardId,
+  brand: z.string().nullable(),
+  last4: z.string().regex(/^[0-9]{4}$/),
+  exp_month: z.number().int().min(1).max(12),
+  exp_year: z.number().int().min(2000).max(2200),
+});
+export type LinkedCard = z.infer<typeof linkedCard>;
+
+/** POST /users/{id}/linked-cards/form: the card element's client_secret, for 30 minutes. */
+export const linkedCardFormResponse = z.object({ client_secret: clientSecret, expires_at: z.string() });
+
+/** 201 linked, or 202 when the card's bank asks the person to confirm inside the card element. */
+export const linkCardResponse = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('linked'),
+    linked_card: linkedCard,
+    auto_top_up: z.object({ status: z.literal('on'), monthly_limit: amount }).nullable(),
+  }),
+  z.object({ status: z.literal('requires_action'), next_action: z.literal('confirm_in_element') }),
+]);
+export type LinkCardResponse = z.infer<typeof linkCardResponse>;
+
+export interface LinkCardInput {
+  card_token: string;
+  auto_top_up: { monthly_limit: string } | null;
+}
+
+export const linkedCardsResponse = z.object({
+  linked_cards: z.array(linkedCard.extend({ used_for_auto_top_up: z.boolean() })),
+});
+export type LinkedCardsResponse = z.infer<typeof linkedCardsResponse>;
+
+/** Only where automatic top-ups stand, never why they are paused. */
+export const autoTopUpResponse = z.object({
+  status: z.enum(['on', 'paused', 'off']),
+  monthly_limit: amount.nullable(),
+  linked_card_id: linkedCardId.nullable(),
+});
+export type AutoTopUpResponse = z.infer<typeof autoTopUpResponse>;
+const autoTopUpOffResponse = z.object({ status: z.literal('off') });
+
 const errorEnvelope = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 
 /** Every refusal code the Partner API v2 documents (perflo-backend-api src/partnerV2/errors.ts). */
@@ -188,6 +238,17 @@ export const PARTNER_ERROR_CODES = [
   'limits_invalid',
   'amount_invalid',
   'amount_required',
+  // Linked cards and automatic top-ups.
+  'card_token_invalid',
+  'consent_missing',
+  'consent_mismatch',
+  'monthly_limit_invalid',
+  'card_not_supported',
+  'card_declined',
+  'auto_top_up_already_on',
+  'auto_top_up_paused',
+  'auto_top_up_unavailable',
+  'too_many_attempts',
   'service_unavailable',
   'internal_error',
 ] as const;
@@ -297,7 +358,7 @@ export class PerfloApi {
 
   private async request(
     demoUserId: string | null,
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'DELETE',
     route: string,
     options: RequestOptions = {},
   ): Promise<{ status: number; json: unknown; retryAfter: string | null }> {
@@ -318,7 +379,7 @@ export class PerfloApi {
   /** One signed request, logged (redacted). Signed fresh each time, so a retry carries a current timestamp. */
   private async send(
     demoUserId: string | null,
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'DELETE',
     route: string,
     options: RequestOptions,
   ): Promise<{ status: number; json: unknown; retryAfter: string | null }> {
@@ -436,6 +497,69 @@ export class PerfloApi {
       ...(Object.keys(look).length > 0 ? { body: look } : {}),
     });
     return this.parse(frameLinkResponse, r.status, r.json, [201]);
+  }
+
+  /** The card element's page session, 201. No body for the brand default, as for limits-link. */
+  async linkedCardForm(
+    demoUserId: string,
+    userId: string,
+    token: string,
+    look: LookFields = {},
+  ): Promise<z.infer<typeof linkedCardFormResponse>> {
+    const r = await this.request(demoUserId, 'POST', `/v1/users/${encodeURIComponent(userId)}/linked-cards/form`, {
+      token,
+      ...(Object.keys(look).length > 0 ? { body: look } : {}),
+    });
+    return this.parse(linkedCardFormResponse, r.status, r.json, [201], r.retryAfter);
+  }
+
+  /**
+   * Saves the card behind one card token: 201 linked, 202 requires_action. Never sent twice here; a retry is
+   * the caller's (service.ts linkCard picks its key). These routes keep Perflo's Retry-After
+   * (too_many_attempts, rate_limited, service_unavailable) for the browser, as cancel does.
+   */
+  async linkCard(
+    demoUserId: string,
+    userId: string,
+    token: string,
+    idempotencyKey: string,
+    body: LinkCardInput,
+  ): Promise<LinkCardResponse> {
+    const r = await this.request(demoUserId, 'POST', `/v1/users/${encodeURIComponent(userId)}/linked-cards`, {
+      token,
+      idempotencyKey,
+      body,
+    });
+    const parsed = this.parse(linkCardResponse, r.status, r.json, [201, 202], r.retryAfter);
+    const expected = parsed.status === 'linked' ? 201 : 202;
+    if (r.status !== expected) throw new PerfloUnavailableError('Payments service answered with a mismatched status');
+    return parsed;
+  }
+
+  async linkedCards(demoUserId: string, userId: string, token: string): Promise<LinkedCardsResponse> {
+    const r = await this.request(demoUserId, 'GET', `/v1/users/${encodeURIComponent(userId)}/linked-cards`, { token });
+    return this.parse(linkedCardsResponse, r.status, r.json, [200], r.retryAfter);
+  }
+
+  async removeLinkedCard(demoUserId: string, userId: string, token: string, linkedCardId: string): Promise<void> {
+    const r = await this.request(
+      demoUserId,
+      'DELETE',
+      `/v1/users/${encodeURIComponent(userId)}/linked-cards/${encodeURIComponent(linkedCardId)}`,
+      { token },
+    );
+    this.parse(z.null(), r.status, r.json, [204], r.retryAfter);
+  }
+
+  async autoTopUp(demoUserId: string, userId: string, token: string): Promise<AutoTopUpResponse> {
+    const r = await this.request(demoUserId, 'GET', `/v1/users/${encodeURIComponent(userId)}/auto-top-up`, { token });
+    return this.parse(autoTopUpResponse, r.status, r.json, [200], r.retryAfter);
+  }
+
+  /** Off when already off is a success on Perflo's side too. */
+  async turnOffAutoTopUp(demoUserId: string, userId: string, token: string): Promise<void> {
+    const r = await this.request(demoUserId, 'DELETE', `/v1/users/${encodeURIComponent(userId)}/auto-top-up`, { token });
+    this.parse(autoTopUpOffResponse, r.status, r.json, [200], r.retryAfter);
   }
 
   /** 201 ready, 202 waiting states and 422 declined are all order answers, not errors. */

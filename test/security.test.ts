@@ -59,8 +59,13 @@ const STATE_CHANGING = [
   '/demo/orders/3f2b8c1e-5d4a-4b6f-9a7c-1e2d3c4b5a69/discard',
   '/demo/orders/ord_1/card-details',
   '/demo/cards/ord_1/cancel',
+  '/demo/linked-cards/form',
+  '/demo/linked-cards',
+  '/demo/linked-cards/lc_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC/remove',
+  '/demo/auto-top-up/turn-off',
   '/demo/mock/revoke-access',
   '/demo/mock/stop-at-checkout',
+  '/demo/mock/card-token',
 ];
 
 describe('cross-site requests (CSRF and login CSRF)', () => {

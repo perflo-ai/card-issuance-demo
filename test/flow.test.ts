@@ -328,7 +328,7 @@ describe('other order states through the demo', () => {
     const refused = await b.post(`/demo/cards/${ready.perfloOrderId}/cancel`);
     expect(refused.status).toBe(503);
     expect(refused.headers['retry-after']).toBe('7');
-    expect(refused.body).toEqual({ error: { message: 'This is not available right now. Try again in a moment.' } });
+    expect(refused.body).toEqual({ error: { message: 'Payments are busy right now. Try again in a moment.' } });
     expect(cancel).toHaveBeenCalledTimes(1);
     // Sent again by the browser, the cancel goes through.
     const again = await b.post(`/demo/cards/${ready.perfloOrderId}/cancel`);
@@ -568,5 +568,64 @@ describe('connections: Tiny reads only connection_id and connect_url, and checks
     // The developer log keeps the id the page sent with the event.
     const logged = demo.log.forUser(userId).filter((e) => e.summary === 'perflo:connection_completed');
     expect(logged.map((e) => (e.detail as { connection_id?: string }).connection_id)).toEqual([undefined, connectionId]);
+  });
+});
+
+describe('linked cards in test mode, through Tiny’s routes and the test payments service', () => {
+  async function linked(b: ReturnType<typeof browser>) {
+    await signUp(b);
+    const draft = await ask(b, 'buy me $1.00 worth of gum on amazon');
+    await setUp(b, (await advance(b, draft.id)).frameUrl as string);
+  }
+
+  it('links the test card with automatic top-ups, lists it, turns them off, removes it', async () => {
+    const b = browser(makeDemo(mock.base));
+    await linked(b);
+    expect((await b.get('/demo/linked-cards')).body).toEqual({ linkedCards: [] });
+    expect((await b.get('/demo/auto-top-up')).body.autoTopUp.status).toBe('off');
+
+    const { clientSecret } = (await b.post('/demo/linked-cards/form')).body as { clientSecret: string };
+    const autoTopUp = { monthlyLimit: '250.00' };
+    const token = await b.post('/demo/mock/card-token', { clientSecret, autoTopUp });
+    expect(token.status).toBe(200);
+    const saved = await b.post('/demo/linked-cards', { cardToken: token.body.cardToken, autoTopUp });
+    expect(saved.body).toMatchObject({
+      status: 'linked',
+      linkedCard: { last4: '4242' },
+      autoTopUp: { status: 'on', monthlyLimit: '250.00' },
+    });
+    const cardId = saved.body.linkedCard.id as string;
+
+    // The same card token again (Try again) answers the same link: nothing is linked twice.
+    expect((await b.post('/demo/linked-cards', { cardToken: token.body.cardToken, autoTopUp })).body).toEqual(saved.body);
+    expect((await b.get('/demo/linked-cards')).body.linkedCards).toEqual([
+      { id: cardId, brand: 'visa', last4: '4242', expMonth: 12, expYear: 2030, usedForAutoTopUp: true },
+    ]);
+    expect((await b.get('/demo/auto-top-up')).body.autoTopUp).toEqual({ status: 'on', monthlyLimit: '250.00', linkedCardId: cardId });
+
+    expect((await b.post('/demo/auto-top-up/turn-off')).body).toEqual({ ok: true });
+    expect((await b.get('/demo/auto-top-up')).body.autoTopUp.status).toBe('off');
+    expect((await b.get('/demo/linked-cards')).body.linkedCards).toHaveLength(1);
+    expect((await b.post(`/demo/linked-cards/${cardId}/remove`)).body).toEqual({ ok: true });
+    expect((await b.get('/demo/linked-cards')).body.linkedCards).toEqual([]);
+  });
+
+  it('refuses a limit the person did not agree to, a limit out of range, and too many tries, in plain words', async () => {
+    const b = browser(makeDemo(mock.base));
+    await linked(b);
+    const { clientSecret } = (await b.post('/demo/linked-cards/form')).body as { clientSecret: string };
+    const cardOnly = await b.post('/demo/mock/card-token', { clientSecret, autoTopUp: null });
+    const mismatch = await b.post('/demo/linked-cards', { cardToken: cardOnly.body.cardToken, autoTopUp: { monthlyLimit: '250.00' } });
+    expect([mismatch.status, mismatch.body.error.message]).toEqual([
+      502,
+      'Payments could not do that right now. Try again in a few minutes.',
+    ]);
+    const outOfRange = await b.post('/demo/mock/card-token', { clientSecret, autoTopUp: { monthlyLimit: '5000.00' } });
+    expect([outOfRange.status, outOfRange.body.error.message]).toEqual([422, 'Choose a monthly limit between $50.00 and $2,000.00.']);
+    for (let i = 0; i < 4; i++) expect((await b.post('/demo/mock/card-token', { clientSecret, autoTopUp: null })).status).toBe(200);
+    const capped = await b.post('/demo/mock/card-token', { clientSecret, autoTopUp: null });
+    expect([capped.status, capped.body.error.message]).toEqual([429, 'Too many cards were tried. Wait a while and try again.']);
+    // The card token the person did not use for the mismatch still links the card on its own.
+    expect((await b.post('/demo/linked-cards', { cardToken: cardOnly.body.cardToken, autoTopUp: null })).body.status).toBe('linked');
   });
 });

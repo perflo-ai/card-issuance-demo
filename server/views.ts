@@ -173,3 +173,38 @@ export interface MeView {
  */
 export type LiveMessage =
   { type: 'order'; order: OrderView; notice: Notice } | { type: 'account'; linked: boolean } | { type: 'connected' } | { type: 'log' };
+
+/** A card the person linked through Tiny. Never the full number: brand, last 4 digits and expiry only. */
+export interface LinkedCardView {
+  id: string;
+  brand: string | null;
+  last4: string;
+  expMonth: number;
+  expYear: number;
+  /** True when Tiny's automatic top-ups charge this card. */
+  usedForAutoTopUp: boolean;
+}
+
+export type AutoTopUpStatus = 'on' | 'paused' | 'off';
+
+/** Where automatic top-ups stand for this person with Tiny. Perflo never says why they are paused. */
+export interface AutoTopUpView {
+  status: AutoTopUpStatus;
+  monthlyLimit: string | null;
+  linkedCardId: string | null;
+}
+
+/** What the person asked for with the card: automatic top-ups up to a monthly limit ("250.00"), or none. */
+export type AutoTopUpChoice = { monthlyLimit: string } | null;
+
+/**
+ * POST /demo/linked-cards: the card is saved, or the card's bank wants the person to confirm inside the
+ * card element (card.handleNextAction()), which then reports `saved` or `error` itself.
+ */
+export type LinkCardView =
+  | {
+      status: 'linked';
+      linkedCard: Omit<LinkedCardView, 'usedForAutoTopUp'>;
+      autoTopUp: { status: 'on'; monthlyLimit: string } | null;
+    }
+  | { status: 'requires_action' };

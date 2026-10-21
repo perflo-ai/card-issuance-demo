@@ -3,6 +3,7 @@ import { AddMoney } from './AddMoney';
 import { api, onRequestSettled } from './api';
 import { pageVisibility, useFocusWhenClosed, useOnMount, useWhenVisible } from './browser';
 import { cancelUntilDone } from './cancel';
+import { LinkedCards } from './LinkedCards';
 import { onLive } from './live';
 import { openCardRows } from './cards';
 import { CANCEL_LABEL, CANCEL_SLOW_TEXT, identityText, LOOK_LABELS, money, pageExpiredText } from './copy';
@@ -286,6 +287,7 @@ export function Panel(props: Props) {
                 </ul>
               </>
             )}
+            <LinkedCards onAccountChanged={onAccountChanged} />
           </>
         )}
         {frame && (

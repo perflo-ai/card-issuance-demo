@@ -57,14 +57,15 @@ const PAYMENTS: Record<PartnerErrorCode, { status: number; message?: string; ope
   code_send_limited: { status: 429 },
   idempotency_in_progress: { status: 409 },
   order_in_progress: { status: 409 },
-  service_unavailable: { status: 503 },
+  // Perflo's own words here are for whoever built the page; the person gets Tiny's.
+  service_unavailable: { status: 503, message: 'Payments are busy right now. Try again in a moment.' },
   internal_error: { status: 502 },
   // The thing asked for cannot be done; the message says why.
   not_found: { status: 404 },
   conflict: { status: 409 },
   card_not_open: { status: 409 },
   order_not_cancellable: { status: 409 },
-  email_missing: { status: 409 },
+  email_missing: { status: 409, message: 'Your account needs a confirmed email address first.' },
   wrong_person: { status: 409 },
   frame_expired: { status: 410 },
   frame_step_invalid: { status: 409 },
@@ -73,13 +74,36 @@ const PAYMENTS: Record<PartnerErrorCode, { status: number; message?: string; ope
   // Tiny always sends the amount the person typed, so this means Tiny left it out.
   amount_required: { status: 502, message: TRY_AGAIN, operatorNote: 'payments asked for an amount Tiny did not send: a bug in Tiny' },
   limits_invalid: { status: 400 },
+  // Linking a card. A card token is single use and lasts 15 minutes: the person enters the card again.
+  card_token_invalid: { status: 409, message: 'That card could not be saved. Enter it again and press Save.' },
+  // Tiny's page and Tiny's server disagreed about automatic top-ups: never the person's doing.
+  consent_missing: {
+    status: 502,
+    message: TRY_AGAIN,
+    operatorNote: 'Tiny asked for automatic top-ups with a card token that carries no agreement: a bug in Tiny',
+  },
+  consent_mismatch: {
+    status: 502,
+    message: TRY_AGAIN,
+    operatorNote: 'Tiny sent a monthly limit other than the one the card form showed: a bug in Tiny',
+  },
+  monthly_limit_invalid: { status: 400 },
+  card_not_supported: { status: 409 },
+  card_declined: { status: 402 },
+  auto_top_up_already_on: { status: 409 },
+  auto_top_up_paused: { status: 409, message: 'Automatic top-ups are paused on your account. Contact support to turn them back on.' },
+  auto_top_up_unavailable: {
+    status: 409,
+    message: 'Automatic top-ups are not available for you right now. You can still save the card on its own.',
+  },
+  too_many_attempts: { status: 429, message: 'Too many cards were tried. Wait a while and try again.' },
 };
 
 export function toBrowserError(error: unknown): BrowserError {
   if (error instanceof HttpError) return { status: error.status, message: error.message };
   if (error instanceof DemoError) {
     const status = error.code === 'not_found' ? 404 : error.code === 'bad_request' ? 400 : 409;
-    return { status, message: error.message };
+    return { status, message: error.message, ...(error.operatorNote ? { operatorNote: error.operatorNote } : {}) };
   }
   if (error instanceof PerfloUnavailableError) {
     return { status: 503, message: 'Payments are not reachable right now. Try again in a moment.', operatorNote: error.message };
