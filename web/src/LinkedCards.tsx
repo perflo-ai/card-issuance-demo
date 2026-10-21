@@ -4,7 +4,7 @@ import { useOnMount } from './browser';
 import { autoTopUpText, cardSavedText, linkedCardName, money } from './copy';
 import { EXPIRED_TEXT, isExpired, LOAD_FAILED_TEXT } from './elements';
 import { autoTopUpChoice, canSave, canSendAgain, cardProblem, MONTHLY_LIMIT_CHOICES } from './cardForm';
-import { loadPerflo, type CardSaved, type ElementError, type PerfloCardElement } from './perflo';
+import { hasPerfloJs, loadPerflo, type CardSaved, type ElementError, type PerfloCardElement } from './perflo';
 import { singleFlight } from './polling';
 import type { AutoTopUpChoice, AutoTopUpView, LinkedCardView } from '../../server/views';
 
@@ -15,6 +15,30 @@ interface SaveAttempt {
 }
 
 type Busy = 'saving' | 'confirming' | 'turning-off' | { remove: string } | null;
+
+/** What Save uses: Perflo's card element, or in test mode the test card (no Perflo.js there). */
+type CardFields = Pick<PerfloCardElement, 'update' | 'createToken' | 'handleNextAction'>;
+
+/**
+ * Test mode's stand-in for Perflo's card element: the test payments service makes the card token for its
+ * test card (ending 4242), with the automatic top-ups choice Tiny's switch and limit last gave it. Its
+ * cards never need the bank's check, so handleNextAction() is never called here.
+ */
+function testCard(clientSecret: string): CardFields {
+  let choice: AutoTopUpChoice = null;
+  return {
+    update: ({ autoTopUp }) => {
+      choice = autoTopUp;
+      return Promise.resolve({});
+    },
+    createToken: () =>
+      api.mockCardToken(clientSecret, choice).then(
+        ({ cardToken }) => ({ cardToken }),
+        (e: unknown) => ({ error: { code: 'test_card_refused', message: message(e) } }),
+      ),
+    handleNextAction: () => Promise.resolve({ error: { code: 'unsupported_command', message: '' } }),
+  };
+}
 
 const message = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong. Try again.');
 
@@ -186,9 +210,9 @@ function LinkCardForm({ busy, setBusy, onSaved, onClose }: FormProps) {
   /** The last Save, when its answer never came back. */
   const [again, setAgain] = useState<SaveAttempt | null>(null);
   const box = useRef<HTMLDivElement>(null);
-  const card = useRef<PerfloCardElement | null>(null);
-  const latest = useRef({ onSaved, setBusy });
-  latest.current = { onSaved, setBusy };
+  const card = useRef<CardFields | null>(null);
+  const latest = useRef(setBusy);
+  latest.current = setBusy;
 
   const open = async () => {
     setProblem('');
@@ -206,14 +230,22 @@ function LinkCardForm({ busy, setBusy, onSaved, onClose }: FormProps) {
   useOnMount(() => void open());
 
   const refused = useCallback((error: ElementError) => {
-    latest.current.setBusy(null);
+    latest.current(null);
     if (isExpired(error)) setStep('expired');
     setProblem(cardProblem(error));
   }, []);
 
-  // The card element, for this client_secret. `saved` and `error` answer a confirmation the card's bank asked for.
+  // The card element for this client_secret, or in test mode the test card.
   useEffect(() => {
     if (secret === null) return;
+    if (!hasPerfloJs()) {
+      card.current = testCard(secret);
+      setMounted(true);
+      return () => {
+        card.current = null;
+        setMounted(false);
+      };
+    }
     let stopped = false;
     let made: PerfloCardElement | null = null;
     loadPerflo()
@@ -222,11 +254,6 @@ function LinkCardForm({ busy, setBusy, onSaved, onClose }: FormProps) {
         made = perflo.elements({ clientSecret: secret }).create('card');
         made.on('ready', () => setMounted(true));
         made.on('loaderror', (event) => refused(event.error));
-        made.on('error', (event) => refused(event.error ?? { code: 'unknown_error', message: '' }));
-        made.on('saved', (result) => {
-          latest.current.setBusy(null);
-          latest.current.onSaved(result);
-        });
         made.mount(box.current);
         card.current = made;
       })
@@ -247,15 +274,15 @@ function LinkCardForm({ busy, setBusy, onSaved, onClose }: FormProps) {
   useEffect(() => {
     const element = card.current;
     if (!mounted || !element) return;
-    void element
-      .update({ autoTopUp: choiceKey ? { monthlyLimit: choiceKey } : null })
-      .then((result) => {
-        if (result?.error) refused(result.error);
-      })
-      .catch(() => setProblem('Something went wrong. Try again.'));
+    void element.update({ autoTopUp: choiceKey ? { monthlyLimit: choiceKey } : null }).then((result) => {
+      if (result.error) refused(result.error);
+    });
   }, [mounted, choiceKey, refused]);
 
-  /** Sends one Save to Tiny's server. The same attempt again is the same Save: payments answer it once. */
+  /**
+   * Sends one Save to Tiny's server. "Try again" sends the same card token again; Tiny's server picks the
+   * Idempotency-Key, so payments link it once.
+   */
   const send = async (attempt: SaveAttempt) => {
     setProblem('');
     setAgain(null);
@@ -267,15 +294,15 @@ function LinkCardForm({ busy, setBusy, onSaved, onClose }: FormProps) {
         onSaved({ linkedCard: result.linkedCard, autoTopUp: result.autoTopUp });
         return;
       }
-      // The card's bank asks the person to confirm, inside the card element; it reports `saved` or `error`.
+      // The card's bank asks the person to confirm, inside the card element, which then saves the card.
       setBusy('confirming');
-      const element = card.current;
-      if (!element) {
-        refused({ code: 'element_unmounted', message: '' });
+      const confirmed = await (card.current as CardFields).handleNextAction();
+      if ('error' in confirmed) {
+        refused(confirmed.error);
         return;
       }
-      const confirmed = await element.handleNextAction();
-      if (confirmed?.error) refused(confirmed.error);
+      setBusy(null);
+      onSaved(confirmed);
     } catch (e) {
       setBusy(null);
       setProblem(message(e));
@@ -290,8 +317,8 @@ function LinkCardForm({ busy, setBusy, onSaved, onClose }: FormProps) {
     setAgain(null);
     setBusy('saving');
     const made = await element.createToken();
-    if (!made.cardToken) {
-      refused(made.error ?? { code: 'unknown_error', message: '' });
+    if ('error' in made) {
+      refused(made.error);
       return;
     }
     await send({ cardToken: made.cardToken, autoTopUp: choice });
@@ -303,6 +330,9 @@ function LinkCardForm({ busy, setBusy, onSaved, onClose }: FormProps) {
       <h3 id="link-card-title">Link your card</h3>
       {step === 'opening' && <p className="muted">Loading...</p>}
       <div ref={box} hidden={step !== 'ready'} />
+      {step === 'ready' && !hasPerfloJs() && (
+        <p className="muted small">Test mode: the test card ending 4242 is saved. No card is typed here.</p>
+      )}
       {step === 'ready' && (
         <>
           <label className="check">

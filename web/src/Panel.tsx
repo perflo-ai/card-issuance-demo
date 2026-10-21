@@ -287,8 +287,7 @@ export function Panel(props: Props) {
                 </ul>
               </>
             )}
-            {/* Perflo's card fields open with Perflo.js, which the test payments service does not have. */}
-            {hasPerfloJs() && <LinkedCards onAccountChanged={onAccountChanged} />}
+            <LinkedCards onAccountChanged={onAccountChanged} />
           </>
         )}
         {frame && (

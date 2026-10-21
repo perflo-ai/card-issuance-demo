@@ -40,32 +40,28 @@ export interface PerfloElement {
   on(event: 'loaderror', handler: (event: { elementType: ElementKind; error: ElementError }) => void): PerfloElement;
 }
 
-/** What the card element reports once a card it confirmed is saved: the same answer as a plain save. */
+/** A card saved through handleNextAction(): the same answer Tiny's server gets on a plain save. */
 export interface CardSaved {
   linkedCard: Omit<LinkedCardView, 'usedForAutoTopUp'>;
   autoTopUp: { status: 'on'; monthlyLimit: string } | null;
 }
 
 /**
- * Perflo's card fields. The card number never reaches Tiny's page: createToken() hands back a single-use
- * token for Tiny's server to save the card with. Tiny draws the automatic top-ups switch and limit itself
- * and tells the element with update(), which shows the agreement the person accepts. Actions never reject:
- * a refusal comes back as `error`.
+ * Perflo's card fields (perflo-backend-api src/widget/perflo.js). The card number never reaches Tiny's page:
+ * createToken() hands back a single-use token for Tiny's server to save the card with. Tiny draws the
+ * automatic top-ups switch and limit itself and tells the element with update(), which shows the agreement
+ * the person accepts. Each action resolves; a refusal comes back as `error`.
  */
 export interface PerfloCardElement {
   mount(target: HTMLElement): PerfloCardElement;
   destroy(): void;
-  update(options: { autoTopUp: AutoTopUpChoice }): Promise<ActionResult | undefined>;
-  createToken(): Promise<{ cardToken?: string; error?: ElementError }>;
-  /** After Tiny's server answered requires_action: the card's bank asks the person to confirm, inside the element. */
-  handleNextAction(): Promise<ActionResult | undefined>;
-  on(event: 'change', handler: (change: ElementChange) => void): PerfloCardElement;
+  /** {} or { error } (auto_top_up_unavailable, monthly_limit_invalid). */
+  update(options: { autoTopUp: AutoTopUpChoice }): Promise<ActionResult>;
+  createToken(): Promise<{ cardToken: string } | { error: ElementError }>;
+  /** After Tiny's server answered requires_action: the bank's check inside the element, then the card saved. */
+  handleNextAction(): Promise<CardSaved | { error: ElementError }>;
   on(event: 'ready', handler: (event: { elementType: ElementKind }) => void): PerfloCardElement;
   on(event: 'loaderror', handler: (event: { elementType: ElementKind; error: ElementError }) => void): PerfloCardElement;
-  /** The card confirmed through handleNextAction() is saved. */
-  on(event: 'saved', handler: (event: CardSaved) => void): PerfloCardElement;
-  /** Confirming through handleNextAction() did not save the card. The contract does not fix this payload's shape. */
-  on(event: 'error', handler: (event: { error?: ElementError }) => void): PerfloCardElement;
 }
 
 /** Only the appearance the light and dark switch changes: every other look is set by Tiny's server. */

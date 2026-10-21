@@ -37,7 +37,8 @@ interface Call {
   body: unknown;
   signed: boolean;
 }
-type Answer = { status: number; body?: unknown; headers?: Record<string, string> };
+/** An answer Perflo gives, or 'down': no answer at all (the connection failed). */
+type Answer = { status: number; body?: unknown; headers?: Record<string, string> } | 'down';
 
 /** Perflo, scripted: each route answers from its own queue, and every call is recorded with its signature checked. */
 function scripted(routes: Record<string, Answer[]>) {
@@ -52,6 +53,7 @@ function scripted(routes: Record<string, Answer[]>) {
     calls.push({ method, path: url.pathname, headers, body: raw.length > 0 ? JSON.parse(raw.toString('utf8')) : null, signed });
     const next = Object.hasOwn(routes, key) ? routes[key].shift() : undefined;
     if (!next) throw new Error(`unscripted call: ${key}`);
+    if (next === 'down') throw new TypeError('fetch failed');
     return new Response(next.body === undefined ? null : JSON.stringify(next.body), {
       status: next.status,
       headers: { 'Content-Type': 'application/json', ...next.headers },
@@ -116,11 +118,42 @@ describe('saving a card: one Idempotency-Key per Save, the same one when that Sa
     const another = await post('/demo/linked-cards', withLimit(TOKEN_B));
     expect([first.status, retry.status, another.status]).toEqual([200, 200, 200]);
     const keys = calls.map((c) => c.headers['idempotency-key']);
-    expect(keys[0]).toMatch(/^lc-save-[0-9a-f]{64}$/);
+    expect(keys[0]).toMatch(/^lc-save-[0-9a-f]{64}-0$/);
     expect(keys[1]).toBe(keys[0]);
     expect(keys[2]).not.toBe(keys[0]);
     // The key says nothing about the token it came from.
     expect(keys[0]).not.toContain(TOKEN_A.slice('ctok_'.length));
+  });
+
+  it('Try again after payments were down sends the same card token under a NEW key, so a 503 is never replayed', async () => {
+    const busy: Answer = {
+      status: 503,
+      body: { error: { code: 'service_unavailable', message: 'This is not available right now. Try again in a few minutes.' } },
+    };
+    const { calls, post } = await setup({ [LINK_PATH]: [busy, busy, { status: 201, body: LINKED_ANSWER }] });
+    const first = await post('/demo/linked-cards', withLimit(TOKEN_A));
+    expect([first.status, first.body.error.message]).toEqual([503, 'Payments are busy right now. Try again in a moment.']);
+    expect((await post('/demo/linked-cards', withLimit(TOKEN_A))).status).toBe(503);
+    expect((await post('/demo/linked-cards', withLimit(TOKEN_A))).body.status).toBe('linked');
+    expect(calls.map((c) => (c.body as { card_token: string }).card_token)).toEqual([TOKEN_A, TOKEN_A, TOKEN_A]);
+    const keys = calls.map((c) => c.headers['idempotency-key']);
+    expect(new Set(keys).size).toBe(3);
+    expect(keys.map((k) => k.slice(-2))).toEqual(['-0', '-1', '-2']);
+  });
+
+  it('Try again after no answer at all sends the same key, so payments replay a link that went through', async () => {
+    const { calls, post } = await setup({ [LINK_PATH]: ['down', { status: 201, body: LINKED_ANSWER }] });
+    expect((await post('/demo/linked-cards', withLimit(TOKEN_A))).status).toBe(503);
+    expect((await post('/demo/linked-cards', withLimit(TOKEN_A))).body.status).toBe('linked');
+    expect(calls[1].headers['idempotency-key']).toBe(calls[0].headers['idempotency-key']);
+  });
+
+  it('a final refusal keeps its key: sent again, payments answer it the same way', async () => {
+    const declined: Answer = { status: 402, body: { error: { code: 'card_declined', message: 'The bank declined this card.' } } };
+    const { calls, post } = await setup({ [LINK_PATH]: [declined, declined] });
+    await post('/demo/linked-cards', withLimit(TOKEN_A));
+    await post('/demo/linked-cards', withLimit(TOKEN_A));
+    expect(calls[1].headers['idempotency-key']).toBe(calls[0].headers['idempotency-key']);
   });
 
   it('two clicks at once wait for each other and get the same answer, under the same key', async () => {
@@ -188,7 +221,8 @@ describe('input is checked before anything reaches Perflo', () => {
     ['no body fields', {}],
     ['autoTopUp left out (null or a limit, never missing)', { cardToken: TOKEN_A }],
     ['a token of another kind', { cardToken: 'pm_123', autoTopUp: null }],
-    ['a token with characters no token has', { cardToken: 'ctok_a b<c>', autoTopUp: null }],
+    ['a token with characters no token has', { cardToken: `ctok_${'a'.repeat(41)} b`, autoTopUp: null }],
+    ['a token of the wrong length', { cardToken: `ctok_${'a'.repeat(42)}`, autoTopUp: null }],
     ['a limit without cents', withLimit(TOKEN_A, '250')],
     ['a zero limit', withLimit(TOKEN_A, '0.00')],
     ['a negative limit', withLimit(TOKEN_A, '-5.00')],
@@ -250,8 +284,6 @@ describe('Perflo’s refusals reach the browser as the existing routes pass them
         'This card cannot be used for automatic top-ups.',
       ],
       [refusal(409, 'auto_top_up_already_on', 'Automatic top-ups are already on.'), 409, 'Automatic top-ups are already on.'],
-      [refusal(409, 'auto_top_up_paused', 'Automatic top-ups are paused.'), 409, 'Automatic top-ups are paused.'],
-      [refusal(409, 'auto_top_up_unavailable', 'Automatic top-ups are not available.'), 409, 'Automatic top-ups are not available.'],
       [
         refusal(422, 'monthly_limit_invalid', 'Choose a monthly limit between $50.00 and $2,000.00.'),
         400,
@@ -266,14 +298,49 @@ describe('Perflo’s refusals reach the browser as the existing routes pass them
     }
   });
 
+  it('Perflo’s words meant for whoever built the page reach the person in Tiny’s words', async () => {
+    const cases: Array<[Answer, number, string]> = [
+      [
+        refusal(409, 'auto_top_up_paused', 'Automatic top-ups are paused for this user. They need to contact Perflo support.'),
+        409,
+        'Automatic top-ups are paused on your account. Contact support to turn them back on.',
+      ],
+      [
+        refusal(409, 'auto_top_up_unavailable', 'Automatic top-ups are not available for this user right now.'),
+        409,
+        'Automatic top-ups are not available for you right now. You can still save the card on its own.',
+      ],
+      [
+        refusal(409, 'email_missing', 'This user needs a confirmed email address on their account before a card can be linked.'),
+        409,
+        'Your account needs a confirmed email address first.',
+      ],
+      [
+        refusal(503, 'service_unavailable', 'This is not available right now. Try again in a few minutes.'),
+        503,
+        'Payments are busy right now. Try again in a moment.',
+      ],
+      [
+        refusal(409, 'conflict', 'Publish your brand in Perflo before you link cards: your name is shown with every linked card.'),
+        409,
+        'Saving a card is not available in Tiny yet. Try again later.',
+      ],
+    ];
+    for (const [answer, status, message] of cases) {
+      const { post } = await setup({ [LINK_PATH]: [answer] });
+      const res = await post('/demo/linked-cards', withLimit(TOKEN_A));
+      expect([res.status, res.body.error.message]).toEqual([status, message]);
+    }
+  });
+
   it('too many tries keeps Perflo’s Retry-After for the browser', async () => {
     const { post } = await setup({
-      [LINK_PATH]: [refusal(429, 'too_many_attempts', 'Too many tries. Wait a while and try again.', { 'Retry-After': '30' })],
+      [LINK_PATH]: [refusal(429, 'too_many_attempts', 'Too many cards were tried. Wait a while and try again.', { 'Retry-After': '30' })],
     });
     const res = await post('/demo/linked-cards', withLimit(TOKEN_A));
     expect(res.status).toBe(429);
     expect(res.headers['retry-after']).toBe('30');
-    expect(res.body.error.message).toBe('Too many tries. Wait a while and try again.');
+    expect(res.body.error.message).toBe('Too many cards were tried. Wait a while and try again.');
   });
 
   it('a spent or expired card token asks the person to enter the card again, in Tiny’s words', async () => {
@@ -317,7 +384,7 @@ describe('the card element, the list, removing a card and turning automatic top-
           body: {
             linked_cards: [
               { id: CARD_ID, brand: 'visa', last4: '4242', exp_month: 12, exp_year: 2030, used_for_auto_top_up: true },
-              { id: `${CARD_ID}x`, brand: null, last4: '0005', exp_month: null, exp_year: null, used_for_auto_top_up: false },
+              { id: `${CARD_ID}x`, brand: null, last4: '0005', exp_month: 1, exp_year: 2031, used_for_auto_top_up: false },
             ],
           },
         },
@@ -331,7 +398,7 @@ describe('the card element, the list, removing a card and turning automatic top-
     expect((await post('/demo/linked-cards/form')).body).toEqual({ clientSecret: 'lcs_secret.value' });
     expect((await get('/demo/linked-cards')).body.linkedCards).toEqual([
       { id: CARD_ID, brand: 'visa', last4: '4242', expMonth: 12, expYear: 2030, usedForAutoTopUp: true },
-      { id: `${CARD_ID}x`, brand: null, last4: '0005', expMonth: null, expYear: null, usedForAutoTopUp: false },
+      { id: `${CARD_ID}x`, brand: null, last4: '0005', expMonth: 1, expYear: 2031, usedForAutoTopUp: false },
     ]);
     expect((await post(`/demo/linked-cards/${CARD_ID}/remove`)).body).toEqual({ ok: true });
     expect((await get('/demo/auto-top-up')).body).toEqual({
@@ -415,7 +482,7 @@ describe('the card form on Tiny’s page', () => {
   it('names cards and automatic top-ups in plain words', () => {
     const card = { id: CARD_ID, brand: 'visa', last4: '4242', expMonth: 3, expYear: 2030, usedForAutoTopUp: true };
     expect(linkedCardName(card)).toBe('Visa ending 4242, expires 03/30');
-    expect(linkedCardName({ ...card, brand: null, expMonth: null })).toBe('Card ending 4242');
+    expect(linkedCardName({ ...card, brand: null })).toBe('Card ending 4242, expires 03/30');
     expect(autoTopUpText({ status: 'on', monthlyLimit: '250.00', linkedCardId: CARD_ID }, [card])).toBe(
       'On, up to $250.00 a month, from the card ending 4242',
     );

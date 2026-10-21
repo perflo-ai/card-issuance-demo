@@ -35,15 +35,13 @@ const lookBody = z.object({ look: z.enum(LOOK_IDS) }).strict();
  * Save on the card form: the token the card element gave, and automatic top-ups up to a monthly limit
  * ("250.00", the API's own format) or null for the card only. Perflo decides the limit's bounds.
  */
-const linkCardBody = z
-  .object({
-    cardToken: z.string().regex(CARD_TOKEN),
-    autoTopUp: z
-      .object({ monthlyLimit: z.string().refine((value) => isApiAmount(value) && apiAmountToCents(value) > 0) })
-      .strict()
-      .nullable(),
-  })
-  .strict();
+const autoTopUpChoice = z
+  .object({ monthlyLimit: z.string().refine((value) => isApiAmount(value) && apiAmountToCents(value) > 0) })
+  .strict()
+  .nullable();
+const linkCardBody = z.object({ cardToken: z.string().regex(CARD_TOKEN), autoTopUp: autoTopUpChoice }).strict();
+/** Test mode's card token request: the card form's client_secret (the shape Perflo's are) and the choice. */
+const mockCardTokenBody = z.object({ clientSecret: z.string().regex(/^[A-Za-z0-9_.-]{1,256}$/), autoTopUp: autoTopUpChoice }).strict();
 const linkedCardId = z.string().regex(LINKED_CARD_ID);
 const eventsQuery = z.object({ after: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0) });
 
@@ -463,6 +461,32 @@ export function createDemoApp({ config, store, service, log, logger, fetchImpl =
     if (!response.ok) throw new HttpError(502, 'The test service did not accept that.');
     log.add(user.id, 'demo', 'Test control: access turned off on the payments side');
     res.json({ ok: true });
+  });
+
+  /**
+   * Mock mode only: the card token Perflo's card element would make, for the test card. The test payments
+   * service checks the card form and the limit exactly as the card element's own call does.
+   */
+  app.post('/demo/mock/card-token', async (req, res) => {
+    if (config.mode !== 'mock') throw new HttpError(404, 'Not found.');
+    currentUser(req);
+    const body = parse(mockCardTokenBody, req.body, unreadable);
+    let response: globalThis.Response;
+    try {
+      response = await fetchImpl(`${config.perfloOrigin}/mock/control/card-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_secret: body.clientSecret, monthly_limit: body.autoTopUp?.monthlyLimit ?? null }),
+        signal: AbortSignal.timeout(MOCK_CONTROL_TIMEOUT_MS),
+      });
+    } catch {
+      throw new HttpError(502, 'The test service did not answer. Try again.');
+    }
+    const answer = (await response.json().catch(() => null)) as { card_token?: unknown; error?: { message?: unknown } } | null;
+    if (response.ok && typeof answer?.card_token === 'string') return res.json({ cardToken: answer.card_token });
+    // The test service's refusals are written for the person (server/mock/mockPerflo.ts).
+    const words = typeof answer?.error?.message === 'string' ? answer.error.message : 'The test service did not accept that.';
+    throw new HttpError(response.status >= 400 && response.status < 500 ? response.status : 502, words);
   });
 
   app.post('/demo/mock/stop-at-checkout', (req, res) => {

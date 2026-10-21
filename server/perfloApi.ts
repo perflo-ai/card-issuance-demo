@@ -161,20 +161,19 @@ const revealOrReplay = z.union([revealLinkResponse, z.object({ message: z.string
 export const cancelResponse = z.object({ status: z.literal('cancelled'), amount_returned: returned });
 
 /**
- * Perflo's id for a card linked through Tiny: opaque, the same scheme as its other partner ids. The token
- * the card element hands back for one Save is only known by its prefix (`ctok_...`): any other shape is
- * Perflo's to refuse (card_token_invalid), so Tiny checks only the prefix and the url-safe characters.
+ * Perflo's id for a card linked through Tiny, and the single-use token the card element hands back for one
+ * Save: both as Perflo makes them (perflo-backend-api src/partnerV2/ids.ts, src/widget/perflo.js).
  */
 export const LINKED_CARD_ID = /^lc_[A-Za-z0-9_-]{22,64}$/;
-export const CARD_TOKEN = /^ctok_[A-Za-z0-9_.-]{1,256}$/;
+export const CARD_TOKEN = /^ctok_[A-Za-z0-9_-]{43}$/;
 const linkedCardId = z.string().regex(LINKED_CARD_ID);
-/** Brand and expiry may be missing on a card the card network did not describe; Tiny shows what is there. */
+/** The brand is null when the card network did not name one. */
 const linkedCard = z.object({
   id: linkedCardId,
   brand: z.string().nullable(),
   last4: z.string().regex(/^[0-9]{4}$/),
-  exp_month: z.number().int().min(1).max(12).nullable(),
-  exp_year: z.number().int().min(2000).max(9999).nullable(),
+  exp_month: z.number().int().min(1).max(12),
+  exp_year: z.number().int().min(2000).max(2200),
 });
 export type LinkedCard = z.infer<typeof linkedCard>;
 
@@ -500,10 +499,7 @@ export class PerfloApi {
     return this.parse(frameLinkResponse, r.status, r.json, [201]);
   }
 
-  /**
-   * The card element's page session. No body for the brand default, as for limits-link. The contract does
-   * not name the success status; limits-link and top-ups answer 201, so 201 is expected and 200 accepted.
-   */
+  /** The card element's page session, 201. No body for the brand default, as for limits-link. */
   async linkedCardForm(
     demoUserId: string,
     userId: string,
@@ -514,12 +510,13 @@ export class PerfloApi {
       token,
       ...(Object.keys(look).length > 0 ? { body: look } : {}),
     });
-    return this.parse(linkedCardFormResponse, r.status, r.json, [200, 201], r.retryAfter);
+    return this.parse(linkedCardFormResponse, r.status, r.json, [201], r.retryAfter);
   }
 
   /**
-   * Saves the card behind one card token. Never sent twice here; a retry is the caller's, with the same key.
-   * These routes keep Perflo's Retry-After (too_many_attempts, rate_limited) for the browser, as cancel does.
+   * Saves the card behind one card token: 201 linked, 202 requires_action. Never sent twice here; a retry is
+   * the caller's (service.ts linkCard picks its key). These routes keep Perflo's Retry-After
+   * (too_many_attempts, rate_limited, service_unavailable) for the browser, as cancel does.
    */
   async linkCard(
     demoUserId: string,

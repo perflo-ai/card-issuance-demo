@@ -70,6 +70,9 @@ Things to try, in order:
    - **Turn off Tiny's access**: your next order asks you to reconnect, then continues by itself.
 9. **Add money** in the side panel: type the amount in Tiny's own field, and Perflo's payment page for that amount
    opens in a new tab. **Change limits** opens Perflo's frame in the panel.
+10. **Linked cards** in the side panel: **Link your card**, turn on **Top up automatically**, pick a monthly limit and
+    **Save**. Test mode has no card fields: the test card ending 4242 is saved. The card is listed with **Remove**, and
+    automatic top-ups show as on with **Turn off**.
 
 Each order in the chat lists its steps (identity check and adding money only when the order asked for them)
 and says what Tiny is doing or waiting for right now, from the statuses payments returned.
@@ -185,7 +188,8 @@ offers a partner no way to cancel a top-up, so Tiny's **Cancel** closes the tab 
 payment.
 
 **Mock mode** has no Perflo.js: pages open from their links as before, the Look picker is hidden and the UI elements
-page says it needs live mode. The mock's add money page follows the same rules as Perflo's: it needs an amount, opens
+page says it needs live mode. Link your card saves the test service's test card in place of Perflo's card element
+(same routes, same checks on the card token and the agreed limit). The mock's add money page follows the same rules as Perflo's: it needs an amount, opens
 straight on the payment for it, refuses to be framed, tells the window that opened it, and its X and Cancel ask before
 they cancel.
 
@@ -272,6 +276,28 @@ Every call goes to `PERFLO_API_BASE` (`https://api.perflo.ai` in production). Th
   it (nothing in the query is read), it is closed when that session signs out or linking replaces it (the
   page opens it again with its new cookie), the session is checked again before every message, and a
   request another site started (`Sec-Fetch-Site` other than `same-origin`) is refused.
+- **Linked cards** (perflo-backend-api #392, `src/partnerV2/linkedCards.ts`). Every call is signed and carries the
+  person's access token. Tiny's routes on the left, Perflo's on the right:
+
+  | Tiny (`server/app.ts`)               | Perflo                                                                       |
+  | ------------------------------------ | ---------------------------------------------------------------------------- |
+  | `POST /demo/linked-cards/form`       | `POST /users/{id}/linked-cards/form` (201, the card element's client_secret) |
+  | `POST /demo/linked-cards`            | `POST /users/{id}/linked-cards` (201 linked, 202 requires_action)            |
+  | `GET /demo/linked-cards`             | `GET /users/{id}/linked-cards`                                               |
+  | `POST /demo/linked-cards/:id/remove` | `DELETE /users/{id}/linked-cards/{linked_card_id}` (204)                     |
+  | `GET /demo/auto-top-up`              | `GET /users/{id}/auto-top-up` (on, paused or off; never why)                 |
+  | `POST /demo/auto-top-up/turn-off`    | `DELETE /users/{id}/auto-top-up` (200 `{ status: 'off' }`; the card stays)   |
+  | `POST /demo/mock/card-token` (mock)  | the test service's `POST /mock/control/card-token`                           |
+
+  The page (`web/src/LinkedCards.tsx`, in the Payments panel) mounts Perflo's `card` element, draws Tiny's own
+  **Top up automatically** switch and monthly limit below it and passes them on with `card.update({ autoTopUp })`,
+  which shows the agreement. Save calls `card.createToken()`, then Tiny's server with the card token; on
+  `requires_action` it calls `card.handleNextAction()`, which answers the saved card. The card number never reaches
+  Tiny. The Idempotency-Key comes from the card token, so each Save has its own. **Try again** (shown when Tiny or
+  payments did not answer, or payments were down) sends the same card token again: under the same key after no
+  answer at all, so a link that went through is replayed; under a new key after payments answered they were down,
+  because that answer is recorded under the old key and Perflo gives the card token back after an outage.
+
 - **Cancel order**: `POST /checkout/orders/{id}/cancel` is safe to send again (a cancelled order answers what was
   recorded). While it answers 503 (payments busy, for example the card issuer briefly busy), or no answer
   comes in time, the page stays on "Cancelling..." and sends it again after 3, 6, 12,

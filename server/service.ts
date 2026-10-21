@@ -14,6 +14,7 @@ import {
   PerfloApiError,
   PerfloUnavailableError,
   type AccountResponse,
+  type LinkCardResponse,
   type LinkedCard,
   type OrderResponse,
   type PerfloApi,
@@ -39,6 +40,8 @@ export class DemoError extends Error {
   constructor(
     readonly code: 'not_linked' | 'not_found' | 'conflict' | 'bad_request',
     message: string,
+    /** For the server log only, when the operator has something to fix. */
+    readonly operatorNote?: string,
   ) {
     super(message);
     this.name = 'DemoError';
@@ -55,6 +58,12 @@ export class DemoService {
    * to the order before its answer (with the order id) is stored here; such a webhook waits for these.
    */
   private readonly placing = new Set<Promise<unknown>>();
+  /**
+   * How many Idempotency-Keys a card token's Save has used up, kept only while a Save of it failed on
+   * Perflo's side (see linkCard). ponytail: in memory; a restart starts at the first key again, which
+   * at worst replays that one failure once.
+   */
+  private readonly linkKeyGenerations = new Map<string, number>();
   /** The person's open pages, which hear about changes as they happen. */
   /** Each stream is checked against the store before every write: only a session that still opens this account hears it. */
   readonly live = new LiveUpdates((sessionId, demoUserId) => this.store.userForSession(sessionId)?.id === demoUserId);
@@ -586,19 +595,42 @@ export class DemoService {
   }
 
   /**
-   * Saves the card behind one card token. The Idempotency-Key comes from that token: each Save makes a new
-   * token, so each Save gets its own key, and "Try again" on a Save whose answer never came resends the
-   * same token, so Perflo replays that Save instead of linking twice. One at a time per key, so a double
-   * click waits for the first answer and gets the same one.
+   * Saves the card behind one card token. Each Save makes a new token, so each Save gets its own
+   * Idempotency-Key, from that token. "Try again" sends the same token again. After no answer at all it
+   * keeps the key, so Perflo replays the first send if it got through. After an answered failure on
+   * Perflo's side (a 5xx, such as a 503 while payments are down) it takes a new key: Perflo records that
+   * answer under the old key and would only replay it, and it gives the card token back after an outage,
+   * so the new key links it once (payments key the link on the token).
+   * One at a time per token, so a double click waits for the first answer and gets the same one.
    */
   async linkCard(user: DemoUser, cardToken: string, autoTopUp: AutoTopUpChoice): Promise<LinkCardView> {
     const perflo = this.linkedOrThrow(user);
-    const key = linkCardIdempotencyKey(user.id, cardToken, autoTopUp);
-    return this.exclusive(`link-card:${key}`, async () => {
-      const answer = await this.api.linkCard(user.id, perflo.userId, perflo.token, key, {
-        card_token: cardToken,
-        auto_top_up: autoTopUp ? { monthly_limit: autoTopUp.monthlyLimit } : null,
-      });
+    const base = linkCardIdempotencyKey(user.id, cardToken, autoTopUp);
+    return this.exclusive(`link-card:${base}`, async () => {
+      const generation = this.linkKeyGenerations.get(base) ?? 0;
+      let answer: LinkCardResponse;
+      try {
+        answer = await this.api.linkCard(user.id, perflo.userId, perflo.token, `${base}-${generation}`, {
+          card_token: cardToken,
+          auto_top_up: autoTopUp ? { monthly_limit: autoTopUp.monthlyLimit } : null,
+        });
+      } catch (error) {
+        const noAnswer = error instanceof PerfloUnavailableError && error.retryable;
+        const failedThere =
+          (error instanceof PerfloApiError && error.httpStatus >= 500) || (error instanceof PerfloUnavailableError && !error.retryable);
+        if (failedThere) this.linkKeyGenerations.set(base, generation + 1);
+        else if (!noAnswer) this.linkKeyGenerations.delete(base);
+        if (error instanceof PerfloApiError && error.code === 'conflict') {
+          // The one conflict on this route: Tiny's brand is not published in Perflo, so no card can be linked.
+          throw new DemoError(
+            'conflict',
+            'Saving a card is not available in Tiny yet. Try again later.',
+            'payments refused the link because Tiny has no published brand: publish it in Perflo Builder',
+          );
+        }
+        throw error;
+      }
+      this.linkKeyGenerations.delete(base);
       if (answer.status === 'requires_action') {
         this.log.add(user.id, 'demo', 'The card needs confirming in the card form');
         return { status: 'requires_action' };

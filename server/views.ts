@@ -179,8 +179,8 @@ export interface LinkedCardView {
   id: string;
   brand: string | null;
   last4: string;
-  expMonth: number | null;
-  expYear: number | null;
+  expMonth: number;
+  expYear: number;
   /** True when Tiny's automatic top-ups charge this card. */
   usedForAutoTopUp: boolean;
 }

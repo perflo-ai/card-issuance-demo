@@ -10,6 +10,8 @@
  *   POST /mock-merchant/checkout     a shop that charges a one-time card (demo checkout, mock mode)
  *   GET|POST /mock/kyc               an identity check page (kyc_url)
  *   POST /mock/control/revoke        simulates the person turning off Tiny's access
+ *   POST /mock/control/card-token    the card token the card element would make, for the test card
+ *                                    (ending 4242): there is no Perflo.js in mock mode
  *   GET  /mock-relay/partner-cards/:cardId/sensitive   the reveal link (already decrypted), signed and with
  *                                                     the person's Bearer token, as the real one requires
  *
@@ -27,7 +29,7 @@
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { centsToApiAmount, isApiAmount, apiAmountToCents } from '../money.js';
+import { centsToApiAmount, formatUsd, isApiAmount, apiAmountToCents } from '../money.js';
 import { verifySignature } from '../signing.js';
 import { webhookHeaders } from '../webhooks.js';
 import { frameAssets, framePage, kycPage } from './mockPages.js';
@@ -48,6 +50,11 @@ const MOCK_PARTNER_DAILY_CAP_CENTS = 1_000_000;
 /** Orders above this amount answer `issuing` first, so that state can be demonstrated. */
 export const MOCK_SLOW_ISSUE_ABOVE_CENTS = 10_000;
 const MAX_TOP_UP_CENTS = 1_000_000;
+/** Linked cards (illustrative, like the other mock rules): a card token lasts 15 minutes, five per card form. */
+const CARD_TOKEN_TTL_MS = 15 * 60_000;
+const CARD_TOKENS_PER_FORM = 5;
+const MIN_MONTHLY_LIMIT_CENTS = 5_000;
+const MAX_MONTHLY_LIMIT_CENTS = 200_000;
 
 // SPEC 1 and 6.3: spend fee 3.3% + $0.25, minimum load $15, card fee $1.
 export function quote(orderCents: number): { loadCents: number; cardFeeCents: number; totalCents: number } {
@@ -214,6 +221,12 @@ export function createMockPerflo(options: MockOptions) {
   const userReplays = new Map<string, { status: number; body: Record<string, unknown> }>();
   const revealKeys = new Set<string>();
   const spends: Array<{ userId: string; at: number; cents: number }> = [];
+  /** Card forms (POST /users/{id}/linked-cards/form), by client_secret, and the card tokens they made. */
+  const cardForms = new Map<string, { userId: string; expiresAt: number; tokens: number }>();
+  const cardTokens = new Map<string, { userId: string; expiresAt: number; used: boolean; consentCents: number | null }>();
+  /** Each person's linked cards, and their automatic top-ups (the card they use, and the monthly limit). */
+  const linkedCards = new Map<string, Array<{ id: string; brand: string; last4: string; exp_month: number; exp_year: number }>>();
+  const autoTopUps = new Map<string, { cardId: string; monthlyLimitCents: number }>();
 
   const frameUrl = (purpose: Purpose, frameId: string) =>
     `${options.selfOrigin}/v1/frames/${purpose}?session=${encodeURIComponent(frameId)}`;
@@ -780,6 +793,106 @@ export function createMockPerflo(options: MockOptions) {
     });
   });
 
+  // Linked cards (perflo-backend-api src/partnerV2/linkedCards.ts): the test card is saved, no money moves.
+  v2.post('/users/:userId/linked-cards/form', (req, res) => {
+    const user = userFromToken(req, req.params.userId);
+    const clientSecret = `fs_${randomBytes(32).toString('base64url')}`;
+    const expiresAt = now() + FRAME_TTL_MS;
+    cardForms.set(clientSecret, { userId: user.userId, expiresAt, tokens: 0 });
+    res.status(201).json({ client_secret: clientSecret, expires_at: new Date(expiresAt).toISOString() });
+  });
+
+  const linkCardBody = z
+    .object({ card_token: z.string(), auto_top_up: z.object({ monthly_limit: amountString }).strict().nullable() })
+    .strict();
+
+  v2.post('/users/:userId/linked-cards', (req, res) => {
+    const key = req.get('idempotency-key');
+    if (!key || key.length > 255) throw new HttpError(400, 'idempotency_key_required', 'This request needs an Idempotency-Key header.');
+    const user = userFromToken(req, req.params.userId);
+    const body = linkCardBody.safeParse(req.body);
+    if (!body.success) throw new HttpError(400, 'invalid_request', 'Some details are missing or not valid.');
+    const scope = `ptn:${options.partnerId}:linked-cards:${key}`;
+    const bodyHash = createHash('sha256')
+      .update((req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.alloc(0))
+      .digest('hex');
+    const stored = idempotency.get(scope);
+    if (stored) {
+      if (stored.bodyHash !== bodyHash) {
+        throw new HttpError(409, 'idempotency_key_reused', 'This key was already used for a different request. Use a new key.');
+      }
+      return res.status(stored.status).json(stored.body);
+    }
+    const answer = (status: number, payload: unknown) => {
+      idempotency.set(scope, { bodyHash, status, body: payload });
+      return res.status(status).json(payload);
+    };
+    const refuse = (status: number, code: string, message: string) => answer(status, { error: { code, message } });
+
+    const token = cardTokens.get(body.data.card_token);
+    if (!token || token.used || token.userId !== user.userId || token.expiresAt <= now()) {
+      return refuse(422, 'card_token_invalid', 'This card_token cannot be used. Ask the card element for a new one.');
+    }
+    const asked = body.data.auto_top_up ? apiAmountToCents(body.data.auto_top_up.monthly_limit) : null;
+    if (asked !== null && token.consentCents === null) {
+      return refuse(422, 'consent_missing', 'The user did not agree to automatic top-ups in the card element.');
+    }
+    if (asked !== null && token.consentCents !== asked) {
+      return refuse(422, 'consent_mismatch', 'This monthly limit is not the one the user agreed to in the card element.');
+    }
+    if (asked !== null && autoTopUps.has(user.userId)) {
+      return refuse(
+        409,
+        'auto_top_up_already_on',
+        'Automatic top-ups are already on. Turn them off or remove the card first, then try again.',
+      );
+    }
+    token.used = true;
+    const card = { id: id('lc_', 32), brand: 'visa', last4: '4242', exp_month: 12, exp_year: 2030 };
+    linkedCards.set(user.userId, [...(linkedCards.get(user.userId) ?? []), card]);
+    if (asked !== null) autoTopUps.set(user.userId, { cardId: card.id, monthlyLimitCents: asked });
+    answer(201, {
+      status: 'linked',
+      linked_card: card,
+      auto_top_up: asked === null ? null : { status: 'on', monthly_limit: centsToApiAmount(asked) },
+    });
+  });
+
+  v2.get('/users/:userId/linked-cards', (req, res) => {
+    const user = userFromToken(req, req.params.userId);
+    const using = autoTopUps.get(user.userId)?.cardId;
+    res.json({ linked_cards: (linkedCards.get(user.userId) ?? []).map((card) => ({ ...card, used_for_auto_top_up: card.id === using })) });
+  });
+
+  v2.delete('/users/:userId/linked-cards/:linkedCardId', (req, res) => {
+    const user = userFromToken(req, req.params.userId);
+    const cards = linkedCards.get(user.userId) ?? [];
+    if (!cards.some((card) => card.id === req.params.linkedCardId)) throw new HttpError(404, 'not_found', 'We could not find that.');
+    linkedCards.set(
+      user.userId,
+      cards.filter((card) => card.id !== req.params.linkedCardId),
+    );
+    // Automatic top-ups that used the card turn off with it.
+    if (autoTopUps.get(user.userId)?.cardId === req.params.linkedCardId) autoTopUps.delete(user.userId);
+    res.status(204).end();
+  });
+
+  v2.get('/users/:userId/auto-top-up', (req, res) => {
+    const user = userFromToken(req, req.params.userId);
+    const on = autoTopUps.get(user.userId);
+    res.json(
+      on
+        ? { status: 'on', monthly_limit: centsToApiAmount(on.monthlyLimitCents), linked_card_id: on.cardId }
+        : { status: 'off', monthly_limit: null, linked_card_id: null },
+    );
+  });
+
+  v2.delete('/users/:userId/auto-top-up', (req, res) => {
+    const user = userFromToken(req, req.params.userId);
+    autoTopUps.delete(user.userId);
+    res.json({ status: 'off' });
+  });
+
   const orderBody = z.object({
     user_id: z.string().min(1),
     merchant: z.object({ name: z.string().min(1).max(200), domain: z.string().min(1).max(253) }),
@@ -1216,6 +1329,42 @@ export function createMockPerflo(options: MockOptions) {
     if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'Unknown person.' } });
     revokeAccess(user);
     res.json({ revoked: true });
+  });
+
+  /**
+   * What the card element's own call does when Save is pressed, for the test card: checks the card form,
+   * the monthly limit and the number of tries, records the agreement, and makes a card token. Its words are
+   * shown to the person as they are.
+   */
+  app.post('/mock/control/card-token', (req, res) => {
+    const body = z.object({ client_secret: z.string(), monthly_limit: amountString.nullable() }).safeParse(req.body);
+    const form = body.success ? cardForms.get(body.data.client_secret) : undefined;
+    if (!body.success || !form || form.expiresAt <= now()) {
+      return res.status(410).json({ error: { code: 'frame_expired', message: 'This card form has expired. Close it and start again.' } });
+    }
+    const cents = body.data.monthly_limit === null ? null : apiAmountToCents(body.data.monthly_limit);
+    if (cents !== null && (cents < MIN_MONTHLY_LIMIT_CENTS || cents > MAX_MONTHLY_LIMIT_CENTS)) {
+      return res.status(422).json({
+        error: {
+          code: 'monthly_limit_invalid',
+          message: `Choose a monthly limit between ${formatUsd(MIN_MONTHLY_LIMIT_CENTS)} and ${formatUsd(MAX_MONTHLY_LIMIT_CENTS)}.`,
+        },
+      });
+    }
+    if (form.tokens >= CARD_TOKENS_PER_FORM) {
+      return res
+        .status(429)
+        .json({ error: { code: 'too_many_attempts', message: 'Too many cards were tried. Wait a while and try again.' } });
+    }
+    form.tokens += 1;
+    const token = `ctok_${randomBytes(32).toString('base64url')}`;
+    cardTokens.set(token, {
+      userId: form.userId,
+      expiresAt: Math.min(now() + CARD_TOKEN_TTL_MS, form.expiresAt),
+      used: false,
+      consentCents: cents,
+    });
+    res.status(201).json({ card_token: token });
   });
 
   app.use((_req, res) => {

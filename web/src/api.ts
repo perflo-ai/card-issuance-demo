@@ -117,5 +117,8 @@ export const api = {
   turnOffAutoTopUp: () => request<{ ok: true }>('POST', '/demo/auto-top-up/turn-off'),
   events: (after: number) => request<{ events: LogEntry[] }>('GET', `/demo/events?after=${after}`),
   mockRevoke: () => request<{ ok: true }>('POST', '/demo/mock/revoke-access'),
+  /** Test mode only: a card token for the test card, as the card element would make one. */
+  mockCardToken: (clientSecret: string, autoTopUp: AutoTopUpChoice) =>
+    request<{ cardToken: string }>('POST', '/demo/mock/card-token', { clientSecret, autoTopUp }),
   mockStopAtCheckout: (on: boolean) => request<{ user: MeView }>('POST', '/demo/mock/stop-at-checkout', { on }),
 };

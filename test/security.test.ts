@@ -65,6 +65,7 @@ const STATE_CHANGING = [
   '/demo/auto-top-up/turn-off',
   '/demo/mock/revoke-access',
   '/demo/mock/stop-at-checkout',
+  '/demo/mock/card-token',
 ];
 
 describe('cross-site requests (CSRF and login CSRF)', () => {

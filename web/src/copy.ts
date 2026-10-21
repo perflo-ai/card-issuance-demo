@@ -206,11 +206,7 @@ export const PAYMENT_TAB_TEXT = {
 /** "Visa ending 4242, expires 12/30": what a linked card is called wherever it is listed. */
 export function linkedCardName(card: Pick<LinkedCardView, 'brand' | 'last4' | 'expMonth' | 'expYear'>): string {
   const brand = card.brand ? card.brand.charAt(0).toUpperCase() + card.brand.slice(1) : 'Card';
-  const expires =
-    card.expMonth !== null && card.expYear !== null
-      ? `, expires ${expiry(String(card.expMonth).padStart(2, '0'), String(card.expYear))}`
-      : '';
-  return `${brand} ending ${card.last4}${expires}`;
+  return `${brand} ending ${card.last4}, expires ${expiry(String(card.expMonth).padStart(2, '0'), String(card.expYear))}`;
 }
 
 /** Where automatic top-ups stand, in one line. Perflo never says why they are paused, so neither does Tiny. */
