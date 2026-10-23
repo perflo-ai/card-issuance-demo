@@ -4,7 +4,20 @@
  * that the Perflo shapes still match.
  */
 
-export type DeclineReason = 'over_order_limit' | 'over_monthly_limit' | 'partner_limit' | 'amount_invalid';
+/**
+ * Why Perflo declined an order. over_order_limit and over_monthly_limit are from before budgets (older
+ * orders); `other` is a reason added to Perflo after this demo, whose message Perflo still sends.
+ */
+export type DeclineReason =
+  | 'over_order_limit'
+  | 'over_monthly_limit'
+  | 'over_budget'
+  | 'partner_limit'
+  | 'amount_invalid'
+  | 'card_in_use'
+  | 'card_frozen'
+  | 'account_needs_support'
+  | 'other';
 
 export type IdentityStatus = 'not_required' | 'required' | 'pending' | 'approved' | 'rejected';
 
@@ -88,16 +101,34 @@ export interface CardDetailsView {
   last4: string;
 }
 
+/** How often a budget starts again. */
+export interface ResetsEvery {
+  count: number;
+  unit: 'hour' | 'day' | 'month';
+}
+
 export interface AccountView {
   user_id: string;
   balance: { amount: string; currency: 'USD' };
-  limits: {
-    per_order: { amount: string; currency: 'USD' };
-    per_month: { amount: string; currency: 'USD' };
+  /** From a Perflo before budgets only. */
+  limits?: {
+    per_order: { amount: string; currency: 'USD' } | null;
+    per_month: { amount: string; currency: 'USD' } | null;
     spent_this_month: { amount: string; currency: 'USD' };
-    remaining_this_month: { amount: string; currency: 'USD' };
+    remaining_this_month: { amount: string; currency: 'USD' } | null;
   };
-  identity_check: { required_above: string; status: IdentityStatus };
+  /** From a Perflo with budgets only; null when the person has no budget. */
+  budget?: {
+    amount: string;
+    resets_every: ResetsEvery;
+    used: string;
+    remaining: string;
+    period_started_at: string;
+    resets_at: string;
+  } | null;
+  identity_check: { required_above: string; status: IdentityStatus; used?: string; remaining_before_check?: string | null };
+  /** From a Perflo with budgets only. */
+  next_order?: { first_order: boolean; minimum_amount: string; maximum_amount: string | null };
   open_cards: Array<{ order_id: string; card_id?: string; last4: string; card_limit: string; expires_at: string | null }>;
 }
 

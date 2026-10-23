@@ -5,7 +5,7 @@ import { pageVisibility, useFocusWhenClosed, useOnMount, useWhenVisible } from '
 import { cancelUntilDone } from './cancel';
 import { onLive } from './live';
 import { openCardRows } from './cards';
-import { CANCEL_LABEL, CANCEL_SLOW_TEXT, identityText, LOOK_LABELS, money, pageExpiredText } from './copy';
+import { CANCEL_LABEL, CANCEL_SLOW_TEXT, dateAndTime, identityText, LOOK_LABELS, money, pageExpiredText, resetsEveryText } from './copy';
 import { Orders } from './Orders';
 import { hasPerfloJs } from './perflo';
 import { PerfloFrame } from './PerfloFrame';
@@ -35,6 +35,8 @@ interface Props {
   onOrder: (order: OrderView) => void;
   me: MeView;
   onMe: (me: MeView) => void;
+  /** Each account read, for the chat (when the budget starts again); null when payments are not set up. */
+  onAccount: (account: AccountView | null) => void;
 }
 
 /** The one Perflo page placed in the panel: change limits. Add money opens in a tab of its own. */
@@ -50,7 +52,7 @@ type Tab = (typeof TABS)[number];
 type Busy = 'limits' | 'revoke' | { cancel: string } | null;
 
 export function Panel(props: Props) {
-  const { perfloOrigin, mode, refreshKey, limitsRequest, onAccountChanged, me, onMe } = props;
+  const { perfloOrigin, mode, refreshKey, limitsRequest, onAccountChanged, me, onMe, onAccount } = props;
   const [account, setAccount] = useState<AccountView | null>(null);
   const [linked, setLinked] = useState<boolean | null>(null);
   const [frame, setFrame] = useState<OpenFrame>(null);
@@ -79,12 +81,13 @@ export function Panel(props: Props) {
           const result = await api.account();
           setLinked(result.linked);
           setAccount(result.linked ? result.account : null);
+          onAccount(result.linked ? result.account : null);
           setError('');
         } catch (e) {
           setError(e instanceof Error ? e.message : 'Could not load your balance.');
         }
       }),
-    [],
+    [onAccount],
   );
   const loadedFor = useRef<number | null>(null);
   useEffect(() => {
@@ -241,16 +244,31 @@ export function Panel(props: Props) {
               <span className="muted small"> balance</span>
             </p>
             <dl className="facts">
-              <dt>Per order, up to</dt>
-              <dd>{money(account.limits.per_order.amount)}</dd>
-              <dt>Per month, up to</dt>
-              <dd>{money(account.limits.per_month.amount)}</dd>
-              <dt>Used this month</dt>
-              <dd>{money(account.limits.spent_this_month.amount)}</dd>
-              <dt>Left this month</dt>
-              <dd>{money(account.limits.remaining_this_month.amount)}</dd>
+              {account.budget !== undefined ? (
+                <BudgetFacts budget={account.budget} />
+              ) : (
+                account.limits && <LimitsFacts limits={account.limits} />
+              )}
               <dt>Identity check</dt>
               <dd>{identityText(account.identity_check.status, account.identity_check.required_above)}</dd>
+              {account.identity_check.used !== undefined && account.identity_check.remaining_before_check != null && (
+                <>
+                  <dt>Spent toward the check</dt>
+                  <dd>{money(account.identity_check.used)}</dd>
+                  <dt>Left before the check</dt>
+                  <dd>{money(account.identity_check.remaining_before_check)}</dd>
+                </>
+              )}
+              {account.next_order && (
+                <>
+                  <dt>Next order</dt>
+                  <dd>
+                    {account.next_order.maximum_amount === null
+                      ? `At least ${money(account.next_order.minimum_amount)}`
+                      : `${money(account.next_order.minimum_amount)} to ${money(account.next_order.maximum_amount)}`}
+                  </dd>
+                </>
+              )}
             </dl>
             <AddMoney id="panel-amount" onAccountChanged={onAccountChanged} />
             <div className="row">
@@ -378,6 +396,49 @@ export function Panel(props: Props) {
 
       <DeveloperLog />
     </aside>
+  );
+}
+
+/** The person's budget for Tiny, from a Perflo with budgets. */
+function BudgetFacts({ budget }: { budget: NonNullable<AccountView['budget']> | null }) {
+  if (budget === null) {
+    return (
+      <>
+        <dt>Budget</dt>
+        <dd>Not set</dd>
+      </>
+    );
+  }
+  return (
+    <>
+      <dt>Budget</dt>
+      <dd>
+        {money(budget.amount)} {resetsEveryText(budget.resets_every)}
+      </dd>
+      <dt>Used</dt>
+      <dd>{money(budget.used)}</dd>
+      <dt>Left</dt>
+      <dd>{money(budget.remaining)}</dd>
+      <dt>Starts again</dt>
+      <dd>{dateAndTime(budget.resets_at)}</dd>
+    </>
+  );
+}
+
+/** The person's limits, from a Perflo before budgets. A limit they did not set is null. */
+function LimitsFacts({ limits }: { limits: NonNullable<AccountView['limits']> }) {
+  const upTo = (limit: { amount: string } | null) => (limit === null ? 'No limit' : money(limit.amount));
+  return (
+    <>
+      <dt>Per order, up to</dt>
+      <dd>{upTo(limits.per_order)}</dd>
+      <dt>Per month, up to</dt>
+      <dd>{upTo(limits.per_month)}</dd>
+      <dt>Used this month</dt>
+      <dd>{money(limits.spent_this_month.amount)}</dd>
+      <dt>Left this month</dt>
+      <dd>{upTo(limits.remaining_this_month)}</dd>
+    </>
   );
 }
 

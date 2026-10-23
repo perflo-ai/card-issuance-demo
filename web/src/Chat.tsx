@@ -12,6 +12,7 @@ import {
   declineFallback,
   declineHint,
   money,
+  overBudgetText,
   returnedLine,
   stalledText,
   stepLabel,
@@ -39,6 +40,8 @@ interface ChatProps {
   onOrder: (order: OrderView) => void;
   onAccountChanged: () => void;
   onChangeLimits: () => void;
+  /** When the person's budget starts again, from the last account read; null when not known. */
+  budgetResetsAt: string | null;
   /** Payments were just set up (or turned back on) from an order in the chat. */
   onLinked: () => void;
 }
@@ -61,7 +64,17 @@ const STALL_MS: Record<Waiting, number> = {
   card: 5 * 60_000,
 };
 
-export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountChanged, onChangeLimits, onLinked }: ChatProps) {
+export function Chat({
+  perfloOrigin,
+  orders,
+  seen,
+  loaded,
+  onOrder,
+  onAccountChanged,
+  onChangeLimits,
+  budgetResetsAt,
+  onLinked,
+}: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [notices, setNotices] = useState<Record<string, Notice>>({});
   const [actions, setActions] = useState<Record<string, Action | null>>({});
@@ -266,6 +279,7 @@ export function Chat({ perfloOrigin, orders, seen, loaded, onOrder, onAccountCha
               onDiscard={() => void discard(m.orderId)}
               onCancelCard={(perfloOrderId) => void cancelCard(m.orderId, perfloOrderId)}
               onChangeLimits={onChangeLimits}
+              budgetResetsAt={budgetResetsAt}
               onAccountChanged={onAccountChanged}
               onLinked={onLinked}
             />
@@ -324,6 +338,7 @@ interface CardProps {
   onDiscard: () => void;
   onCancelCard: (perfloOrderId: string) => void;
   onChangeLimits: () => void;
+  budgetResetsAt: string | null;
   onAccountChanged: () => void;
   onLinked: () => void;
 }
@@ -578,9 +593,15 @@ export function OrderCard(props: CardProps) {
     case 'declined':
       body = (
         <>
-          <p>{order.declineMessage || (order.declineReason ? declineFallback(order.declineReason) : 'This order was not accepted.')}</p>
+          <p>
+            {order.declineReason === 'over_budget'
+              ? overBudgetText(props.budgetResetsAt)
+              : order.declineMessage || (order.declineReason ? declineFallback(order.declineReason) : 'This order was not accepted.')}
+          </p>
           {order.declineReason && declineHint(order.declineReason) && <p className="muted small">{declineHint(order.declineReason)}</p>}
-          {(order.declineReason === 'over_order_limit' || order.declineReason === 'over_monthly_limit') && (
+          {(order.declineReason === 'over_order_limit' ||
+            order.declineReason === 'over_monthly_limit' ||
+            order.declineReason === 'over_budget') && (
             <button className="secondary" onClick={props.onChangeLimits}>
               Change limits
             </button>

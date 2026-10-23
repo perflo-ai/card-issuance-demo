@@ -39,8 +39,15 @@ const CONNECTION_TTL_MS = 30 * 60_000;
 const CARD_TTL_MS = 12 * 60 * 60_000;
 const REVEAL_TTL_MS = 900_000;
 const NO_KYC_LIMIT_CENTS = 20_000;
-const MONTH_MS = 30 * 24 * 60 * 60_000;
 const DAY_MS = 24 * 60 * 60_000;
+const HOUR_MS = 60 * 60_000;
+/** Like bapi FIRST_CARD_MIN_CENTS: the first order (the one that makes the card) and every budget are at least $5.00. */
+const FIRST_ORDER_MIN_CENTS = 500;
+/** Like bapi's smallest order today, for every order after the first. */
+const MIN_ORDER_CENTS = 1;
+/** Like bapi RESETS_EVERY_MAX: a budget starts again every 1 to 24 hours, 1 to 31 days or 1 to 12 months. */
+const RESETS_EVERY_MAX = { hour: 24, day: 31, month: 12 } as const;
+type BudgetUnit = keyof typeof RESETS_EVERY_MAX;
 /** Largest single card (bapi answers amount_invalid above it). */
 const MAX_CARD_CENTS = 250_000;
 /** Mock partner-wide cap over a rolling 24 hours. The real value is not decided (SPEC 1). */
@@ -57,9 +64,44 @@ export function quote(orderCents: number): { loadCents: number; cardFeeCents: nu
 
 const id = (prefix: string, bytes = 12) => `${prefix}${randomBytes(bytes).toString('base64url')}`;
 
+/** One budget per reset period, like Perflo after budgets (bapi #401). */
 interface Grant {
-  perOrderCents: number;
-  perMonthCents: number;
+  budgetCents: number;
+  resetsEvery: { count: number; unit: BudgetUnit };
+  /** Period k starts at anchor + k periods, in UTC (x402 budget-cycle.ts). */
+  anchorAt: number;
+}
+
+/** The start of period `k` of a grant: months added on the UTC calendar, hours and days as hours. */
+function periodStart(grant: Grant, k: number): number {
+  if (grant.resetsEvery.unit !== 'month') {
+    return grant.anchorAt + k * grant.resetsEvery.count * (grant.resetsEvery.unit === 'hour' ? HOUR_MS : DAY_MS);
+  }
+  const at = new Date(grant.anchorAt);
+  const day = at.getUTCDate();
+  at.setUTCDate(1);
+  at.setUTCMonth(at.getUTCMonth() + k * grant.resetsEvery.count);
+  // A Jan 31 anchor gives Feb 28 (29), Mar 31: the day is clamped to the month, like Postgres.
+  const last = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 0)).getUTCDate();
+  at.setUTCDate(Math.min(day, last));
+  return at.getTime();
+}
+
+/** The period `at` falls in. */
+function periodOf(grant: Grant, at: number): { start: number; end: number } {
+  const since = Math.max(0, at - grant.anchorAt);
+  // Hours and days have one length; months step through the calendar (a mock's few periods).
+  let k = grant.resetsEvery.unit === 'month' ? 0 : Math.floor(since / (periodStart(grant, 1) - grant.anchorAt));
+  while (periodStart(grant, k + 1) <= at) k++;
+  return { start: periodStart(grant, k), end: periodStart(grant, k + 1) };
+}
+
+/** bapi orders.ts overBudgetMessage: when the budget starts again, in words (UTC). */
+function overBudgetMessage(resetsAt: number): string {
+  const at = new Date(resetsAt);
+  const date = at.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+  const time = at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).replace(/\u202f/g, ' ');
+  return `This order is more than this user’s remaining budget. It resets on ${date} at ${time} UTC.`;
 }
 
 interface MUser {
@@ -266,8 +308,16 @@ export function createMockPerflo(options: MockOptions) {
     return token;
   }
 
-  const monthSpent = (userId: string) =>
-    spends.filter((s) => s.userId === userId && s.at > now() - MONTH_MS).reduce((sum, s) => sum + s.cents, 0);
+  /** The person's budget period right now, and what their orders used in it. */
+  function budgetNow(user: MUser, grant: Grant): { start: number; end: number; usedCents: number } {
+    const period = periodOf(grant, now());
+    const usedCents = spends
+      .filter((s) => s.userId === user.userId && s.at >= period.start && s.at < period.end)
+      .reduce((sum, s) => sum + s.cents, 0);
+    return { ...period, usedCents };
+  }
+  /** Like the card service's firstOrder: the person has never had a card. */
+  const firstOrder = (userId: string) => ![...orders.values()].some((o) => o.userId === userId && o.card !== null);
   const partnerDaySpent = () => spends.filter((s) => s.at > now() - DAY_MS).reduce((sum, s) => sum + s.cents, 0);
   const cardSpendTotal = (userId: string) =>
     [...orders.values()]
@@ -357,11 +407,15 @@ export function createMockPerflo(options: MockOptions) {
       order.status = 'declined';
       order.declined = { reason, message };
     };
-    if (order.amountCents > user.grant.perOrderCents) {
-      return decline('over_order_limit', 'This is more than you allow Tiny to spend on one order.');
+    if (firstOrder(user.userId) && order.amountCents < FIRST_ORDER_MIN_CENTS) {
+      return decline(
+        'amount_invalid',
+        `The first order for this user must be at least $${centsToApiAmount(FIRST_ORDER_MIN_CENTS)}. Later orders can be any amount.`,
+      );
     }
-    if (monthSpent(user.userId) + order.amountCents > user.grant.perMonthCents) {
-      return decline('over_monthly_limit', 'This would go over what you allow Tiny to spend each month.');
+    const budget = budgetNow(user, user.grant);
+    if (budget.usedCents + order.amountCents > user.grant.budgetCents) {
+      return decline('over_budget', overBudgetMessage(budget.end));
     }
     if (partnerDaySpent() + order.amountCents > MOCK_PARTNER_DAILY_CAP_CENTS) {
       return decline('partner_limit', 'Tiny has reached its spending limit for today. Try again tomorrow.');
@@ -716,7 +770,10 @@ export function createMockPerflo(options: MockOptions) {
   v2.get('/users/:userId', (req, res) => {
     const user = userFromToken(req, req.params.userId);
     const grant = user.grant as Grant;
-    const spent = monthSpent(user.userId);
+    const budget = budgetNow(user, grant);
+    const remainingCents = Math.max(0, grant.budgetCents - budget.usedCents);
+    const checkUsedCents = cardSpendTotal(user.userId);
+    const beforeCheckCents = user.kycApproved ? null : Math.max(0, NO_KYC_LIMIT_CENTS - checkUsedCents);
     const waitingOnId = [...orders.values()].some((o) => o.userId === user.userId && o.status === 'identity_check_required');
     const open = [...orders.values()].filter((o) => {
       refresh(o);
@@ -725,15 +782,25 @@ export function createMockPerflo(options: MockOptions) {
     res.json({
       user_id: user.userId,
       balance: { amount: centsToApiAmount(user.balanceCents), currency: 'USD' },
-      limits: {
-        per_order: { amount: centsToApiAmount(grant.perOrderCents), currency: 'USD' },
-        per_month: { amount: centsToApiAmount(grant.perMonthCents), currency: 'USD' },
-        spent_this_month: { amount: centsToApiAmount(spent), currency: 'USD' },
-        remaining_this_month: { amount: centsToApiAmount(Math.max(0, grant.perMonthCents - spent)), currency: 'USD' },
+      budget: {
+        amount: centsToApiAmount(grant.budgetCents),
+        resets_every: grant.resetsEvery,
+        used: centsToApiAmount(budget.usedCents),
+        remaining: centsToApiAmount(remainingCents),
+        period_started_at: new Date(budget.start).toISOString(),
+        resets_at: new Date(budget.end).toISOString(),
       },
       identity_check: {
-        required_above: centsToApiAmount(NO_KYC_LIMIT_CENTS),
         status: user.kycApproved ? 'approved' : waitingOnId ? 'required' : 'not_required',
+        required_above: centsToApiAmount(NO_KYC_LIMIT_CENTS),
+        used: centsToApiAmount(checkUsedCents),
+        remaining_before_check: beforeCheckCents === null ? null : centsToApiAmount(beforeCheckCents),
+      },
+      next_order: {
+        first_order: firstOrder(user.userId),
+        minimum_amount: centsToApiAmount(firstOrder(user.userId) ? FIRST_ORDER_MIN_CENTS : MIN_ORDER_CENTS),
+        // The permission ceiling, not money: balance is the money.
+        maximum_amount: centsToApiAmount(Math.min(remainingCents, MAX_CARD_CENTS, beforeCheckCents ?? Number.POSITIVE_INFINITY)),
       },
       open_cards: open.map((o) => ({
         order_id: o.orderId,
@@ -949,7 +1016,7 @@ export function createMockPerflo(options: MockOptions) {
     if (!frame.orderId) return 0;
     const order = orders.get(frame.orderId) as MOrder;
     const user = users.get(frame.userId) as MUser;
-    if (!user.grant || order.amountCents > user.grant.perOrderCents) return 0;
+    if (!user.grant || budgetNow(user, user.grant).usedCents + order.amountCents > user.grant.budgetCents) return 0;
     return Math.max(0, quote(order.amountCents).totalCents - user.balanceCents);
   };
 
@@ -971,23 +1038,32 @@ export function createMockPerflo(options: MockOptions) {
     res.json({ next: 'limits', user: { email_masked: maskEmail(user.email) } });
   });
 
-  const limitsBody = z.object({ per_order: amountString, per_month: amountString });
+  /** Like bapi validation.ts parseLimitsAction: the budget in whole cents, and how often it starts again. No per order limit. */
+  const limitsBody = z
+    .object({
+      budget: z.number().int(),
+      resets_every: z.object({ count: z.number().int(), unit: z.enum(['hour', 'day', 'month']) }).strict(),
+    })
+    .strict();
 
   framesRouter.post('/session/limits', (req, res) => {
     const frame = liveFrame(req);
     if (frame.step !== 'limits') throw new HttpError(409, 'frame_step_invalid', 'This step is already done.');
     const body = limitsBody.safeParse(req.body);
-    if (!body.success) throw new HttpError(400, 'limits_invalid', 'Choose an amount per order and per month.');
-    const perOrder = apiAmountToCents(body.data.per_order);
-    const perMonth = apiAmountToCents(body.data.per_month);
-    if (perOrder <= 0 || perMonth <= 0 || perOrder > MAX_TOP_UP_CENTS * 10 || perMonth > MAX_TOP_UP_CENTS * 10) {
-      throw new HttpError(400, 'limits_invalid', 'Choose amounts above zero.');
+    if (!body.success) throw new HttpError(400, 'limits_invalid', 'Choose a budget and how often it starts again.');
+    const { budget: budgetCents, resets_every: resetsEvery } = body.data;
+    if (budgetCents < FIRST_ORDER_MIN_CENTS) {
+      throw new HttpError(400, 'limits_invalid', `The budget must be at least $${centsToApiAmount(FIRST_ORDER_MIN_CENTS)}.`);
     }
-    if (perOrder > perMonth) {
-      throw new HttpError(400, 'limits_invalid', 'The amount per order cannot be more than the amount per month.');
+    const most = RESETS_EVERY_MAX[resetsEvery.unit];
+    if (resetsEvery.count < 1 || resetsEvery.count > most) {
+      throw new HttpError(400, 'limits_invalid', `Choose between 1 and ${most} ${resetsEvery.unit}s.`);
     }
     const user = users.get(frame.userId) as MUser;
-    user.grant = { perOrderCents: perOrder, perMonthCents: perMonth };
+    const before = user.grant;
+    // Like x402 anchorOnWrite: the same period keeps its anchor, a new period starts now.
+    const samePeriod = before !== null && before.resetsEvery.count === resetsEvery.count && before.resetsEvery.unit === resetsEvery.unit;
+    user.grant = { budgetCents, resetsEvery, anchorAt: samePeriod ? before.anchorAt : now() };
     if (frame.purpose === 'setup') {
       mintToken(user);
       const connection = connections.get(frame.connectionId as string) as MConnection;
@@ -998,7 +1074,7 @@ export function createMockPerflo(options: MockOptions) {
     } else {
       frame.step = 'done';
     }
-    res.json({ next: frame.step, limits: body.data });
+    res.json({ next: frame.step, limits: { budget: centsToApiAmount(budgetCents), resets_every: resetsEvery } });
   });
 
   /** Starts the payment for the page's own amount: the page asks for no amount, and none is accepted here. */

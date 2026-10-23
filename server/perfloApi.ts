@@ -67,16 +67,52 @@ export type ConnectionResponse = z.infer<typeof connectionResponse>;
 export const identityStatus = z.enum(['not_required', 'required', 'pending', 'approved', 'rejected']);
 export type IdentityStatus = z.infer<typeof identityStatus>;
 
+/** How often a budget starts again (bapi #401): every 1 to 24 hours, 1 to 31 days or 1 to 12 months. */
+const resetsEvery = z.object({ count: z.number().int().positive(), unit: z.enum(['hour', 'day', 'month']) });
+
+/**
+ * GET /v1/users/{id}. Perflo moved from per order and monthly limits to one budget per reset period
+ * (bapi #401), and Tiny may talk to either: each of `limits` (before), `budget` and `next_order` (after),
+ * and the identity check figures (after), is read when it is there, and none of them missing fails the read.
+ */
 export const accountResponse = z.object({
   user_id: z.string(),
   balance: money,
-  limits: z.object({
-    per_order: money,
-    per_month: money,
-    spent_this_month: money,
-    remaining_this_month: money,
+  /** Before budgets only. A limit the person did not set is null. */
+  limits: z
+    .object({
+      per_order: money.nullable(),
+      per_month: money.nullable(),
+      spent_this_month: money,
+      remaining_this_month: money.nullable(),
+    })
+    .optional(),
+  /** With budgets only: the person's budget for Tiny and its current period. null when they have none. */
+  budget: z
+    .object({
+      amount,
+      resets_every: resetsEvery,
+      used: amount,
+      remaining: amount,
+      period_started_at: z.string(),
+      resets_at: z.string(),
+    })
+    .nullable()
+    .optional(),
+  identity_check: z.object({
+    required_above: amount,
+    status: identityStatus,
+    /** With budgets only: what the person's orders have used toward the check. */
+    used: amount.optional(),
+    /** With budgets only: what orders can still use before the check is asked for; null once approved. */
+    remaining_before_check: amount.nullable().optional(),
   }),
-  identity_check: z.object({ required_above: amount, status: identityStatus }),
+  /**
+   * With budgets only: the smallest and largest next order. The largest is what the person allows (null with
+   * no budget), not money: `balance` is the money. An order above remaining_before_check is not refused; it
+   * waits for the identity check.
+   */
+  next_order: z.object({ first_order: z.boolean(), minimum_amount: amount, maximum_amount: amount.nullable() }).optional(),
   open_cards: z.array(
     z.object({
       order_id: z.string(),
@@ -96,7 +132,27 @@ export const frameLinkResponse = z.object({ frame_url: link, client_secret: clie
 export const topUpResponse = frameLinkResponse.extend({ top_up_id: z.string(), amount });
 export type TopUpResponse = z.infer<typeof topUpResponse>;
 
-export const declineReason = z.enum(['over_order_limit', 'over_monthly_limit', 'partner_limit', 'amount_invalid']);
+/**
+ * Every decline reason Perflo sends (bapi src/partnerV2/store.ts DeclineReason). over_order_limit and
+ * over_monthly_limit are from before budgets and still read on older orders; over_budget is from after.
+ */
+export const DECLINE_REASONS = [
+  'over_order_limit',
+  'over_monthly_limit',
+  'over_budget',
+  'partner_limit',
+  'amount_invalid',
+  'card_in_use',
+  'card_frozen',
+  'account_needs_support',
+] as const;
+const knownDeclineReasons: ReadonlySet<string> = new Set(DECLINE_REASONS);
+/** A reason added to Perflo after this demo is read as `other`: the order is still declined, and Perflo's message says why. */
+export const declineReason = z
+  .string()
+  .transform((reason): (typeof DECLINE_REASONS)[number] | 'other' =>
+    knownDeclineReasons.has(reason) ? (reason as (typeof DECLINE_REASONS)[number]) : 'other',
+  );
 export type DeclineReason = z.infer<typeof declineReason>;
 
 /**
@@ -380,7 +436,13 @@ export class PerfloApi {
     return { status: response.status, json, retryAfter: response.headers.get('retry-after') };
   }
 
-  private parse<T>(schema: z.ZodType<T>, status: number, json: unknown, okStatuses: number[], retryAfter: string | null = null): T {
+  private parse<T>(
+    schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+    status: number,
+    json: unknown,
+    okStatuses: number[],
+    retryAfter: string | null = null,
+  ): T {
     if (okStatuses.includes(status)) {
       const parsed = schema.safeParse(json);
       if (parsed.success) return parsed.data;
@@ -438,9 +500,17 @@ export class PerfloApi {
     return this.parse(frameLinkResponse, r.status, r.json, [201]);
   }
 
-  /** 201 ready, 202 waiting states and 422 declined are all order answers, not errors. */
+  /**
+   * 201 ready, 202 waiting states and 422 declined are all order answers, not errors. So is a 409 declined:
+   * Perflo answers 409 for a decline outside the order (card_in_use, card_frozen, account_needs_support).
+   * Any other 409 is a refusal with an error, as before.
+   */
   async createOrder(demoUserId: string, token: string, idempotencyKey: string, body: CreateOrderInput): Promise<OrderResponse> {
     const r = await this.request(demoUserId, 'POST', '/v1/checkout/orders', { token, idempotencyKey, body, timeoutMs: ORDER_TIMEOUT_MS });
+    if (r.status === 409) {
+      const answer = orderResponse.safeParse(r.json);
+      if (answer.success && answer.data.status === 'declined') return answer.data;
+    }
     return this.parse(orderResponse, r.status, r.json, [201, 202, 422]);
   }
 

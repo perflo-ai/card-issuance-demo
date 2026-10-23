@@ -8,7 +8,7 @@ import { Panel } from './Panel';
 import { configurePerflo } from './perflo';
 import { shared } from './polling';
 import { stepOf, type StepKey } from './progress';
-import type { DemoConfigView, MeView, OrderPhase, OrderView } from '../../server/views';
+import type { AccountView, DemoConfigView, MeView, OrderPhase, OrderView } from '../../server/views';
 
 const VIEWS = ['embedded', 'elements'] as const;
 type View = (typeof VIEWS)[number];
@@ -116,6 +116,9 @@ function Workspace({ config, me, onMe, view }: { config: DemoConfigView; me: MeV
   const [ordersError, setOrdersError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [limitsRequest, setLimitsRequest] = useState(0);
+  /** When the person's budget starts again, from the panel's last account read: the chat says it on an over budget decline. */
+  const [budgetResetsAt, setBudgetResetsAt] = useState<string | null>(null);
+  const onAccount = useCallback((account: AccountView | null) => setBudgetResetsAt(account?.budget?.resets_at ?? null), []);
   const phases = useRef<Record<string, OrderPhase>>({});
 
   const accountChanged = useCallback(() => setRefreshKey((k) => k + 1), []);
@@ -219,6 +222,7 @@ function Workspace({ config, me, onMe, view }: { config: DemoConfigView; me: MeV
           onOrder={putOrder}
           onAccountChanged={accountChanged}
           onChangeLimits={() => setLimitsRequest((n) => n + 1)}
+          budgetResetsAt={budgetResetsAt}
           onLinked={() => onMe({ ...me, linked: true })}
         />
       </div>
@@ -234,6 +238,7 @@ function Workspace({ config, me, onMe, view }: { config: DemoConfigView; me: MeV
         onOrder={putOrder}
         me={me}
         onMe={onMe}
+        onAccount={onAccount}
       />
     </div>
   );

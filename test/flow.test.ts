@@ -121,7 +121,7 @@ describe('first order, end to end in mock mode', () => {
     expect(Object.keys(done.checkout as object).sort()).toEqual(['cardLimit', 'expMonth', 'expYear', 'filledAt', 'last4', 'outcome']);
 
     const account = await b.get('/demo/account');
-    expect(account.body).toMatchObject({ linked: true, account: { limits: { spent_this_month: { amount: '50.00', currency: 'USD' } } } });
+    expect(account.body).toMatchObject({ linked: true, account: { budget: { amount: '1000.00', used: '50.00', remaining: '950.00' } } });
     const events = await b.get('/demo/events');
     assertNothingSecretLeaks(demo, setup, due, done, account.body, events.body);
   });
