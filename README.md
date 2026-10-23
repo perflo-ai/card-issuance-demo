@@ -57,14 +57,15 @@ Things to try, in order:
 1. Open the demo. Tiny asks for nothing about you: you land in the chat.
 2. `buy me $50 worth of headphones on amazon`, then confirm. The first order asks you to **Set up payments**,
    right there in the chat: the frame asks for your email and the code (test code **123456**), then for your
-   limits.
+   budget and how often it starts again.
 3. Your balance is empty, so the order asks you to add money for exactly what it is missing. The payment page opens
    in a new tab (test payment, no card); the order goes ahead when you pay there.
 4. The card is ready and Tiny checks out. You see only the last 4 digits, the expiry and the card
    limit; the card is spent at the mock shop and the order shows as paid.
 5. `book the 150.00 hotel on united.com`: orders above $100 show "Getting your card ready" first.
 6. Once your orders pass $200 in total, an identity check is asked for: open it, finish it, then "try again".
-7. `buy me $2600 worth of chairs on amazon` is declined in plain words, and so is anything above your per-order limit.
+7. `buy me $2600 worth of chairs on amazon` is declined in plain words, and so is anything over what is left of your budget,
+   with when your budget starts again.
 8. Test controls in the side panel:
    - **Stop at the checkout page**: the order stays open, so you can **Cancel order** and see the money return.
    - **Turn off Tiny's access**: your next order asks you to reconnect, then continues by itself.

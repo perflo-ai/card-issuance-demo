@@ -3,7 +3,7 @@
  * one wording. Plain language: no provider names, no technical words.
  */
 
-import type { DeclineReason, IdentityStatus, LookId, OrderPhase } from '../../server/views';
+import type { DeclineReason, IdentityStatus, LookId, OrderPhase, ResetsEvery } from '../../server/views';
 import { apiAmountToCents, formatUsd } from '../../server/money';
 import type { StepKey } from './progress';
 
@@ -26,9 +26,15 @@ export function declineHint(reason: DeclineReason): string | null {
     case 'over_order_limit':
     case 'over_monthly_limit':
       return 'You can raise your limit and ask again.';
+    case 'over_budget':
+      return 'You can raise your budget and ask again.';
     case 'partner_limit':
       return 'Try again later.';
     case 'amount_invalid':
+    case 'card_in_use':
+    case 'card_frozen':
+    case 'account_needs_support':
+    case 'other':
       return null;
   }
 }
@@ -39,11 +45,36 @@ export function declineFallback(reason: DeclineReason): string {
       return 'This is more than you allow Tiny to spend on one order.';
     case 'over_monthly_limit':
       return 'This would go over what you allow Tiny to spend each month.';
+    case 'over_budget':
+      return overBudgetText(null);
     case 'partner_limit':
       return 'Tiny cannot place more orders right now.';
     case 'amount_invalid':
       return 'That amount cannot be used for an order.';
+    case 'card_in_use':
+      return 'Your card is still open for an earlier order. Cancel that order or wait for it to finish, then ask again.';
+    case 'card_frozen':
+      return 'Your card is paused, so it cannot be used for a new order. Nothing was charged. Contact support to turn it back on.';
+    case 'account_needs_support':
+      return 'Your account needs a check by support before Tiny can order for you. Nothing was charged. Contact support.';
+    case 'other':
+      return 'This order was not accepted.';
   }
+}
+
+/**
+ * An order over what is left of the person's budget, with when the budget starts again, in their own
+ * time. Without a known date it says none, never a guessed one.
+ */
+export function overBudgetText(resetsAt: string | null): string {
+  const first = 'This is more than what is left of your budget for Tiny.';
+  const at = resetsAt === null ? '' : dateAndTime(resetsAt);
+  return at ? `${first} Your budget starts again on ${at}.` : first;
+}
+
+/** "every month", "every 2 days": how often a budget starts again. */
+export function resetsEveryText(every: ResetsEvery): string {
+  return every.count === 1 ? `every ${every.unit}` : `every ${every.count} ${every.unit}s`;
 }
 
 export function identityText(status: IdentityStatus, requiredAbove: string): string {
@@ -59,6 +90,13 @@ export function identityText(status: IdentityStatus, requiredAbove: string): str
     case 'rejected':
       return 'Not approved. Contact support.';
   }
+}
+
+/** "2026-11-23T05:00:00Z" -> "Nov 23, 2026, 5:00 AM" in the person's own time: a budget can start again months away. */
+export function dateAndTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 /** "2026-10-08T07:40:00Z" -> "Oct 8, 7:40 AM". */

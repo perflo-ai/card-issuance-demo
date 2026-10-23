@@ -13,12 +13,12 @@ afterEach(async () => {
   await mock.close();
 });
 
-/** A linked user with limits and a token, plus an optional balance. */
+/** A linked user with a budget and a token, plus an optional balance. */
 async function linkedUser(
   externalId = 'ext-1',
   email = 'ada@example.com',
   balance?: string,
-  limits = { per_order: '500.00', per_month: '1000.00' },
+  limits: unknown = { budget: 100000, resets_every: { count: 1, unit: 'month' } },
 ) {
   const created = await signedFetch(mock.base, 'POST', '/v1/users', { body: { external_user_id: externalId, email } });
   expect(created.status).toBe(202);
@@ -137,19 +137,44 @@ describe('users and connections', () => {
   });
 
   it('account shape matches SPEC 4', async () => {
+    await mock.close();
+    mock = await startMock(50, undefined, false, () => Date.parse('2026-10-23T05:00:00Z'));
     const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '100.00');
     const account = await signedFetch(mock.base, 'GET', `/v1/users/${userId}`, { token });
     expect(account.json).toEqual({
       user_id: userId,
       balance: { amount: '100.00', currency: 'USD' },
-      limits: {
-        per_order: { amount: '500.00', currency: 'USD' },
-        per_month: { amount: '1000.00', currency: 'USD' },
-        spent_this_month: { amount: '0.00', currency: 'USD' },
-        remaining_this_month: { amount: '1000.00', currency: 'USD' },
+      budget: {
+        amount: '1000.00',
+        resets_every: { count: 1, unit: 'month' },
+        used: '0.00',
+        remaining: '1000.00',
+        period_started_at: '2026-10-23T05:00:00.000Z',
+        resets_at: '2026-11-23T05:00:00.000Z',
       },
-      identity_check: { required_above: '200.00', status: 'not_required' },
+      identity_check: { status: 'not_required', required_above: '200.00', used: '0.00', remaining_before_check: '200.00' },
+      next_order: { first_order: true, minimum_amount: '5.00', maximum_amount: '200.00' },
       open_cards: [],
+    });
+  });
+
+  it('after the first card and the identity check, the next order can be any amount up to what is left', async () => {
+    const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '400.00', {
+      budget: 30000,
+      resets_every: { count: 2, unit: 'day' },
+    });
+    const placed = await signedFetch(mock.base, 'POST', '/v1/checkout/orders', { token, idem: 'k1', body: order(userId, '250.00') });
+    expect(placed.json.status).toBe('identity_check_required');
+    const ref = new URL(placed.json.kyc_url).searchParams.get('ref') as string;
+    await fetch(`${mock.base}/mock/kyc`, { method: 'POST', body: new URLSearchParams({ ref }) });
+    expect(['issuing', 'ready']).toContain(
+      (await signedFetch(mock.base, 'GET', `/v1/checkout/orders/${placed.json.order_id}`)).json.status,
+    );
+    const account = await signedFetch(mock.base, 'GET', `/v1/users/${userId}`, { token });
+    expect(account.json).toMatchObject({
+      budget: { amount: '300.00', resets_every: { count: 2, unit: 'day' }, used: '250.00', remaining: '50.00' },
+      identity_check: { status: 'approved', used: '250.00', remaining_before_check: null },
+      next_order: { first_order: false, minimum_amount: '0.01', maximum_amount: '50.00' },
     });
   });
 });
@@ -235,7 +260,6 @@ describe('orders', () => {
   });
 
   it.each([
-    ['600.00', 'over_order_limit'],
     ['2600.00', 'amount_invalid'],
     ['10.5', 'amount_invalid'],
     ['0.00', 'amount_invalid'],
@@ -247,8 +271,14 @@ describe('orders', () => {
     if (amount === '2600.00') expect(placed.json.message).toBe('Cards can be up to $2,500 each.');
   });
 
-  it('declines over the monthly limit', async () => {
-    const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '1000.00', { per_order: '500.00', per_month: '600.00' });
+  it('declines over the budget, says when it starts again, and takes orders again once it has', async () => {
+    let clock = Date.parse('2026-10-23T05:00:00Z');
+    await mock.close();
+    mock = await startMock(50, undefined, false, () => clock);
+    const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '1000.00', {
+      budget: 60000,
+      resets_every: { count: 1, unit: 'month' },
+    });
     const first = await signedFetch(mock.base, 'POST', '/v1/checkout/orders', { token, idem: 'a', body: order(userId, '450.00') });
     expect(first.json.status).toBe('identity_check_required');
     const ref = new URL(first.json.kyc_url).searchParams.get('ref') as string;
@@ -256,7 +286,30 @@ describe('orders', () => {
     expect(['issuing', 'ready']).toContain((await signedFetch(mock.base, 'GET', `/v1/checkout/orders/${first.json.order_id}`)).json.status);
     const over = await signedFetch(mock.base, 'POST', '/v1/checkout/orders', { token, idem: 'b', body: order(userId, '200.00') });
     expect(over.status).toBe(422);
-    expect(over.json).toMatchObject({ status: 'declined', reason: 'over_monthly_limit' });
+    expect(over.json).toMatchObject({ status: 'declined', reason: 'over_budget' });
+    expect(over.json.message).toBe('This order is more than this user’s remaining budget. It resets on Nov 23, 2026 at 5:00 AM UTC.');
+    clock = Date.parse('2026-11-23T05:00:00Z');
+    const next = await signedFetch(mock.base, 'POST', '/v1/checkout/orders', { token, idem: 'c', body: order(userId, '200.00') });
+    expect(next.json.status).not.toBe('declined');
+    const account = await signedFetch(mock.base, 'GET', `/v1/users/${userId}`, { token });
+    expect(account.json.budget).toMatchObject({
+      used: '200.00',
+      period_started_at: '2026-11-23T05:00:00.000Z',
+      resets_at: '2026-12-23T05:00:00.000Z',
+    });
+  });
+
+  it('declines a first order under $5.00, and takes it at $5.00', async () => {
+    const { token, userId } = await linkedUser('ext-1', 'ada@example.com', '100.00');
+    const small = await signedFetch(mock.base, 'POST', '/v1/checkout/orders', { token, idem: 'a', body: order(userId, '4.99') });
+    expect(small.status).toBe(422);
+    expect(small.json).toMatchObject({
+      status: 'declined',
+      reason: 'amount_invalid',
+      message: 'The first order for this user must be at least $5.00. Later orders can be any amount.',
+    });
+    const enough = await signedFetch(mock.base, 'POST', '/v1/checkout/orders', { token, idem: 'b', body: order(userId, '5.00') });
+    expect(enough.json.status).toBe('ready');
   });
 
   it('cancel returns the card money to the balance; GET shows cancelled', async () => {
@@ -338,15 +391,27 @@ describe('frames', () => {
     expect(html).not.toMatch(/<script>(?!<\/script>)/);
   });
 
-  it('limits must be chosen and per order cannot exceed per month', async () => {
+  it('a budget of at least $5.00 and how often it starts again must be chosen', async () => {
     const created = await signedFetch(mock.base, 'POST', '/v1/users', {
       body: { external_user_id: 'ext-1', email: 'ada@example.com' },
     });
     await frameCall(mock.base, created.json.connect_url, 'login', { privy_access_token: 'mock-otp:123456' });
-    expect((await frameCall(mock.base, created.json.connect_url, 'limits', {})).status).toBe(400);
-    expect((await frameCall(mock.base, created.json.connect_url, 'limits', { per_order: '2500.00', per_month: '1000.00' })).status).toBe(
-      400,
-    );
+    for (const body of [
+      {},
+      { budget: 499, resets_every: { count: 1, unit: 'month' } },
+      { budget: '100.00', resets_every: { count: 1, unit: 'month' } },
+      { budget: 10000, resets_every: { count: 1, unit: 'week' } },
+      { budget: 10000, resets_every: { count: 13, unit: 'month' } },
+      { budget: 10000, resets_every: { count: 25, unit: 'hour' } },
+      { budget: 10000, resets_every: { count: 0, unit: 'day' } },
+      { budget: 10000, resets_every: { count: 1, unit: 'month' }, per_order: '5.00' },
+    ]) {
+      const refused = await frameCall(mock.base, created.json.connect_url, 'limits', body);
+      expect(refused.status).toBe(400);
+      expect(refused.json.error.code).toBe('limits_invalid');
+    }
+    const saved = await frameCall(mock.base, created.json.connect_url, 'limits', { budget: 500, resets_every: { count: 31, unit: 'day' } });
+    expect(saved.json).toMatchObject({ limits: { budget: '5.00', resets_every: { count: 31, unit: 'day' } } });
   });
 });
 

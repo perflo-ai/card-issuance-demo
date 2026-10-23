@@ -105,13 +105,14 @@ export async function frameCall(base: string, frameUrl: string, action: string, 
 }
 
 /**
- * What a person does in the setup frame: email and code, limits, then (if asked) money, then finish.
+ * What a person does in the setup frame: email and code, their budget (cents) and how often it starts
+ * again, then (if asked) money, then finish.
  * Tiny sends no email, so the person types it in the frame (the mock's token carries it).
  */
 export async function finishSetup(
   base: string,
   frameUrl: string,
-  limits = { per_order: '500.00', per_month: '1000.00' },
+  limits: unknown = { budget: 100000, resets_every: { count: 1, unit: 'month' } },
   email = 'ada@example.com',
 ) {
   const login = await frameCall(base, frameUrl, 'login', { privy_access_token: `mock-otp:${email}:123456` });

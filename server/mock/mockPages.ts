@@ -70,6 +70,9 @@ button.link{border:0;background:none;color:#141414;text-decoration:underline;fon
 .error{color:#a3261b;font-size:14px;margin-top:10px}
 footer{text-align:center;font-size:12px;color:#6b655f;padding:12px 0 18px}
 .mt{margin-top:8px}
+.every{display:flex;gap:8px}
+.every input{width:90px}
+select{height:46px;border:1px solid #d9d4ce;border-radius:12px;padding:0 10px;font:inherit;background:#fff}
 .badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:6px;background:#f4f2ef;font-size:11px}
 `;
 
@@ -226,23 +229,41 @@ const js = String.raw`(function () {
     return chosen;
   }
 
+  // Like Perflo's page after budgets: one budget across every order, and how often it starts again.
+  var RESETS_MAX = { hour: 24, day: 31, month: 12 };
   function renderLimits() {
-    var perOrder = chooser('per-order', 'Per order, up to', ['500.00', '1000.00', '2500.00']);
-    var perMonth = chooser('per-month', 'Per month, up to', ['1000.00', '3000.00', '5000.00']);
+    var budget = chooser('budget', 'Budget', ['100.00', '500.00', '1000.00']);
+    var count = el('input', { type: 'text', id: 'resets-count', inputmode: 'numeric', value: '1', 'aria-label': 'Resets every, how many' });
+    var unit = el('select', { id: 'resets-unit', 'aria-label': 'Resets every, hours, days or months' }, [
+      el('option', { value: 'hour', text: 'hours' }),
+      el('option', { value: 'day', text: 'days' }),
+      el('option', { value: 'month', text: 'months' })
+    ]);
+    unit.value = 'month';
     var setup = state.purpose === 'setup';
-    var save = el('button', { class: 'primary', text: setup ? 'Allow Tiny' : 'Save limits', disabled: 'disabled' });
-    perOrder.onchange = perMonth.onchange = function () { save.disabled = !(perOrder.value && perMonth.value); };
+    var save = el('button', { class: 'primary', text: setup ? 'Allow Tiny' : 'Save budget', disabled: 'disabled' });
+    budget.onchange = function () { save.disabled = !budget.value; };
     save.addEventListener('click', function () {
+      var n = Number(count.value.trim());
+      if (!Number.isInteger(n) || n < 1 || n > RESETS_MAX[unit.value]) {
+        return showError({ message: 'Choose between 1 and ' + RESETS_MAX[unit.value] + ' ' + unit.value + 's.', code: 'limits_invalid' });
+      }
+      var parts = budget.value.split('.');
       busy(save, true);
-      call('limits', { per_order: perOrder.value, per_month: perMonth.value }).then(function (result) {
+      call('limits', { budget: Number(parts[0]) * 100 + Number(parts[1]), resets_every: { count: n, unit: unit.value } }).then(function (result) {
         send('perflo:limits_saved', { connection_id: ids.connection_id });
         state.step = result.next;
         render();
       }).catch(function (error) { busy(save, false); showError(error); });
     });
-    screen(setup ? 'Allow Tiny to pay for you' : 'Change your limits', [
-      'Tiny can pay for orders and services for you, within the limits below.'
-    ], perOrder.nodes.concat(perMonth.nodes, [save, el('p', { class: 'muted', text: 'You can change these limits anytime.' })]));
+    screen(setup ? 'Allow Tiny to pay for you' : 'Change your budget', [
+      'The most Tiny can spend for you in each period you choose, across every order.'
+    ], budget.nodes.concat([
+      el('label', { for: 'resets-count', text: 'Resets every' }),
+      el('div', { class: 'every' }, [count, unit]),
+      save,
+      el('p', { class: 'muted', text: 'You can change your budget anytime.' })
+    ]));
   }
 
   // The page is for one amount, set by the partner: it opens straight on the payment.
@@ -317,7 +338,7 @@ const js = String.raw`(function () {
 
   function renderDone() {
     if (state.purpose === 'setup' && !state.finished) return finishSetup();
-    var title = state.purpose === 'limits' ? 'Limits saved' : state.purpose === 'top-up' ? 'Money added' : 'You are all set';
+    var title = state.purpose === 'limits' ? 'Budget saved' : state.purpose === 'top-up' ? 'Money added' : 'You are all set';
     screen(title, [state.purpose === 'top-up' ? 'You can close this tab and go back to Tiny.' : 'You can go back to Tiny.'], []);
   }
 
